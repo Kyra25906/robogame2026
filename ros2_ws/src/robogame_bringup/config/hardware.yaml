@@ -1,0 +1,7 @@
+robot_bridge:
+  ros__parameters:
+    mock_mode: false
+    serial_port: /dev/ttyACM0
+    baud_rate: 115200
+    command_timeout_s: 0.15
+

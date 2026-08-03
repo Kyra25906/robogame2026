@@ -1,0 +1,3 @@
+date,time,code_version,parameter_profile,field_side,lighting,battery_v,test_type,trial,result,duration_s,failure_state,error_code,rosbag_path,video_path,notes
+,,,,,,,,1,,,,,,,
+

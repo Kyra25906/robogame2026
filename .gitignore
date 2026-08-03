@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.agents/
+.codex/
+work/
+outputs/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+*.db3
+*.mcap
+*.tar.gz
+*.zip
+*.mp4
+*.avi
+*.mov

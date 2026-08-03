@@ -1,0 +1,8 @@
+mission_manager:
+  ros__parameters:
+    orange_target: 1
+    purple_target: 0
+    max_retries: 2
+    state_timeout_s: 20.0
+    build_stability_s: 3.0
+

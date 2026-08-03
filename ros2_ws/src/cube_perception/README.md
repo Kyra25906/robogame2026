@@ -1,0 +1,106 @@
+# cube_perception 使用说明
+
+## 1. 这个包负责什么
+
+它相当于机器人的“眼睛”：从相机画面中找橙色、紫色方块，输出颜色、置信度、距离、左右偏差和像素位置。当前路线是 HSV 颜色分割、形态学去噪、ROI、轮廓形状过滤、针孔模型估距和连续帧确认，不需要训练模型。
+
+## 2. 文件分工
+
+- `cube_perception/node.py`：ROS2 正式节点，订阅相机图像，发布 `/cubes`。
+- `cube_perception/opencv_detector.py`：单帧 HSV、ROI、轮廓过滤和距离估算。
+- `cube_perception/temporal_filter.py`：连续多帧确认、目标匹配和数值平滑。
+- `cube_perception/standalone.py`：不依赖相机 ROS 驱动，直接测试摄像头、照片或视频。
+- `cube_perception/hsv_tuner.py`：用滑块调橙色或紫色 HSV 阈值，按 `S` 保存。
+- `cube_perception/mock_node.py`：持续发布理想的假目标，供整车流程联调。
+- `config/vision_default.json`：常规视觉参数。
+- `config/vision_demo_roi.json`：带演示 ROI 的参数样例。
+- `setup.py`：登记四个 `ros2 run` 程序入口。
+
+## 3. 编译和加载
+
+```bash
+cd ~/robogame/ros2_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install --packages-up-to cube_perception
+source install/setup.bash
+```
+
+## 4. 最适合新手的独立测试
+
+直接打开 USB 摄像头：
+
+```bash
+ros2 run cube_perception cube_detector \
+  --source 0 \
+  --config ~/robogame/ros2_ws/src/cube_perception/config/vision_default.json
+```
+
+测试照片或视频时，把 `--source 0` 换成文件路径。窗口中：黄色框是 ROI；圆和文字是已确认目标；按 `Q` 或 `Esc` 退出。
+
+保存检测结果和标注视频：
+
+```bash
+ros2 run cube_perception cube_detector \
+  --source ~/Downloads/test.mp4 \
+  --config ~/robogame/ros2_ws/src/cube_perception/config/vision_default.json \
+  --headless \
+  --jsonl ~/Downloads/detections.jsonl \
+  --output-video ~/Downloads/annotated.mp4
+```
+
+调 HSV：
+
+```bash
+ros2 run cube_perception hsv_tuner \
+  --source 0 \
+  --config ~/robogame/ros2_ws/src/cube_perception/config/vision_default.json \
+  --color orange
+```
+
+先让目标在二值图里变白、背景尽量黑，再按 `S` 保存。紫色测试时把最后一项改为 `purple`。
+
+## 5. ROS2 正式用法
+
+需要其他相机节点发布 `/camera/image_raw`，最好同时发布 `/camera/camera_info`：
+
+```bash
+ros2 run cube_perception cube_perception --ros-args \
+  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml
+```
+
+查看结果：
+
+```bash
+ros2 topic echo /cubes
+ros2 topic hz /cubes
+```
+
+没有相机时可运行：
+
+```bash
+ros2 run cube_perception mock_perception
+```
+
+## 6. 重点参数怎么理解
+
+- `orange_hsv`、`purple_hsv`：允许通过的颜色范围。
+- `roi_*_ratio`：只在画面的指定区域寻找，范围是 0～1。
+- `min_area_px`：太小的色块不要。
+- `max_area_ratio`：占满画面的大片同色背景不要。
+- `min_rectangularity`、`min_solidity`、`max_rotated_aspect_ratio`：排除不像方块的轮廓。
+- `confirm_frames`：连续看到多少帧才对外发布。
+- `max_missed_frames`：短暂丢失多少帧后删除跟踪记录。
+- `fallback_focal_px`／JSON 中的 `focal_px`：没有相机内参时的临时焦距。
+
+## 7. 当前完成度与现场待办
+
+已完成照片、视频、USB 相机独立入口以及自动测试。现场必须重新固定曝光、采集真实方块数据、调 HSV/ROI、完成相机内参标定，并统计至少 30 段/张每种颜色的召回率。
+
+当前距离来自“已知方块边长 + 针孔模型”，斜视时会产生误差；代码尚未进行畸变矫正、透视/仿射矫正，也没有 ToF 融合。只有真实视角证明误差影响抓取时再增加矫正，不要先盲目增加复杂度。
+
+## 8. 自动测试
+
+```bash
+cd ~/robogame
+python3 -m unittest tests.test_perception tests.test_opencv_detector tests.test_temporal_filter -v
+```

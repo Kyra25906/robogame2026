@@ -1,0 +1,8 @@
+float32 height_m
+float32 timeout_s
+---
+bool success
+uint16 error_code
+float32 duration_s
+string detail
+

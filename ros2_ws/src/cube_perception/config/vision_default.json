@@ -1,0 +1,23 @@
+{
+  "orange_hsv": [5, 100, 80, 25, 255, 255],
+  "purple_hsv": [125, 60, 50, 165, 255, 255],
+  "min_area_px": 400.0,
+  "max_aspect_error": 0.8,
+  "cube_size_m": 0.1,
+  "focal_px": 700.0,
+  "morph_kernel": 5,
+  "min_confidence": 0.45,
+  "confirm_frames": 3,
+  "max_missed_frames": 3,
+  "match_distance_px": 80.0,
+  "smoothing_alpha": 0.4,
+  "roi_x_min_ratio": 0.0,
+  "roi_x_max_ratio": 1.0,
+  "roi_y_min_ratio": 0.0,
+  "roi_y_max_ratio": 1.0,
+  "max_area_ratio": 0.35,
+  "min_rectangularity": 0.35,
+  "min_solidity": 0.50,
+  "min_side_px": 12.0,
+  "max_rotated_aspect_ratio": 3.2
+}
