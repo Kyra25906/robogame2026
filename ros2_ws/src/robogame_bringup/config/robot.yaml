@@ -16,8 +16,14 @@ motion_controller:
     max_wz: 1.20
     position_tolerance: 0.05
     yaw_tolerance: 0.0872665
+    slow_radius: 0.35
+    max_ax: 0.80
+    max_ay: 0.80
+    max_awz: 2.00
+    max_control_dt_s: 0.10
     goal_timeout_s: 15.0
     pose_stale_s: 0.25
+    status_stale_s: 0.30
     min_x: -0.2
     max_x: 7.4
     min_y: -0.2
@@ -57,6 +63,7 @@ manipulator_client:
     max_speed: 0.18
     target_stale_s: 0.5
     action_timeout_s: 12.0
+    status_stale_s: 0.30
     place_heights_m: [0.10, 0.20, 0.30]
 
 mission_manager:

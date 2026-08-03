@@ -35,6 +35,17 @@ ros2 run cube_perception cube_detector \
   --config ~/robogame/ros2_ws/src/cube_perception/config/vision_default.json
 ```
 
+Windows 或需要固定采集格式时，可以显式指定后端和请求参数：
+
+```powershell
+python -m cube_perception.standalone `
+  --source 0 --backend msmf `
+  --width 1280 --height 720 --fps 30 `
+  --config .\ros2_ws\src\cube_perception\config\vision_default.json
+```
+
+程序启动后会打印驱动实际接受的后端、分辨率和帧率。请求值不一定会被摄像头接受，应以打印的实际值为准。`msmf` 无法打开时可测试 `dshow`；笔记本内置 MIPI/IPU 摄像头可能只对 Windows 相机应用开放，此时应先用相机应用录制 MP4，再把文件路径交给 `--source`。
+
 测试照片或视频时，把 `--source 0` 换成文件路径。窗口中：黄色框是 ROI；圆和文字是已确认目标；按 `Q` 或 `Esc` 退出。
 
 保存检测结果和标注视频：
@@ -47,6 +58,8 @@ ros2 run cube_perception cube_detector \
   --jsonl ~/Downloads/detections.jsonl \
   --output-video ~/Downloads/annotated.mp4
 ```
+
+录像输入写入 JSONL 的 `timestamp_s` 来自录像时间轴；摄像头输入则使用运行时单调时钟。这样可以用录像准确验收“目标移除后多久停止报告”。
 
 调 HSV：
 

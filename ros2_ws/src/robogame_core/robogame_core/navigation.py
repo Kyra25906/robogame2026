@@ -14,6 +14,38 @@ def clamp(value: float, limit: float) -> float:
     return max(-limit, min(limit, value))
 
 
+def pose_is_finite(pose: Pose2D) -> bool:
+    """Return False before invalid numeric data can reach a controller."""
+    return all(math.isfinite(value) for value in (pose.x, pose.y, pose.yaw))
+
+
+def move_toward(current: float, target: float, max_delta: float) -> float:
+    """Move one scalar toward a target without changing faster than max_delta."""
+    if max_delta < 0.0:
+        raise ValueError("max_delta cannot be negative")
+    return current + clamp(target - current, max_delta)
+
+
+def limit_velocity_rate(
+    previous: Velocity2D,
+    target: Velocity2D,
+    dt: float,
+    max_ax: float,
+    max_ay: float,
+    max_awz: float,
+) -> Velocity2D:
+    """Apply independent acceleration limits to a body-frame velocity command."""
+    if max_ax <= 0.0 or max_ay <= 0.0 or max_awz <= 0.0:
+        raise ValueError("velocity rate limits must be positive")
+    if dt <= 0.0:
+        return previous
+    return Velocity2D(
+        move_toward(previous.vx, target.vx, max_ax * dt),
+        move_toward(previous.vy, target.vy, max_ay * dt),
+        move_toward(previous.wz, target.wz, max_awz * dt),
+    )
+
+
 @dataclass(frozen=True)
 class ControllerConfig:
     kx: float = 1.2
@@ -25,6 +57,22 @@ class ControllerConfig:
     position_tolerance: float = 0.05
     yaw_tolerance: float = math.radians(5.0)
     slow_radius: float = 0.35
+
+    def __post_init__(self) -> None:
+        values = (
+            self.kx, self.ky, self.kyaw,
+            self.max_vx, self.max_vy, self.max_wz,
+            self.position_tolerance, self.yaw_tolerance, self.slow_radius,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("controller settings must be finite")
+        if min(self.kx, self.ky, self.kyaw) < 0.0:
+            raise ValueError("controller gains cannot be negative")
+        if min(
+            self.max_vx, self.max_vy, self.max_wz,
+            self.position_tolerance, self.yaw_tolerance, self.slow_radius,
+        ) <= 0.0:
+            raise ValueError("controller limits and tolerances must be positive")
 
 
 class GoToPoseController:
@@ -73,4 +121,3 @@ class OdometryIntegrator:
         dy = (math.sin(mid_yaw) * body_velocity.vx + math.cos(mid_yaw) * body_velocity.vy) * dt
         self.pose = Pose2D(self.pose.x + dx, self.pose.y + dy, normalize_angle(self.pose.yaw + wz * dt))
         return self.pose
-

@@ -20,6 +20,22 @@ class MissionResult(str, Enum):
     SAFETY_STOP = "SAFETY_STOP"
 
 
+def control_safety_result(
+    status_received: bool,
+    communication_ok: bool = False,
+    emergency_stop: bool = False,
+    mechanism_fault: bool = False,
+) -> MissionResult | None:
+    """Return the reason motion must be blocked, with emergency stop highest priority."""
+    if emergency_stop:
+        return MissionResult.SAFETY_STOP
+    if not status_received or not communication_ok:
+        return MissionResult.COMMUNICATION_ERROR
+    if mechanism_fault:
+        return MissionResult.MECHANISM_ERROR
+    return None
+
+
 @dataclass(frozen=True)
 class Pose2D:
     x: float
@@ -63,4 +79,3 @@ class Cargo:
         if count <= 0:
             raise ValueError(f"no {color.value} cube onboard")
         setattr(self, field, count - 1)
-
