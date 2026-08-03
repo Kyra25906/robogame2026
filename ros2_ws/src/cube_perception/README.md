@@ -61,6 +61,149 @@ ros2 run cube_perception cube_detector \
 
 录像输入写入 JSONL 的 `timestamp_s` 来自录像时间轴；摄像头输入则使用运行时单调时钟。这样可以用录像准确验收“目标移除后多久停止报告”。
 
+生成汇总验收报告：
+
+```bash
+ros2 run cube_perception vision_report \
+  --jsonl ~/Downloads/detections.jsonl \
+  --output ~/Downloads/vision_report.md
+```
+
+如果已经确认某个时间段内橙色方块始终在画面中，可以检查该时间段的逐帧检测比例：
+
+```bash
+ros2 run cube_perception vision_report \
+  --jsonl ~/Downloads/detections.jsonl \
+  --start-s 5.0 --end-s 15.0 \
+  --expected-color orange --min-detection-ratio 0.90
+```
+
+报告包含总帧数、录像时间轴帧率、每种颜色的检测帧比例、最长连续检测、置信度和距离统计。只有当所选时间段内目标确实每帧都存在时，检测比例才可以近似用于召回率验收；目标本来不在画面中的帧不能算作漏检。
+
+### JSONL 版本和时间轴
+
+当前 `cube_detector` 写出版本 2 的 JSONL。每一帧仍然占一行，并携带自己的格式和时间信息，例如：
+
+```json
+{
+  "schema_version": 2,
+  "frame": 1,
+  "timestamp_s": 0.0333,
+  "timestamp_kind": "media",
+  "source_fps": 30.064,
+  "detections": []
+}
+```
+
+- `schema_version`：JSONL 格式版本；当前报告工具只接受版本 2。
+- `timestamp_s`：当前帧在对应时间轴中的秒数。
+- `timestamp_kind: media`：输入是图片或录像，时间来自原媒体，可以用 `--start-s` 和 `--end-s` 选择录像区间。
+- `timestamp_kind: monotonic`：输入是实时摄像头，时间表示程序启动后经过的时间，不是录像媒体时间。
+- `source_fps`：录像文件或摄像头驱动报告的名义帧率；驱动无法提供时为 `null`。
+
+版本 2 以前的 JSONL 没有明确记录时间类型，旧 `timestamp_s` 可能是电脑处理录像所花的时间，而不是原录像时间。为了避免错误选择验收区间或误报媒体帧率，`vision_report` 会拒绝旧格式：
+
+```text
+error: legacy JSONL is not supported;
+regenerate it with the current cube_detector
+```
+
+不要手工补版本号或转换旧 JSONL。应保留原始录像，并用当前代码重新生成。例如：
+
+```powershell
+python -m cube_perception.standalone `
+  --source "C:\path\to\validation.mp4" `
+  --config "$PWD\ros2_ws\src\cube_perception\config\vision_default.json" `
+  --headless `
+  --jsonl "$PWD\validation\detections.jsonl" `
+  --output-video "$PWD\validation\annotated.mp4"
+```
+
+报告中的两个速率含义不同：
+
+```text
+Source FPS: 30.06
+Observed record rate: 30.03 Hz
+```
+
+- `Source FPS`：文件或驱动报告的名义帧率。
+- `Observed record rate`：根据相邻记录时间戳推算的记录频率。
+- 两者接近通常说明时间轴正常，但都不代表纯算法计算速度。
+- 算法处理性能以 `cube_detector` 结束时打印的 `average ... FPS` 为准。
+
+### 查看逐帧 JSONL
+
+JSONL 面向程序读取，标准格式是一帧一行，不应为了显示美观改成多行存储。PowerShell 中可以只格式化显示，不修改原文件。
+
+缩进查看前 3 帧的完整结构：
+
+```powershell
+Get-Content "$PWD\validation\detections.jsonl" -TotalCount 3 |
+ForEach-Object {
+  $_ | ConvertFrom-Json | ConvertTo-Json -Depth 10
+}
+```
+
+用表格查看前 10 帧摘要：
+
+```powershell
+Get-Content "$PWD\validation\detections.jsonl" -TotalCount 10 |
+ForEach-Object {
+  $record = $_ | ConvertFrom-Json
+  [PSCustomObject]@{
+    Frame      = $record.frame
+    Time_s     = $record.timestamp_s
+    Timeline   = $record.timestamp_kind
+    Detections = $record.detections.Count
+    Colors     = $record.detections.color -join ", "
+  }
+} | Format-Table -AutoSize
+```
+
+### 生成和查看验收报告
+
+报告支持 HTML、Markdown 和纯文本三种格式。默认根据 `--output` 的扩展名自动选择：
+
+```powershell
+# 浏览器直接打开，最适合人工验收
+python -m cube_perception.report `
+  --jsonl "$PWD\validation\detections.jsonl" `
+  --output "$PWD\validation\vision_report.html"
+
+# Markdown 源文件，适合放入 Git 或在 VS Code 中预览
+python -m cube_perception.report `
+  --jsonl "$PWD\validation\detections.jsonl" `
+  --output "$PWD\validation\vision_report.md"
+
+# 普通文本，记事本可直接阅读
+python -m cube_perception.report `
+  --jsonl "$PWD\validation\detections.jsonl" `
+  --output "$PWD\validation\vision_report.txt"
+```
+
+不提供 `--output` 时，报告以纯文本打印到终端。`.html`、`.htm`、`.md`、`.markdown` 和 `.txt` 会自动识别；其他扩展名必须显式指定 `--format html`、`--format markdown` 或 `--format text`。
+
+设置验收门槛时，PASS 返回退出码 0；FAIL 返回退出码 2。即使 FAIL，报告文件也会正常保存，便于查看失败原因：
+
+```powershell
+python -m cube_perception.report `
+  --jsonl "$PWD\validation\detections.jsonl" `
+  --start-s 3 --end-s 18 `
+  --expected-color purple `
+  --min-detection-ratio 0.90 `
+  --output "$PWD\validation\purple_report.html"
+```
+
+HTML 是单个离线文件，不依赖网络、JavaScript 或外部样式，双击即可用浏览器打开。
+
+Windows 记事本只能显示 Markdown 源码，不能渲染标题和表格。推荐使用 VS Code：
+
+```powershell
+code "$PWD\validation\vision_report.md"
+```
+
+打开后按 `Ctrl+Shift+V` 显示 Markdown 预览。不要只修改已经生成文件的扩展名；应重新运行命令，让报告工具按目标格式生成内容。
+
 调 HSV：
 
 ```bash
