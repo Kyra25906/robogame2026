@@ -5,7 +5,8 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from robogame_interfaces.msg import CubeDetection, CubeDetectionArray
+from robogame_core.models import control_safety_result
+from robogame_interfaces.msg import CubeDetection, CubeDetectionArray, RobotStatus
 from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
 from std_msgs.msg import String
 
@@ -19,6 +20,7 @@ class ManipulatorClientNode(Node):
             "target_distance_m": 0.24, "distance_tolerance_m": 0.025,
             "lateral_tolerance_m": 0.018, "kp_distance": 0.8, "kp_lateral": 1.2,
             "max_speed": 0.18, "target_stale_s": 0.5, "action_timeout_s": 12.0,
+            "status_stale_s": 0.30,
             "place_heights_m": [0.10, 0.20, 0.30],
         }.items():
             self.declare_parameter(name, default)
@@ -26,6 +28,7 @@ class ManipulatorClientNode(Node):
         self.result_pub = self.create_publisher(String, "/manipulator/result", 10)
         self.create_subscription(CubeDetectionArray, "/cubes", self._on_cubes, 10)
         self.create_subscription(String, "/manipulator/command", self._on_command, 10)
+        self.create_subscription(RobotStatus, "/robot/status", self._on_robot_status, 10)
         self.grab = self.create_client(ExecuteMechanism, "/gripper/grab")
         self.release = self.create_client(ExecuteMechanism, "/gripper/release")
         self.lift = self.create_client(SetLiftHeight, "/lift/set_height")
@@ -36,7 +39,36 @@ class ManipulatorClientNode(Node):
         self.service_future = None
         self.service_phase: str | None = None
         self.placed_layers = 0
+        self.robot_status: RobotStatus | None = None
+        self.robot_status_time = 0.0
+        self.status_stale = float(self.get_parameter("status_stale_s").value)
+        if self.status_stale <= 0.0:
+            raise ValueError("status_stale_s must be positive")
         self.create_timer(0.05, self._tick)
+
+    def _status_failure(self):
+        status = self.robot_status
+        status_fresh = status is not None and (
+            time.monotonic() - self.robot_status_time <= self.status_stale
+        )
+        return control_safety_result(
+            status_received=status_fresh,
+            communication_ok=bool(status and status.communication_ok),
+            emergency_stop=bool(status and status.emergency_stop),
+            mechanism_fault=bool(status and status.mechanism_fault),
+        )
+
+    def _on_robot_status(self, msg: RobotStatus) -> None:
+        self.robot_status = msg
+        self.robot_status_time = time.monotonic()
+        failure = self._status_failure()
+        if self.command is not None and failure is not None:
+            details = {
+                "SAFETY_STOP": "emergency stop",
+                "COMMUNICATION_ERROR": "robot communication unavailable",
+                "MECHANISM_ERROR": "robot mechanism fault",
+            }
+            self._finish(f"{failure.value}: {details[failure.value]}")
 
     def _on_cubes(self, msg: CubeDetectionArray) -> None:
         if not self.command or not self.command.startswith("PICK_"):
@@ -54,6 +86,16 @@ class ManipulatorClientNode(Node):
             return
         if self.command is not None:
             self.result_pub.publish(String(data="MECHANISM_ERROR: manipulator busy"))
+            return
+        failure = self._status_failure()
+        if failure is not None:
+            details = {
+                "SAFETY_STOP": "emergency stop",
+                "COMMUNICATION_ERROR": "robot status missing or communication unavailable",
+                "MECHANISM_ERROR": "robot mechanism fault",
+            }
+            self._publish_stop()
+            self.result_pub.publish(String(data=f"{failure.value}: {details[failure.value]}"))
             return
         self.command = msg.data
         self.started_at = time.monotonic()
@@ -83,6 +125,15 @@ class ManipulatorClientNode(Node):
         if self.command is None:
             return
         now = time.monotonic()
+        status_failure = self._status_failure()
+        if status_failure is not None:
+            details = {
+                "SAFETY_STOP": "emergency stop",
+                "COMMUNICATION_ERROR": "robot status stale or communication unavailable",
+                "MECHANISM_ERROR": "robot mechanism fault",
+            }
+            self._finish(f"{status_failure.value}: {details[status_failure.value]}")
+            return
         if now - self.started_at > float(self.get_parameter("action_timeout_s").value):
             self._finish("TIMEOUT: manipulator action")
             return

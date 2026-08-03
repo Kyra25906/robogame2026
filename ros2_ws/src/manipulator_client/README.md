@@ -43,6 +43,7 @@ ros2 topic echo /cmd_vel
 
 - 订阅 `/cubes`：视觉目标。
 - 订阅 `/manipulator/command`：上层动作命令。
+- 订阅 `/robot/status`：通信、急停和机构故障；不安全时拒绝新动作并终止当前动作。
 - 发布 `/cmd_vel`：视觉接近时的低速底盘命令。
 - 发布 `/manipulator/result`：动作结果。
 - 调用 `/gripper/grab`、`/gripper/release`、`/lift/set_height`。
@@ -54,6 +55,7 @@ ros2 topic echo /cmd_vel
 - `kp_distance、kp_lateral`：对准速度增益。
 - `max_speed`：视觉对准最大速度。
 - `target_stale_s`：视觉结果过期时间。
+- `status_stale_s`：机器人状态话题的过期时间，过期后停止当前动作。
 - `action_timeout_s`：整个动作超时。
 - `place_heights_m`：第一、二、三层放置高度。
 
@@ -62,6 +64,8 @@ ros2 topic echo /cmd_vel
 当前抓取流程是：收到命令 → 等目标 → 距离/横向 P 控制 → 进入容差 → 调用抓取服务 → 返回结果。放置流程是：选层高 → 升降 → 释放 → 层数加一。
 
 尚未实现完整的 `SEARCH` 旋转搜索、目标角度 `wz` 控制、抓取后的双证据验证、运输掉块检测、放置后视觉稳定性验证、机构取消命令和精细重试。目标一直看不到时当前节点先停车，最终由总动作超时返回失败。
+
+当前已增加下层安全联锁：没有收到机器人状态、通信异常、急停或机构故障时不会继续视觉对准，也不会接受新的抓放命令。硬件急停仍必须由电控直接切断执行器，软件联锁只是第二道保护。
 
 ## 7. 必须和机械、电控确认
 
