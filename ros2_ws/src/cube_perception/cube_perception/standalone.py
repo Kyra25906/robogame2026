@@ -17,6 +17,36 @@ def parse_source(value: str):
     return int(value) if value.isdigit() else value
 
 
+CAMERA_BACKENDS = {
+    "any": cv2.CAP_ANY,
+    "dshow": cv2.CAP_DSHOW,
+    "msmf": cv2.CAP_MSMF,
+    "v4l2": cv2.CAP_V4L2,
+    "gstreamer": cv2.CAP_GSTREAMER,
+}
+
+
+def open_capture(source, backend: str = "any", width: int = 0, height: int = 0, fps: float = 0.0):
+    backend_id = CAMERA_BACKENDS[backend]
+    capture = cv2.VideoCapture(source, backend_id) if backend_id != cv2.CAP_ANY else cv2.VideoCapture(source)
+    if isinstance(source, int):
+        if width > 0:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        if height > 0:
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if fps > 0:
+            capture.set(cv2.CAP_PROP_FPS, fps)
+    return capture
+
+
+def capture_timestamp_s(capture, is_camera: bool, started: float) -> float:
+    if not is_camera:
+        position_ms = capture.get(cv2.CAP_PROP_POS_MSEC)
+        if position_ms >= 0:
+            return position_ms / 1000.0
+    return time.monotonic() - started
+
+
 def load_config(path: Path) -> DetectorConfig:
     with path.open("r", encoding="utf-8") as handle:
         return DetectorConfig.from_dict(json.load(handle))
@@ -97,6 +127,13 @@ def annotate_filtering(annotated, detector: CubeDetector):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Standalone RoboGame cube detector")
     parser.add_argument("--source", default="0", help="camera index, image, or video path")
+    parser.add_argument(
+        "--backend", choices=sorted(CAMERA_BACKENDS), default="any",
+        help="camera/video backend; Windows cameras commonly use msmf or dshow",
+    )
+    parser.add_argument("--width", type=int, default=0, help="requested camera width; 0 keeps driver default")
+    parser.add_argument("--height", type=int, default=0, help="requested camera height; 0 keeps driver default")
+    parser.add_argument("--fps", type=float, default=0.0, help="requested camera FPS; 0 keeps driver default")
     parser.add_argument("--config", required=True, type=Path, help="detector JSON configuration")
     parser.add_argument("--jsonl", type=Path, help="write one JSON record per processed frame")
     parser.add_argument("--output-video", type=Path, help="write annotated MP4 video")
@@ -121,9 +158,20 @@ def main(argv=None) -> int:
         smoothing_alpha=config.smoothing_alpha,
     ))
     source = parse_source(args.source)
-    capture = cv2.VideoCapture(source)
+    capture = open_capture(source, args.backend, args.width, args.height, args.fps)
     if not capture.isOpened():
-        raise RuntimeError(f"cannot open source {args.source}")
+        raise RuntimeError(f"cannot open source {args.source} with backend {args.backend}")
+    actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = capture.get(cv2.CAP_PROP_FPS)
+    try:
+        actual_backend = capture.getBackendName()
+    except cv2.error:
+        actual_backend = args.backend
+    print(
+        f"capture opened: backend={actual_backend} size={actual_width}x{actual_height} "
+        f"fps={actual_fps:.2f} source={args.source}"
+    )
 
     json_handle = None
     writer = None
@@ -152,7 +200,7 @@ def main(argv=None) -> int:
                 if args.output_video:
                     args.output_video.parent.mkdir(parents=True, exist_ok=True)
                 writer = open_writer(args.output_video, capture, annotated)
-            timestamp = time.monotonic() - started
+            timestamp = capture_timestamp_s(capture, isinstance(source, int), started)
             if json_handle:
                 json.dump(
                     detection_record(
