@@ -14,4 +14,5 @@ entry_points={"console_scripts":[
     "mock_perception = cube_perception.mock_node:main",
     "cube_detector = cube_perception.standalone:main",
     "hsv_tuner = cube_perception.hsv_tuner:main",
+    "vision_report = cube_perception.report:main",
 ]})

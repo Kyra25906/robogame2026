@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -70,10 +71,22 @@ def open_writer(path: Path | None, capture, first_frame):
     return writer
 
 
-def detection_record(frame_index: int, timestamp_s: float, detections, tracking=None, filtering=None) -> dict:
+def detection_record(
+    frame_index: int,
+    timestamp_s: float,
+    detections,
+    *,
+    timestamp_kind: str,
+    source_fps: float | None,
+    tracking=None,
+    filtering=None,
+) -> dict:
     return {
+        "schema_version": 2,
         "frame": frame_index,
         "timestamp_s": round(timestamp_s, 6),
+        "timestamp_kind": timestamp_kind,
+        "source_fps": round(source_fps, 6) if source_fps is not None else None,
         "detections": [
             {
                 "color": detection.color.value,
@@ -164,6 +177,8 @@ def main(argv=None) -> int:
     actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     actual_fps = capture.get(cv2.CAP_PROP_FPS)
+    source_fps = actual_fps if math.isfinite(actual_fps) and actual_fps > 0 else None
+    timestamp_kind = "monotonic" if isinstance(source, int) else "media"
     try:
         actual_backend = capture.getBackendName()
     except cv2.error:
@@ -204,8 +219,13 @@ def main(argv=None) -> int:
             if json_handle:
                 json.dump(
                     detection_record(
-                        frame_index, timestamp, detections,
-                        temporal_filter.debug_state(), detector.last_debug,
+                        frame_index,
+                        timestamp,
+                        detections,
+                        timestamp_kind=timestamp_kind,
+                        source_fps=source_fps,
+                        tracking=temporal_filter.debug_state(),
+                        filtering=detector.last_debug,
                     ),
                     json_handle, ensure_ascii=False,
                 )
