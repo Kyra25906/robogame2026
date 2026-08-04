@@ -5,7 +5,10 @@ from robogame_core.manipulator import (
     GrabVerificationPolicy,
     ManipulatorState,
     MechanismOperation,
+    PlacementEvidence,
+    PlacementStabilityObserver,
     PlaceVerificationPolicy,
+    StabilityDecision,
     VerificationDecision,
     cancellation_decision,
     ServiceWaitDecision,
@@ -416,6 +419,117 @@ class PlaceVerificationTests(unittest.TestCase):
                 elapsed_s=0.0,
                 timeout_s=0.0,
             )
+
+
+class PlacementStabilityObserverTests(unittest.TestCase):
+    def test_continuous_qualified_evidence_becomes_stable_after_three_seconds(self):
+        observer = PlacementStabilityObserver(observation_started_s=10.0)
+        self.assertEqual(
+            observer.update(timestamp_s=10.2, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=13.19, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=13.2, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.STABLE,
+        )
+
+    def test_unavailable_evidence_restarts_continuous_window(self):
+        observer = PlacementStabilityObserver(observation_started_s=0.0)
+        observer.update(timestamp_s=0.1, evidence=PlacementEvidence.QUALIFIED)
+        observer.update(timestamp_s=2.0, evidence=PlacementEvidence.UNAVAILABLE)
+        self.assertEqual(
+            observer.update(timestamp_s=4.9, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=6.0, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.INCONCLUSIVE,
+        )
+
+    def test_short_unavailable_gap_preserves_progress_but_does_not_count(self):
+        observer = PlacementStabilityObserver(
+            observation_started_s=0.0,
+            max_unavailable_gap_s=0.2,
+        )
+        observer.update(timestamp_s=0.0, evidence=PlacementEvidence.QUALIFIED)
+        observer.update(timestamp_s=1.0, evidence=PlacementEvidence.UNAVAILABLE)
+        observer.update(timestamp_s=1.1, evidence=PlacementEvidence.QUALIFIED)
+
+        self.assertEqual(
+            observer.update(timestamp_s=3.0, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=3.1, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.STABLE,
+        )
+
+    def test_unavailable_gap_above_limit_restarts_progress(self):
+        observer = PlacementStabilityObserver(
+            observation_started_s=0.0,
+            observation_timeout_s=8.0,
+            max_unavailable_gap_s=0.2,
+        )
+        observer.update(timestamp_s=0.0, evidence=PlacementEvidence.QUALIFIED)
+        observer.update(timestamp_s=1.0, evidence=PlacementEvidence.UNAVAILABLE)
+        observer.update(timestamp_s=1.3, evidence=PlacementEvidence.UNAVAILABLE)
+        observer.update(timestamp_s=1.4, evidence=PlacementEvidence.QUALIFIED)
+
+        self.assertEqual(
+            observer.update(timestamp_s=4.3, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=4.4, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.STABLE,
+        )
+
+    def test_explicit_bad_placement_fails_immediately(self):
+        observer = PlacementStabilityObserver(observation_started_s=2.0)
+        self.assertEqual(
+            observer.update(timestamp_s=2.1, evidence=PlacementEvidence.FAILED),
+            StabilityDecision.FAILED,
+        )
+
+    def test_missing_evidence_reaches_inconclusive_at_timeout(self):
+        observer = PlacementStabilityObserver(observation_started_s=5.0)
+        self.assertEqual(
+            observer.update(timestamp_s=10.9, evidence=PlacementEvidence.UNAVAILABLE),
+            StabilityDecision.OBSERVING,
+        )
+        self.assertEqual(
+            observer.update(timestamp_s=11.0, evidence=PlacementEvidence.UNAVAILABLE),
+            StabilityDecision.INCONCLUSIVE,
+        )
+
+    def test_terminal_result_is_sticky(self):
+        observer = PlacementStabilityObserver(observation_started_s=0.0)
+        observer.update(timestamp_s=0.0, evidence=PlacementEvidence.FAILED)
+        self.assertEqual(
+            observer.update(timestamp_s=4.0, evidence=PlacementEvidence.QUALIFIED),
+            StabilityDecision.FAILED,
+        )
+
+    def test_invalid_configuration_and_timestamps_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "shorter"):
+            PlacementStabilityObserver(
+                observation_started_s=0.0,
+                stable_duration_s=3.0,
+                observation_timeout_s=2.0,
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            PlacementStabilityObserver(
+                observation_started_s=0.0,
+                max_unavailable_gap_s=-0.1,
+            )
+        observer = PlacementStabilityObserver(observation_started_s=1.0)
+        observer.update(timestamp_s=2.0, evidence=PlacementEvidence.QUALIFIED)
+        with self.assertRaisesRegex(ValueError, "monotonic"):
+            observer.update(timestamp_s=1.5, evidence=PlacementEvidence.QUALIFIED)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,9 @@ class ManipulatorState(str, Enum):
     WAITING_SERVICE = "WAITING_SERVICE"
     EXECUTING = "EXECUTING"
     VERIFYING = "VERIFYING"
+    RETREATING = "RETREATING"
+    WAITING_RETREAT_EVIDENCE = "WAITING_RETREAT_EVIDENCE"
+    OBSERVING_STABILITY = "OBSERVING_STABILITY"
 
 
 class MechanismOperation(str, Enum):
@@ -49,6 +52,101 @@ class VerificationDecision(str, Enum):
     PASS = "PASS"
     WAIT = "WAIT"
     TIMEOUT = "TIMEOUT"
+
+
+class PlacementEvidence(str, Enum):
+    """Meaning of one post-retreat visual observation."""
+
+    QUALIFIED = "QUALIFIED"
+    FAILED = "FAILED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class StabilityDecision(str, Enum):
+    """Progress or terminal result of post-placement observation."""
+
+    OBSERVING = "OBSERVING"
+    STABLE = "STABLE"
+    FAILED = "FAILED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+@dataclass
+class PlacementStabilityObserver:
+    """Require qualified evidence after retreat, tolerating a configured gap.
+
+    Create the observer only after the mechanism/chassis has reported that
+    retreat is complete. Timestamps must use one monotonic time source.
+    """
+
+    observation_started_s: float
+    stable_duration_s: float = 3.0
+    observation_timeout_s: float = 6.0
+    max_unavailable_gap_s: float = 0.0
+    qualified_since_s: float | None = None
+    unavailable_since_s: float | None = None
+    last_timestamp_s: float | None = None
+    decision: StabilityDecision = StabilityDecision.OBSERVING
+
+    def __post_init__(self) -> None:
+        if self.observation_started_s < 0.0:
+            raise ValueError("observation_started_s cannot be negative")
+        if self.stable_duration_s <= 0.0:
+            raise ValueError("stable_duration_s must be positive")
+        if self.observation_timeout_s < self.stable_duration_s:
+            raise ValueError(
+                "observation_timeout_s cannot be shorter than stable_duration_s"
+            )
+        if self.max_unavailable_gap_s < 0.0:
+            raise ValueError("max_unavailable_gap_s cannot be negative")
+
+    def update(
+        self, *, timestamp_s: float, evidence: PlacementEvidence
+    ) -> StabilityDecision:
+        """Consume one observation; terminal decisions remain unchanged."""
+        if timestamp_s < self.observation_started_s:
+            raise ValueError("timestamp_s cannot precede observation start")
+        if self.last_timestamp_s is not None and timestamp_s < self.last_timestamp_s:
+            raise ValueError("timestamp_s must be monotonic")
+        if self.decision is not StabilityDecision.OBSERVING:
+            return self.decision
+
+        self.last_timestamp_s = timestamp_s
+        if evidence is PlacementEvidence.FAILED:
+            self.decision = StabilityDecision.FAILED
+            return self.decision
+
+        if evidence is PlacementEvidence.QUALIFIED:
+            if self.qualified_since_s is None:
+                self.qualified_since_s = timestamp_s
+            elif self.unavailable_since_s is not None:
+                unavailable_gap_s = timestamp_s - self.unavailable_since_s
+                if unavailable_gap_s > self.max_unavailable_gap_s:
+                    self.qualified_since_s = timestamp_s
+                else:
+                    # Preserve progress, but do not count unseen time as stable.
+                    self.qualified_since_s += unavailable_gap_s
+            self.unavailable_since_s = None
+            if timestamp_s - self.qualified_since_s >= self.stable_duration_s:
+                self.decision = StabilityDecision.STABLE
+                return self.decision
+        else:
+            if self.qualified_since_s is not None:
+                if self.max_unavailable_gap_s == 0.0:
+                    self.qualified_since_s = None
+                    self.unavailable_since_s = None
+                elif self.unavailable_since_s is None:
+                    self.unavailable_since_s = timestamp_s
+                elif (
+                    timestamp_s - self.unavailable_since_s
+                    > self.max_unavailable_gap_s
+                ):
+                    self.qualified_since_s = None
+                    self.unavailable_since_s = None
+
+        if timestamp_s - self.observation_started_s >= self.observation_timeout_s:
+            self.decision = StabilityDecision.INCONCLUSIVE
+        return self.decision
 
 
 class CancellationDecision(str, Enum):

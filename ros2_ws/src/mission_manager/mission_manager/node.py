@@ -45,7 +45,7 @@ class MissionManagerNode(Node):
         self.status = msg
 
     def _on_action_result(self, msg: String) -> None:
-        if msg.data == "SUCCESS":
+        if msg.data in {"SUCCESS", "STABLE"}:
             self.machine.tick(action_succeeded=True)
         else:
             prefix = msg.data.split(":", 1)[0]

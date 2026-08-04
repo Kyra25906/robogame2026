@@ -10,6 +10,7 @@ class MockMechanismState:
     cube_present: bool = False
     gripper_closed: bool = False
     lift_height_m: float = 0.0
+    retreat_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -31,13 +32,13 @@ def execute_mock_mechanism(
     if operation is MechanismOperation.GRAB:
         if not configured_success:
             return MockMechanismResult(state, False, 1101, "mock grab failed")
-        updated = MockMechanismState(True, True, state.lift_height_m)
+        updated = MockMechanismState(True, True, state.lift_height_m, False)
         return MockMechanismResult(updated, True, 0, "mock grab completed")
 
     if operation is MechanismOperation.RELEASE:
         if not configured_success:
             return MockMechanismResult(state, False, 1102, "mock release failed")
-        updated = MockMechanismState(False, False, state.lift_height_m)
+        updated = MockMechanismState(False, False, state.lift_height_m, False)
         return MockMechanismResult(updated, True, 0, "mock release completed")
 
     if operation is MechanismOperation.LIFT:
@@ -48,8 +49,21 @@ def execute_mock_mechanism(
         if not configured_success:
             return MockMechanismResult(state, False, 1103, "mock lift failed")
         updated = MockMechanismState(
-            state.cube_present, state.gripper_closed, float(height_m)
+            state.cube_present,
+            state.gripper_closed,
+            float(height_m),
+            state.retreat_complete,
         )
         return MockMechanismResult(updated, True, 0, "mock lift completed")
 
     raise ValueError(f"unsupported mock mechanism operation: {operation.value}")
+
+
+def complete_mock_retreat(state: MockMechanismState) -> MockMechanismState:
+    """Record chassis retreat completion without changing gripper evidence."""
+    return MockMechanismState(
+        state.cube_present,
+        state.gripper_closed,
+        state.lift_height_m,
+        True,
+    )

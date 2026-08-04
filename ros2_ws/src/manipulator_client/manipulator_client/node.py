@@ -10,8 +10,11 @@ from robogame_core.manipulator import (
     GrabVerificationPolicy,
     ManipulatorState,
     MechanismOperation,
+    PlacementEvidence,
+    PlacementStabilityObserver,
     PlaceVerificationPolicy,
     ServiceWaitDecision,
+    StabilityDecision,
     VerificationDecision,
     cancellation_decision,
     calculate_alignment_command,
@@ -42,6 +45,10 @@ class ManipulatorClientNode(Node):
             "grab_verification_timeout_s": 1.0,
             "place_verification_policy": "service_only",
             "place_verification_timeout_s": 1.0,
+            "placement_evidence_policy": "unavailable",
+            "placement_stable_duration_s": 3.0,
+            "placement_observation_timeout_s": 6.0,
+            "placement_max_unavailable_gap_s": 0.0,
             "place_heights_m": [0.10, 0.20, 0.30],
         }.items():
             self.declare_parameter(name, default)
@@ -52,16 +59,20 @@ class ManipulatorClientNode(Node):
         self.create_subscription(RobotStatus, "/robot/status", self._on_robot_status, 10)
         self.grab = self.create_client(ExecuteMechanism, "/gripper/grab")
         self.release = self.create_client(ExecuteMechanism, "/gripper/release")
+        self.retreat = self.create_client(ExecuteMechanism, "/chassis/retreat")
         self.lift = self.create_client(SetLiftHeight, "/lift/set_height")
         self.command: str | None = None
         self.target: CubeDetection | None = None
         self.target_time = 0.0
         self.started_at = 0.0
         self.service_future = None
+        self.retreat_future = None
+        self.stability_observer: PlacementStabilityObserver | None = None
         self.workflow_state = ManipulatorState.IDLE
         self.operation = MechanismOperation.NONE
         self.service_wait_started_at = 0.0
         self.verification_started_at = 0.0
+        self.retreat_started_at = 0.0
         try:
             self.grab_verification_policy = GrabVerificationPolicy(
                 str(self.get_parameter("grab_verification_policy").value)
@@ -81,6 +92,29 @@ class ManipulatorClientNode(Node):
                 f"place_verification_policy must be one of: {allowed}"
             ) from exc
         self.placed_layers = 0
+        self.placement_evidence_policy = str(
+            self.get_parameter("placement_evidence_policy").value
+        )
+        if self.placement_evidence_policy not in {
+            "mock_qualified", "mock_failed", "unavailable"
+        }:
+            raise ValueError(
+                "placement_evidence_policy must be mock_qualified, "
+                "mock_failed, or unavailable"
+            )
+        # Construct once to validate the two configurable durations at startup.
+        PlacementStabilityObserver(
+            observation_started_s=0.0,
+            stable_duration_s=float(
+                self.get_parameter("placement_stable_duration_s").value
+            ),
+            observation_timeout_s=float(
+                self.get_parameter("placement_observation_timeout_s").value
+            ),
+            max_unavailable_gap_s=float(
+                self.get_parameter("placement_max_unavailable_gap_s").value
+            ),
+        )
         self.robot_status: RobotStatus | None = None
         self.robot_status_time = 0.0
         self.status_stale = float(self.get_parameter("status_stale_s").value)
@@ -146,6 +180,8 @@ class ManipulatorClientNode(Node):
         self.started_at = time.monotonic()
         self.target = None
         self.service_future = None
+        self.retreat_future = None
+        self.stability_observer = None
         self.workflow_state = (
             ManipulatorState.WAITING_TARGET
             if self.command.startswith("PICK_")
@@ -158,8 +194,15 @@ class ManipulatorClientNode(Node):
         )
         self.service_wait_started_at = self.started_at
         self.verification_started_at = 0.0
+        self.retreat_started_at = 0.0
 
     def _cancel_current_action(self) -> None:
+        if self.workflow_state is ManipulatorState.RETREATING:
+            self._finish(
+                "CANCELLED: software workflow stopped; "
+                "active retreat service may still complete"
+            )
+            return
         decision = cancellation_decision(self.workflow_state, self.operation)
         if decision is CancellationDecision.NO_ACTIVE_ACTION:
             self._publish_stop()
@@ -184,10 +227,13 @@ class ManipulatorClientNode(Node):
         self.command = None
         self.target = None
         self.service_future = None
+        self.retreat_future = None
+        self.stability_observer = None
         self.workflow_state = ManipulatorState.IDLE
         self.operation = MechanismOperation.NONE
         self.service_wait_started_at = 0.0
         self.verification_started_at = 0.0
+        self.retreat_started_at = 0.0
 
     def _verify_grab(self, now: float) -> None:
         status = self.robot_status
@@ -222,8 +268,13 @@ class ManipulatorClientNode(Node):
             timeout_s=float(self.get_parameter("place_verification_timeout_s").value),
         )
         if decision is VerificationDecision.PASS:
-            self.placed_layers += 1
-            self._finish("SUCCESS")
+            self.get_logger().info(
+                "place verification passed; requesting clearance retreat"
+            )
+            self.workflow_state = ManipulatorState.WAITING_SERVICE
+            self.operation = MechanismOperation.NONE
+            self.service_wait_started_at = now
+            self._start_retreat(now)
         elif decision is VerificationDecision.TIMEOUT:
             self._finish(
                 "MECHANISM_ERROR: place verification timed out "
@@ -249,6 +300,54 @@ class ManipulatorClientNode(Node):
             self.operation = MechanismOperation.RELEASE
             self.service_future = self.release.call_async(request)
 
+    def _start_retreat(self, now: float) -> None:
+        request = ExecuteMechanism.Request()
+        request.command, request.timeout_s = "RETREAT", 3.0
+        if self._wait_for_service(self.retreat, "retreat", now):
+            self.workflow_state = ManipulatorState.RETREATING
+            self.operation = MechanismOperation.NONE
+            self.retreat_started_at = now
+            self.retreat_future = self.retreat.call_async(request)
+
+    def _start_stability_observation(self, now: float) -> None:
+        self.stability_observer = PlacementStabilityObserver(
+            observation_started_s=now,
+            stable_duration_s=float(
+                self.get_parameter("placement_stable_duration_s").value
+            ),
+            observation_timeout_s=float(
+                self.get_parameter("placement_observation_timeout_s").value
+            ),
+            max_unavailable_gap_s=float(
+                self.get_parameter("placement_max_unavailable_gap_s").value
+            ),
+        )
+        self.workflow_state = ManipulatorState.OBSERVING_STABILITY
+        self.get_logger().info(
+            "retreat evidence confirmed; starting placement stability observation"
+        )
+
+    def _observe_stability(self, now: float) -> None:
+        if self.stability_observer is None:
+            self._finish("INCONCLUSIVE: stability observer was not initialized")
+            return
+        evidence = {
+            "mock_qualified": PlacementEvidence.QUALIFIED,
+            "mock_failed": PlacementEvidence.FAILED,
+            "unavailable": PlacementEvidence.UNAVAILABLE,
+        }[self.placement_evidence_policy]
+        decision = self.stability_observer.update(
+            timestamp_s=now, evidence=evidence
+        )
+        if decision is StabilityDecision.STABLE:
+            self.get_logger().info("placement remained stable for the required window")
+            self.placed_layers += 1
+            self._finish("STABLE")
+        elif decision is StabilityDecision.FAILED:
+            self._finish("FAILED: placement became unstable")
+        elif decision is StabilityDecision.INCONCLUSIVE:
+            self._finish("INCONCLUSIVE: stable placement could not be confirmed")
+
     def _tick(self) -> None:
         if self.command is None:
             return
@@ -264,6 +363,25 @@ class ManipulatorClientNode(Node):
             return
         if now - self.started_at > float(self.get_parameter("action_timeout_s").value):
             self._finish("TIMEOUT: manipulator action")
+            return
+        if self.retreat_future is not None:
+            if self.retreat_future.done():
+                try:
+                    response = self.retreat_future.result()
+                except Exception as exc:
+                    self._finish(
+                        f"MECHANISM_ERROR: retreat service exception: {exc}"
+                    )
+                    return
+                if response is None or not response.success:
+                    detail = "no response" if response is None else response.detail
+                    self._finish(f"MECHANISM_ERROR: retreat failed: {detail}")
+                    return
+                self.retreat_future = None
+                self.workflow_state = ManipulatorState.WAITING_RETREAT_EVIDENCE
+                self.get_logger().info(
+                    "retreat service completed; waiting for fresh retreat status"
+                )
             return
         if self.service_future is not None:
             if self.service_future.done():
@@ -311,7 +429,22 @@ class ManipulatorClientNode(Node):
                 and self.operation is MechanismOperation.RELEASE):
             self._verify_place(now)
             return
+        if self.workflow_state is ManipulatorState.WAITING_RETREAT_EVIDENCE:
+            if (
+                self.robot_status is not None
+                and self.robot_status.retreat_complete
+                and self.robot_status_time >= self.retreat_started_at
+            ):
+                self._start_stability_observation(now)
+            return
+        if self.workflow_state is ManipulatorState.OBSERVING_STABILITY:
+            self._observe_stability(now)
+            return
         if self.command.startswith("PLACE_"):
+            if (self.workflow_state is ManipulatorState.WAITING_SERVICE
+                    and self.operation is MechanismOperation.NONE):
+                self._start_retreat(now)
+                return
             if (self.workflow_state is ManipulatorState.WAITING_SERVICE
                     and self.operation is MechanismOperation.RELEASE):
                 self._start_release(now)

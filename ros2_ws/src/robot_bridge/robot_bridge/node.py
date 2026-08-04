@@ -9,7 +9,11 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robogame_core.models import Pose2D, Velocity2D
 from robogame_core.manipulator import MechanismOperation
-from robogame_core.mock_mechanism import MockMechanismState, execute_mock_mechanism
+from robogame_core.mock_mechanism import (
+    MockMechanismState,
+    complete_mock_retreat,
+    execute_mock_mechanism,
+)
 from robogame_core.navigation import OdometryIntegrator
 from robogame_core.serial_protocol import StreamDecoder, encode_frame, encode_velocity
 from robogame_interfaces.msg import RobotStatus
@@ -43,6 +47,7 @@ class RobotBridge(Node):
         self.create_service(ExecuteMechanism, "/gripper/grab", self._mechanism)
         self.create_service(ExecuteMechanism, "/gripper/release", self._mechanism)
         self.create_service(ExecuteMechanism, "/chassis/stop", self._mechanism)
+        self.create_service(ExecuteMechanism, "/chassis/retreat", self._mechanism)
         self.create_service(SetLiftHeight, "/lift/set_height", self._lift)
         self.velocity = Velocity2D(0.0, 0.0, 0.0)
         self.integrator = OdometryIntegrator(Pose2D(0.0, 0.0, 0.0))
@@ -82,7 +87,7 @@ class RobotBridge(Node):
             response.duration_s = float(time.monotonic() - started)
             response.detail = "real mechanism payload is disabled until the MCU contract is signed"
             return response
-        allowed = {"GRAB", "RELEASE", "STOP"}
+        allowed = {"GRAB", "RELEASE", "STOP", "RETREAT"}
         command = request.command.upper()
         if command not in allowed:
             response.success = False
@@ -96,6 +101,16 @@ class RobotBridge(Node):
             response.error_code = 0
             response.duration_s = float(time.monotonic() - started)
             response.detail = "mock command completed"
+            return response
+        if command == "RETREAT":
+            self.velocity = Velocity2D(0.0, 0.0, 0.0)
+            self.mock_mechanism_state = complete_mock_retreat(
+                self.mock_mechanism_state
+            )
+            response.success = True
+            response.error_code = 0
+            response.duration_s = float(time.monotonic() - started)
+            response.detail = "mock retreat completed"
             return response
         operation = MechanismOperation(command)
         configured_success = bool(self.get_parameter(
@@ -177,6 +192,7 @@ class RobotBridge(Node):
         )
         status.gripper_closed = self.mock_mechanism_state.gripper_closed
         status.cube_present = self.mock_mechanism_state.cube_present
+        status.retreat_complete = self.mock_mechanism_state.retreat_complete
         status.battery_voltage = 24.0
         status.detail = "mock hardware" if self.mock_mode else (
             "MCU frame received; status payload adapter pending" if communication_ok else "MCU heartbeat missing"

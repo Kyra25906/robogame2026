@@ -157,3 +157,66 @@ Prepare a validation set that was not used to tune thresholds.
 - The detector stops reporting a target within 0.5 seconds after removal.
 
 Do not connect the detector to chassis motion until this gate passes.
+
+## Post-placement observability and camera checklist
+
+The current stability decision assumes that, after the local clearance retreat,
+the camera can see the complete build area without the arm or gripper supporting
+or obscuring the cube. This assumption has not yet been verified against the
+final mechanical design.
+
+An `INCONCLUSIVE` result means that the available evidence is insufficient. It
+does **not** mean the physical cube is unstable. A cube may actually remain
+stable for three seconds while the robot cannot confirm it because of occlusion,
+camera vibration, poor lighting, or an unsuitable viewing angle.
+
+Recommended single-camera arrangement:
+
+- Mount the camera on the upper front of the chassis, above the main gripper
+  working height where practical.
+- Tilt it downward so that it sees the cube, its support surface, and the
+  surrounding placement boundary.
+- Keep the arm's normal retract path outside the acceptance region of interest.
+- Use the shortest retreat that removes contact and exposes the complete region;
+  do not assume a large fixed retreat is necessary.
+- Make the camera mount rigid enough that images settle quickly after motion.
+
+Items that must be confirmed with the mechanical team or on site:
+
+- [ ] Camera model, resolution, frame rate, and horizontal/vertical field of view.
+- [ ] Camera mounting height, pitch angle, and distance to the build area.
+- [ ] Arm and gripper outline at the released and fully retracted positions.
+- [ ] Minimum local retreat distance that removes contact and visual occlusion.
+- [ ] Whether the complete cube/support contact area is visible after retreat.
+- [ ] Placement ROI and the allowed translation/tilt thresholds.
+- [ ] Image-settling time caused by chassis or camera-mount vibration.
+- [ ] Expected lighting changes, reflections, and competition-field occluders.
+- [ ] Maximum acceptable temporary evidence gap, determined from recorded video.
+- [ ] Recovery action after `INCONCLUSIVE`: observe again, change view, or stop.
+
+The stability observer uses time rather than frame counts. Its controls are:
+
+```text
+placement_stable_duration_s         qualified evidence required (default 3.0 s)
+placement_observation_timeout_s     total time before INCONCLUSIVE (default 6.0 s)
+placement_max_unavailable_gap_s     tolerated temporary evidence gap (default 0.0 s)
+```
+
+A tolerated gap preserves earlier progress but the unseen interval is paused and
+does not count toward the required stable duration. A longer gap clears progress.
+Keep the default at `0.0` until real recordings establish a defensible value;
+then tune it through YAML or launch parameters without changing code.
+
+### Remote validation observation (2026-08-04)
+
+During the Ubuntu VMware mock validation, one of two `INCONCLUSIVE` runs was
+preempted by `COMMUNICATION_ERROR` because `RobotStatus` was not delivered for
+more than the configured `status_stale_s=0.30` seconds. The immediate rerun
+completed correctly at the configured 0.60-second observation timeout. The
+normal three-second `STABLE` run and the explicit `FAILED` run were unaffected.
+
+Treat this as a virtual-machine scheduling observation, not yet as proof of a
+robot-bridge defect. Do not loosen the real-hardware stale-status threshold from
+this single sample. During later load and hardware tests, record the maximum and
+percentile intervals between received status messages. If the jitter is unique
+to VMware, override the threshold only in the mock launch configuration.
