@@ -8,6 +8,8 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robogame_core.models import Pose2D, Velocity2D
+from robogame_core.manipulator import MechanismOperation
+from robogame_core.mock_mechanism import MockMechanismState, execute_mock_mechanism
 from robogame_core.navigation import OdometryIntegrator
 from robogame_core.serial_protocol import StreamDecoder, encode_frame, encode_velocity
 from robogame_interfaces.msg import RobotStatus
@@ -29,6 +31,9 @@ class RobotBridge(Node):
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("command_timeout_s", 0.15)
         self.declare_parameter("mock_start_after_s", 2.0)
+        self.declare_parameter("mock_grab_success", True)
+        self.declare_parameter("mock_release_success", True)
+        self.declare_parameter("mock_lift_success", True)
         self.mock_mode = bool(self.get_parameter("mock_mode").value)
         self.command_timeout = float(self.get_parameter("command_timeout_s").value)
         self.status_pub = self.create_publisher(RobotStatus, "/robot/status", 10)
@@ -48,6 +53,7 @@ class RobotBridge(Node):
         self.serial = None
         self.decoder = StreamDecoder()
         self.last_rx = 0.0
+        self.mock_mechanism_state = MockMechanismState()
         if not self.mock_mode:
             self._open_serial()
         self.create_timer(0.02, self._tick)
@@ -78,12 +84,34 @@ class RobotBridge(Node):
             return response
         allowed = {"GRAB", "RELEASE", "STOP"}
         command = request.command.upper()
-        response.success = command in allowed
-        response.error_code = 0 if response.success else 1001
-        response.duration_s = float(time.monotonic() - started)
-        response.detail = "mock command completed" if response.success else f"unsupported command {command}"
+        if command not in allowed:
+            response.success = False
+            response.error_code = 1001
+            response.duration_s = float(time.monotonic() - started)
+            response.detail = f"unsupported command {command}"
+            return response
         if command == "STOP":
             self.velocity = Velocity2D(0.0, 0.0, 0.0)
+            response.success = True
+            response.error_code = 0
+            response.duration_s = float(time.monotonic() - started)
+            response.detail = "mock command completed"
+            return response
+        operation = MechanismOperation(command)
+        configured_success = bool(self.get_parameter(
+            "mock_grab_success" if operation is MechanismOperation.GRAB
+            else "mock_release_success"
+        ).value)
+        result = execute_mock_mechanism(
+            self.mock_mechanism_state,
+            operation,
+            configured_success=configured_success,
+        )
+        self.mock_mechanism_state = result.state
+        response.success = result.success
+        response.error_code = result.error_code
+        response.duration_s = float(time.monotonic() - started)
+        response.detail = result.detail
         return response
 
     def _lift(self, request, response):
@@ -94,10 +122,17 @@ class RobotBridge(Node):
             response.duration_s = float(time.monotonic() - started)
             response.detail = "real lift payload is disabled until the MCU contract is signed"
             return response
-        response.success = 0.0 <= request.height_m <= 0.8
-        response.error_code = 0 if response.success else 1002
+        result = execute_mock_mechanism(
+            self.mock_mechanism_state,
+            MechanismOperation.LIFT,
+            configured_success=bool(self.get_parameter("mock_lift_success").value),
+            height_m=float(request.height_m),
+        )
+        self.mock_mechanism_state = result.state
+        response.success = result.success
+        response.error_code = result.error_code
         response.duration_s = float(time.monotonic() - started)
-        response.detail = "mock lift completed" if response.success else "height outside [0, 0.8] m"
+        response.detail = result.detail
         return response
 
     def _tick(self) -> None:
@@ -140,6 +175,8 @@ class RobotBridge(Node):
         status.physical_start = self.mock_mode and (
             now - self.started_at >= float(self.get_parameter("mock_start_after_s").value)
         )
+        status.gripper_closed = self.mock_mechanism_state.gripper_closed
+        status.cube_present = self.mock_mechanism_state.cube_present
         status.battery_voltage = 24.0
         status.detail = "mock hardware" if self.mock_mode else (
             "MCU frame received; status payload adapter pending" if communication_ok else "MCU heartbeat missing"
@@ -152,8 +189,11 @@ def main(args=None) -> None:
     node = RobotBridge()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         if node.serial is not None:
             node.serial.close()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

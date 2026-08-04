@@ -5,6 +5,23 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from robogame_core.manipulator import (
+    CancellationDecision,
+    GrabVerificationPolicy,
+    ManipulatorState,
+    MechanismOperation,
+    PlaceVerificationPolicy,
+    ServiceWaitDecision,
+    VerificationDecision,
+    cancellation_decision,
+    calculate_alignment_command,
+    format_mechanism_failure,
+    format_service_exception,
+    select_place_height,
+    grab_verification_decision,
+    place_verification_decision,
+    service_wait_decision,
+)
 from robogame_core.models import control_safety_result
 from robogame_interfaces.msg import CubeDetection, CubeDetectionArray, RobotStatus
 from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
@@ -20,7 +37,11 @@ class ManipulatorClientNode(Node):
             "target_distance_m": 0.24, "distance_tolerance_m": 0.025,
             "lateral_tolerance_m": 0.018, "kp_distance": 0.8, "kp_lateral": 1.2,
             "max_speed": 0.18, "target_stale_s": 0.5, "action_timeout_s": 12.0,
-            "status_stale_s": 0.30,
+            "status_stale_s": 0.30, "service_wait_timeout_s": 1.0,
+            "grab_verification_policy": "service_only",
+            "grab_verification_timeout_s": 1.0,
+            "place_verification_policy": "service_only",
+            "place_verification_timeout_s": 1.0,
             "place_heights_m": [0.10, 0.20, 0.30],
         }.items():
             self.declare_parameter(name, default)
@@ -37,7 +58,28 @@ class ManipulatorClientNode(Node):
         self.target_time = 0.0
         self.started_at = 0.0
         self.service_future = None
-        self.service_phase: str | None = None
+        self.workflow_state = ManipulatorState.IDLE
+        self.operation = MechanismOperation.NONE
+        self.service_wait_started_at = 0.0
+        self.verification_started_at = 0.0
+        try:
+            self.grab_verification_policy = GrabVerificationPolicy(
+                str(self.get_parameter("grab_verification_policy").value)
+            )
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in GrabVerificationPolicy)
+            raise ValueError(
+                f"grab_verification_policy must be one of: {allowed}"
+            ) from exc
+        try:
+            self.place_verification_policy = PlaceVerificationPolicy(
+                str(self.get_parameter("place_verification_policy").value)
+            )
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in PlaceVerificationPolicy)
+            raise ValueError(
+                f"place_verification_policy must be one of: {allowed}"
+            ) from exc
         self.placed_layers = 0
         self.robot_status: RobotStatus | None = None
         self.robot_status_time = 0.0
@@ -80,6 +122,9 @@ class ManipulatorClientNode(Node):
             self.target_time = time.monotonic()
 
     def _on_command(self, msg: String) -> None:
+        if msg.data == "CANCEL":
+            self._cancel_current_action()
+            return
         allowed = {"PICK_ORANGE", "PICK_PURPLE", "PLACE_ORANGE", "PLACE_PURPLE"}
         if msg.data not in allowed:
             self.result_pub.publish(String(data=f"MECHANISM_ERROR: unsupported {msg.data}"))
@@ -101,7 +146,34 @@ class ManipulatorClientNode(Node):
         self.started_at = time.monotonic()
         self.target = None
         self.service_future = None
-        self.service_phase = None
+        self.workflow_state = (
+            ManipulatorState.WAITING_TARGET
+            if self.command.startswith("PICK_")
+            else ManipulatorState.WAITING_SERVICE
+        )
+        self.operation = (
+            MechanismOperation.NONE
+            if self.command.startswith("PICK_")
+            else MechanismOperation.LIFT
+        )
+        self.service_wait_started_at = self.started_at
+        self.verification_started_at = 0.0
+
+    def _cancel_current_action(self) -> None:
+        decision = cancellation_decision(self.workflow_state, self.operation)
+        if decision is CancellationDecision.NO_ACTIVE_ACTION:
+            self._publish_stop()
+            self.result_pub.publish(String(data="CANCELLED: no active manipulator action"))
+            return
+        operation = self.operation.value.lower()
+        if decision is CancellationDecision.STOP_WORKFLOW_ACTIVE_OPERATION:
+            result = (
+                "CANCELLED: software workflow stopped; "
+                f"active {operation} service may still complete"
+            )
+        else:
+            result = "CANCELLED: software workflow stopped"
+        self._finish(result)
 
     def _publish_stop(self) -> None:
         self.cmd_pub.publish(Twist())
@@ -112,13 +184,69 @@ class ManipulatorClientNode(Node):
         self.command = None
         self.target = None
         self.service_future = None
-        self.service_phase = None
+        self.workflow_state = ManipulatorState.IDLE
+        self.operation = MechanismOperation.NONE
+        self.service_wait_started_at = 0.0
+        self.verification_started_at = 0.0
 
-    def _start_release(self) -> None:
+    def _verify_grab(self, now: float) -> None:
+        status = self.robot_status
+        decision = grab_verification_decision(
+            policy=self.grab_verification_policy,
+            cube_present=bool(status and status.cube_present),
+            gripper_closed=bool(status and status.gripper_closed),
+            evidence_updated_after_action=(
+                self.robot_status_time >= self.verification_started_at
+            ),
+            elapsed_s=now - self.verification_started_at,
+            timeout_s=float(self.get_parameter("grab_verification_timeout_s").value),
+        )
+        if decision is VerificationDecision.PASS:
+            self._finish("SUCCESS")
+        elif decision is VerificationDecision.TIMEOUT:
+            self._finish(
+                "MECHANISM_ERROR: grab verification timed out "
+                f"(policy={self.grab_verification_policy.value})"
+            )
+
+    def _verify_place(self, now: float) -> None:
+        status = self.robot_status
+        decision = place_verification_decision(
+            policy=self.place_verification_policy,
+            cube_present=bool(status and status.cube_present),
+            gripper_closed=bool(status and status.gripper_closed),
+            evidence_updated_after_action=(
+                self.robot_status_time >= self.verification_started_at
+            ),
+            elapsed_s=now - self.verification_started_at,
+            timeout_s=float(self.get_parameter("place_verification_timeout_s").value),
+        )
+        if decision is VerificationDecision.PASS:
+            self.placed_layers += 1
+            self._finish("SUCCESS")
+        elif decision is VerificationDecision.TIMEOUT:
+            self._finish(
+                "MECHANISM_ERROR: place verification timed out "
+                f"(policy={self.place_verification_policy.value})"
+            )
+
+    def _wait_for_service(self, client, name: str, now: float) -> bool:
+        decision = service_wait_decision(
+            ready=client.service_is_ready(),
+            elapsed_s=now - self.service_wait_started_at,
+            timeout_s=float(self.get_parameter("service_wait_timeout_s").value),
+        )
+        if decision is ServiceWaitDecision.TIMEOUT:
+            self._finish(f"MECHANISM_ERROR: {name} service unavailable")
+            return False
+        return decision is ServiceWaitDecision.READY
+
+    def _start_release(self, now: float) -> None:
         request = ExecuteMechanism.Request()
         request.command, request.timeout_s = "RELEASE", 3.0
-        if self.release.service_is_ready():
-            self.service_phase = "RELEASING"
+        if self._wait_for_service(self.release, "release", now):
+            self.workflow_state = ManipulatorState.EXECUTING
+            self.operation = MechanismOperation.RELEASE
             self.service_future = self.release.call_async(request)
 
     def _tick(self) -> None:
@@ -139,45 +267,109 @@ class ManipulatorClientNode(Node):
             return
         if self.service_future is not None:
             if self.service_future.done():
-                response = self.service_future.result()
-                if not response or not response.success:
-                    self._finish("MECHANISM_ERROR: service failed")
-                elif self.service_phase == "LIFTING":
+                try:
+                    response = self.service_future.result()
+                except Exception as exc:  # ROS futures surface transport/server failures here.
+                    self._finish(format_service_exception(self.operation, exc))
+                    return
+                failure = (
+                    "MECHANISM_ERROR: service returned no response"
+                    if response is None
+                    else format_mechanism_failure(
+                        operation=self.operation,
+                        success=response.success,
+                        error_code=response.error_code,
+                        detail=response.detail,
+                    )
+                )
+                if failure is not None:
+                    self._finish(failure)
+                elif self.operation is MechanismOperation.GRAB:
                     self.service_future = None
-                    self._start_release()
-                elif self.service_phase == "RELEASING":
-                    self.placed_layers += 1
-                    self._finish("SUCCESS")
+                    self.workflow_state = ManipulatorState.VERIFYING
+                    self.verification_started_at = now
+                    self._verify_grab(now)
+                elif self.operation is MechanismOperation.LIFT:
+                    self.service_future = None
+                    self.workflow_state = ManipulatorState.WAITING_SERVICE
+                    self.operation = MechanismOperation.RELEASE
+                    self.service_wait_started_at = now
+                    self._start_release(now)
+                elif self.operation is MechanismOperation.RELEASE:
+                    self.service_future = None
+                    self.workflow_state = ManipulatorState.VERIFYING
+                    self.verification_started_at = now
+                    self._verify_place(now)
                 else:
                     self._finish("SUCCESS")
             return
+        if (self.workflow_state is ManipulatorState.VERIFYING
+                and self.operation is MechanismOperation.GRAB):
+            self._verify_grab(now)
+            return
+        if (self.workflow_state is ManipulatorState.VERIFYING
+                and self.operation is MechanismOperation.RELEASE):
+            self._verify_place(now)
+            return
         if self.command.startswith("PLACE_"):
+            if (self.workflow_state is ManipulatorState.WAITING_SERVICE
+                    and self.operation is MechanismOperation.RELEASE):
+                self._start_release(now)
+                return
             heights = list(self.get_parameter("place_heights_m").value)
-            height = heights[min(self.placed_layers, len(heights) - 1)]
+            try:
+                height = select_place_height(self.placed_layers, heights)
+            except ValueError as exc:
+                self._finish(f"MECHANISM_ERROR: {exc}")
+                return
             request = SetLiftHeight.Request()
-            request.height_m, request.timeout_s = float(height), 3.0
-            if self.lift.service_is_ready():
-                self.service_phase = "LIFTING"
+            request.height_m, request.timeout_s = height, 3.0
+            if self.operation is not MechanismOperation.LIFT:
+                self.operation = MechanismOperation.LIFT
+                self.workflow_state = ManipulatorState.WAITING_SERVICE
+                self.service_wait_started_at = now
+            if self._wait_for_service(self.lift, "lift", now):
+                self.workflow_state = ManipulatorState.EXECUTING
+                self.operation = MechanismOperation.LIFT
                 self.service_future = self.lift.call_async(request)
             return
         if self.target is None or now - self.target_time > float(self.get_parameter("target_stale_s").value):
+            self.workflow_state = ManipulatorState.WAITING_TARGET
+            self.operation = MechanismOperation.NONE
             self._publish_stop()
             return
-        distance_error = self.target.distance_m - float(self.get_parameter("target_distance_m").value)
-        lateral_error = self.target.lateral_m
-        if (abs(distance_error) <= float(self.get_parameter("distance_tolerance_m").value)
-                and abs(lateral_error) <= float(self.get_parameter("lateral_tolerance_m").value)):
+        self.workflow_state = ManipulatorState.ALIGNING
+        alignment = calculate_alignment_command(
+            distance_m=self.target.distance_m,
+            lateral_m=self.target.lateral_m,
+            target_distance_m=float(self.get_parameter("target_distance_m").value),
+            distance_tolerance_m=float(self.get_parameter("distance_tolerance_m").value),
+            lateral_tolerance_m=float(self.get_parameter("lateral_tolerance_m").value),
+            kp_distance=float(self.get_parameter("kp_distance").value),
+            kp_lateral=float(self.get_parameter("kp_lateral").value),
+            max_speed=float(self.get_parameter("max_speed").value),
+        )
+        if alignment.ready_to_grab:
             self._publish_stop()
             request = ExecuteMechanism.Request()
             request.command, request.timeout_s = "GRAB", 3.0
-            if self.grab.service_is_ready():
-                self.service_phase = "GRABBING"
+            if self.operation is not MechanismOperation.GRAB:
+                self.workflow_state = ManipulatorState.WAITING_SERVICE
+                self.operation = MechanismOperation.GRAB
+                self.service_wait_started_at = now
+            if self._wait_for_service(self.grab, "grab", now):
+                self.workflow_state = ManipulatorState.EXECUTING
+                self.operation = MechanismOperation.GRAB
                 self.service_future = self.grab.call_async(request)
             return
-        limit = float(self.get_parameter("max_speed").value)
+        if (self.workflow_state is ManipulatorState.WAITING_SERVICE
+                and self.operation is MechanismOperation.GRAB):
+            self.workflow_state = ManipulatorState.ALIGNING
+            self.operation = MechanismOperation.NONE
+            self.service_wait_started_at = 0.0
         msg = Twist()
-        msg.linear.x = max(-limit, min(limit, float(self.get_parameter("kp_distance").value) * distance_error))
-        msg.linear.y = max(-limit, min(limit, -float(self.get_parameter("kp_lateral").value) * lateral_error))
+        msg.linear.x = alignment.linear_x
+        msg.linear.y = alignment.linear_y
         self.cmd_pub.publish(msg)
 
 
@@ -186,6 +378,9 @@ def main(args=None) -> None:
     node = ManipulatorClientNode()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
