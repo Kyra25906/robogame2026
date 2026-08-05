@@ -47,7 +47,14 @@ ros2 launch robogame_bringup mock_demo.launch.py
 
 当前版本是冲刺期的简化适配层，不是真正的传感器融合：它复制 `/wheel_odom` 的位置和姿态，把 frame 改成 `map`，并用 IMU 的 z 轴角速度替换输出速度中的角速度。它没有用 IMU 修正累计朝向，也没有处理漂移。
 
-参数 `imu_stale_s` 已声明，但当前代码尚未使用时间戳判断 IMU 是否过期。这是接真机前必须补齐的安全检查。
+参数 `imu_stale_s` 已在 `robot.yaml` 中配置（默认 0.2 秒）。当 IMU 数据年龄超过该阈值时，自动回退到轮式里程计角速度，并打印一次警告日志；IMU 恢复后自动重新采用并打印恢复信息。同时检查位姿数据是否为有限数值（NaN/inf 被拒绝），全零四元数也被拒绝，异常时不发布 `/pose` 和 TF。
+
+运行定位测试：
+
+```bash
+cd ~/robogame_git
+python3 -m unittest discover -s tests -v
+```
 
 ## 6. 接硬件后必须完成
 
