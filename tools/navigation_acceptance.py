@@ -11,6 +11,7 @@
   cd ~/robogame_git
   python3 tools/navigation_acceptance.py
   python3 tools/navigation_acceptance.py --rounds 10 --output navigation_results.csv
+  python3 tools/navigation_acceptance.py --result-topic /motion/result   # 指定结果话题
 """
 
 import argparse
@@ -20,12 +21,8 @@ import sys
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Pose2D
-
-# /motion/result 消息类型：按 robogame_interfaces 实际定义调整。
-# 若是自定义消息（带 result 字段），替换导入并在 parse_result 里取对应字段。
-from std_msgs.msg import String as ResultMsg
+from nav_msgs.msg import Odometry
 
 DEFAULT_TARGETS = [
     (1.0, 0.0, 0.0),        # 正向运动
@@ -37,7 +34,6 @@ DEFAULT_TARGETS = [
 
 DEFAULT_ROUNDS = 10
 GOAL_TIMEOUT_S = 30.0           # 单个目标等待结果的最长时间
-SETTLE_DELAY_S = 0.5           # 发目标前短暂等待
 PASS_POS_TOL = 0.05            # 5 cm
 PASS_YAW_TOL = math.radians(5.0)   # 5°
 
@@ -56,11 +52,17 @@ def yaw_error(target_yaw: float, actual_yaw: float) -> float:
     return abs(normalize_angle(target_yaw - actual_yaw))
 
 
-def parse_result(msg) -> str:
-    """从 /motion/result 消息里提取结果字符串。
+def quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
+    """四元数转偏航角（rad）。"""
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
 
-    默认按 std_msgs/String 处理；若 robogame_interfaces 改用自定义消息，
-    在这里改成 return str(msg.result) 之类即可。
+
+def parse_result(msg) -> str:
+    """从结果消息里提取结果字符串。
+
+    兼容 std_msgs/String（取 .data）和自定义消息（取 .result/.code）。
     """
     if isinstance(msg, str):
         return msg
@@ -71,36 +73,73 @@ def parse_result(msg) -> str:
 
 
 class NavigationAcceptance(Node):
-    def __init__(self, targets, rounds, output, timeout):
+    def __init__(self, targets, rounds, output, timeout, result_topic):
         super().__init__("navigation_acceptance")
         self.targets = targets
         self.rounds = rounds
         self.output = output
         self.timeout = timeout
+        self.result_topic = result_topic
 
         self.goal_pub = self.create_publisher(Pose2D, "/motion/goal", 10)
 
-        # /pose 若是 nav_msgs/Odometry，把消息类型换成 Odometry 并在 _on_pose 提取
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
-        self.pose_sub = self.create_subscription(Pose2D, "/pose", self._on_pose, qos)
-        self.result_sub = self.create_subscription(
-            ResultMsg, "/motion/result", self._on_result, 10
-        )
+        # /pose 用最简单的 QoS（深度 10），兼容 RELIABLE+VOLATILE 发布者
+        self.pose_sub = self.create_subscription(Odometry, "/pose", self._on_pose, 10)
 
-        self.latest_pose = None
+        self.latest_x = None
+        self.latest_y = None
+        self.latest_yaw = None
         self.current_result = None
+        self._pose_received_count = 0
 
-    def _on_pose(self, msg):
-        self.latest_pose = msg
+        self.result_sub = None
+
+    def _on_pose(self, msg: Odometry):
+        self.latest_x = float(msg.pose.pose.position.x)
+        self.latest_y = float(msg.pose.pose.position.y)
+        q = msg.pose.pose.orientation
+        self.latest_yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
+        self._pose_received_count += 1
+        if self._pose_received_count == 1:
+            self.get_logger().info(
+                f"收到首帧 /pose: x={self.latest_x:.4f} y={self.latest_y:.4f} yaw={self.latest_yaw:.4f}"
+            )
 
     def _on_result(self, msg):
         self.current_result = parse_result(msg)
 
+    def _try_subscribe_result(self, topic: str):
+        """尝试订阅结果话题，动态兼容 String 和自定义消息类型。"""
+        try:
+            from std_msgs.msg import String
+            self.result_sub = self.create_subscription(String, topic, self._on_result, 10)
+            self.get_logger().info(f"结果话题 {topic} 按 std_msgs/String 订阅")
+            return True
+        except Exception:
+            pass
+
+        try:
+            from robogame_interfaces.msg import MotionResult
+            self.result_sub = self.create_subscription(MotionResult, topic, self._on_result, 10)
+            self.get_logger().info(f"结果话题 {topic} 按 robogame_interfaces/MotionResult 订阅")
+            return True
+        except Exception:
+            pass
+
+        self.get_logger().warn(
+            f"无法订阅 {topic}，请用 --result-topic 指定正确话题名，"
+            f"或确认消息类型后修改本脚本。"
+        )
+        return False
+
     def run(self):
+        if not self.result_topic:
+            self.get_logger().warn(
+                "未指定结果话题。将只记录位姿和误差，result 列为 NO_RESULT_TOPIC。"
+            )
+        else:
+            self._try_subscribe_result(self.result_topic)
+
         rows = []
         run_id = 0
         total = self.rounds * len(self.targets)
@@ -126,20 +165,20 @@ class NavigationAcceptance(Node):
 
         # 等一个初始 pose（避免用上轮残留位姿算误差）
         wait_start = self.get_clock().now()
-        while self.latest_pose is None and rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.05)
-            if (self.get_clock().now() - wait_start).nanoseconds / 1e9 > 2.0:
-                self.get_logger().warn("未收到 /pose，用 NaN 占位")
+        while self.latest_x is None and rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if (self.get_clock().now() - wait_start).nanoseconds / 1e9 > 3.0:
+                self.get_logger().warn("3秒内未收到 /pose，用 NaN 占位")
                 break
 
         start = self.get_clock().now()
         goal = Pose2D(x=tx, y=ty, theta=tyaw)
         self.goal_pub.publish(goal)
 
-        # 等待 /motion/result 或超时
+        # 等待结果或超时
         timed_out = False
         while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.05)
+            rclpy.spin_once(self, timeout_sec=0.1)
             elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
             if self.current_result is not None:
                 break
@@ -150,10 +189,14 @@ class NavigationAcceptance(Node):
         duration = (self.get_clock().now() - start).nanoseconds / 1e9
 
         fx = fy = fyaw = float("nan")
-        if self.latest_pose is not None:
-            fx = float(self.latest_pose.x)
-            fy = float(self.latest_pose.y)
-            fyaw = float(self.latest_pose.theta)
+        if self.latest_x is not None:
+            fx = self.latest_x
+            fy = self.latest_y
+            fyaw = self.latest_yaw
+        else:
+            self.get_logger().warn(
+                f"本轮未收到任何 /pose 消息（累计收到 {self._pose_received_count} 帧）"
+            )
 
         pos_err = math.hypot(tx - fx, ty - fy) if not math.isnan(fx) else float("inf")
         yaw_err = yaw_error(tyaw, fyaw) if not math.isnan(fyaw) else float("inf")
@@ -161,7 +204,7 @@ class NavigationAcceptance(Node):
         if timed_out and self.current_result is None:
             result_str = "TEST_TIMEOUT"
         else:
-            result_str = self.current_result or "UNKNOWN"
+            result_str = self.current_result or "NO_RESULT_TOPIC"
 
         passed = (
             result_str == "SUCCESS"
@@ -213,10 +256,14 @@ def main():
     parser.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS, help="每组目标测试轮数")
     parser.add_argument("--output", default="navigation_results.csv", help="CSV 输出路径")
     parser.add_argument("--timeout", type=float, default=GOAL_TIMEOUT_S, help="单个目标超时秒数")
+    parser.add_argument("--result-topic", default="/motion/result",
+                        help="结果话题名，默认 /motion/result；找不到时先用 ros2 topic list 查")
     args = parser.parse_args()
 
     rclpy.init()
-    node = NavigationAcceptance(DEFAULT_TARGETS, args.rounds, args.output, args.timeout)
+    node = NavigationAcceptance(
+        DEFAULT_TARGETS, args.rounds, args.output, args.timeout, args.result_topic
+    )
     try:
         node.run()
     except KeyboardInterrupt:
