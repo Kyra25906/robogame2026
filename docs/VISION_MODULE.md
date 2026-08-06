@@ -158,6 +158,105 @@ Prepare a validation set that was not used to tune thresholds.
 
 Do not connect the detector to chassis motion until this gate passes.
 
+## Batch acceptance from annotated time segments
+
+Use the batch tool when one or more recorded timelines contain several known
+target-present or target-absent intervals. The manifest schema is version 1;
+the referenced detector JSONL files must use timeline schema version 2.
+
+Create or edit those intervals with an empty local annotation workspace:
+
+```bash
+ros2 run cube_perception vision_segment_annotator \
+  --workspace results/front_camera_validation \
+  --dataset-name "Front camera validation"
+```
+
+The command starts a server bound only to `127.0.0.1` and opens the default
+browser. Select and submit the original video plus its matching schema v2 JSONL
+in the menu. Files are copied only into the local workspace's `uploads` folder;
+nothing is sent to the internet.
+
+You may still preload known paths from the command line:
+
+```bash
+ros2 run cube_perception vision_segment_annotator \
+  --video results/validation.mp4 \
+  --jsonl results/validation.jsonl \
+  --manifest results/vision_acceptance.json \
+  --dataset-name "Front camera validation"
+```
+
+Prefer the original H.264 camera MP4 for browser playback. OpenCV currently
+writes annotated MP4 with the `mp4v` codec, which common browsers may reject;
+the original video and regenerated JSONL still share the same media timeline.
+
+In the menu:
+
+1. Choose the video and matching JSONL, then submit them to the local workspace.
+2. Play, pause, or drag the video to the first unambiguous frame.
+3. Click **Set current position as start**, or press `[`.
+4. Move to the last unambiguous frame and click **Set current position as end**,
+   or press `]`.
+5. Enter a segment name and select `orange`, `purple`, or `absent`.
+6. Add the segment, review the table, and save the manifest.
+7. Press `Ctrl+C` in the terminal after annotation is finished.
+
+Opening the same manifest and JSONL again reloads that dataset's existing
+segments. Saving updates the matching dataset while preserving other datasets
+and the existing default thresholds. Video and JSONL paths are stored relative
+to the manifest so the whole results folder can be moved or shared.
+
+Example manifest:
+
+```json
+{
+  "schema_version": 1,
+  "name": "Camera acceptance run",
+  "defaults": {
+    "min_detection_ratio": 0.9,
+    "max_unexpected_detection_ratio": 0.0
+  },
+  "datasets": [
+    {
+      "name": "Front-camera video",
+      "jsonl": "detections.jsonl",
+      "segments": [
+        {
+          "name": "Orange cube visible",
+          "start_s": 2.5,
+          "end_s": 7.0,
+          "expected": "orange"
+        },
+        {
+          "name": "Empty build area",
+          "start_s": 8.0,
+          "end_s": 10.0,
+          "expected": "absent"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Paths in `jsonl` are resolved relative to the manifest. A segment may override
+either default threshold. `orange` and `purple` segments check both the expected
+color ratio and the other color's unexpected ratio. An `absent` segment treats
+every confirmed detection as unexpected.
+
+Generate the report after building and sourcing the ROS2 workspace:
+
+```bash
+ros2 run cube_perception vision_batch_report \
+  --manifest results/vision_acceptance.json \
+  --output results/vision_batch_report.html
+```
+
+The command returns `0` when all segments pass and `2` when any segment fails.
+It saves the HTML report in both cases so a remote teammate can inspect the
+evidence. Do not include transition frames whose expected state is ambiguous.
+
 ## Post-placement observability and camera checklist
 
 The current stability decision assumes that, after the local clearance retreat,

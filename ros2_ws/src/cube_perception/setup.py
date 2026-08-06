@@ -15,4 +15,6 @@ entry_points={"console_scripts":[
     "cube_detector = cube_perception.standalone:main",
     "hsv_tuner = cube_perception.hsv_tuner:main",
     "vision_report = cube_perception.report:main",
+    "vision_batch_report = cube_perception.batch_report:main",
+    "vision_segment_annotator = cube_perception.segment_annotator:main",
 ]})
