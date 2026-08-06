@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import re
+import sys
 import threading
 import webbrowser
 from http import HTTPStatus
@@ -19,7 +20,6 @@ from .batch_report import (
     load_manifest,
 )
 from .report import load_records, timeline_metadata
-from .standalone import main as run_detector
 
 
 DEFAULTS = {
@@ -379,6 +379,16 @@ def make_handler(
             return
         if detector_config is None or not detector_config.is_file():
             raise ValueError("detector configuration is missing; use --config")
+        try:
+            from .standalone import main as run_detector
+        except ModuleNotFoundError as exc:
+            if exc.name == "cv2":
+                raise ValueError(
+                    "OpenCV (cv2) is unavailable in the current Python: "
+                    f"{sys.executable}. Install it with: "
+                    f'\"{sys.executable}\" -m pip install opencv-python'
+                ) from exc
+            raise
         result = run_detector([
             "--source", str(source),
             "--config", str(detector_config),

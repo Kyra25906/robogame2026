@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -22,6 +23,16 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
         config = resolve_detector_config(None)
         self.assertTrue(config.is_file())
         self.assertEqual(config.name, "vision_default.json")
+
+    def test_page_render_does_not_import_opencv_detector(self):
+        state = {
+            "manifest_name": "test", "dataset_name": "video",
+            "jsonl": "", "video": "", "segments": [],
+            "video_ready": False, "jsonl_ready": False,
+        }
+        with patch.dict("sys.modules", {"cv2": None}):
+            page = render_editor_page(state)
+        self.assertIn("处理新视频并生成检测时间线", page)
 
     def test_validate_segments_normalizes_values(self):
         result = validate_segments([
