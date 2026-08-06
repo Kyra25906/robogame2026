@@ -234,6 +234,10 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
+            def fake_preview(source, output):
+                self.assertTrue(source.is_file())
+                output.write_bytes(b"h264 preview")
+
             state = load_editor_state(
                 manifest_path=manifest, video_path=None, jsonl_path=None,
                 dataset_name="new video",
@@ -241,6 +245,7 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
             handler = make_handler(
                 manifest_path=manifest, video_path=None, jsonl_path=None,
                 initial_state=state, process_video_callback=fake_detector,
+                create_preview_callback=fake_preview,
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -256,6 +261,7 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                 with urllib.request.urlopen(process) as response:
                     processed = json.loads(response.read())
                 self.assertEqual(processed["record_count"], 2)
+                self.assertTrue(Path(processed["preview"]).is_file())
 
                 save_body = json.dumps({
                     "manifest_name": "web closed loop", "dataset_name": "new video",

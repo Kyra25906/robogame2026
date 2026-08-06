@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import re
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -306,13 +307,14 @@ def render_editor_page(state: dict) -> str:
     }};
     byId('processVideo').onclick = async () => {{
       if(!videoReady) return show('请先选择并提交新视频。',true);
+      const button=byId('processVideo'); button.disabled=true;
       try {{
-        show('正在逐帧处理视频，请保持此页面打开……');
+        show('正在检测并生成 H.264 网页预览，请保持此页面打开且不要重复点击……');
         const response=await fetch('/process',{{method:'POST'}}); const result=await response.json();
         if(!response.ok) throw new Error(result.error||'视频处理失败');
-        jsonlReady=true; showFiles();
-        show(`检测完成：${{result.record_count}} 帧，时间线已自动关联。`);
-      }} catch(error) {{ show(error.message,true); }}
+        jsonlReady=true; video.src=`/video?t=${{Date.now()}}`; video.load(); showFiles();
+        show(`检测完成：${{result.record_count}} 帧；H.264 预览已载入，时间线已自动关联。`);
+      }} catch(error) {{ show(error.message,true); }} finally {{ button.disabled=false; }}
     }};
     byId('save').onclick = async () => {{
       try {{
@@ -367,9 +369,10 @@ def make_handler(
     initial_state: dict,
     detector_config: Path | None = None,
     process_video_callback=None,
+    create_preview_callback=None,
 ):
     page = render_editor_page(initial_state).encode("utf-8")
-    files = {"video": video_path, "jsonl": jsonl_path}
+    files = {"source_video": video_path, "video": video_path, "jsonl": jsonl_path}
     upload_folder = manifest_path.parent / "uploads"
     report_path = manifest_path.parent / "vision_batch_report.html"
 
@@ -397,6 +400,30 @@ def make_handler(
         ])
         if result != 0:
             raise ValueError(f"video detector exited with code {result}")
+
+    def create_browser_preview(source: Path, output: Path) -> None:
+        if create_preview_callback is not None:
+            create_preview_callback(source, output)
+            return
+        try:
+            import imageio_ffmpeg
+        except ImportError as exc:
+            raise ValueError(
+                "HEVC browser preview requires imageio-ffmpeg. Install it with: "
+                f'\"{sys.executable}\" -m pip install imageio-ffmpeg==0.6.0'
+            ) from exc
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
+            "-i", str(source), "-map", "0:v:0", "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
+        ]
+        completed = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        if completed.returncode != 0 or not output.is_file():
+            detail = completed.stderr.strip() or f"exit code {completed.returncode}"
+            raise ValueError(f"cannot create H.264 browser preview: {detail}")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -462,7 +489,10 @@ def make_handler(
                     chunk = handle.read(min(1024 * 1024, remaining))
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                        break
                     remaining -= len(chunk)
 
         def do_POST(self):
@@ -510,7 +540,7 @@ def make_handler(
 
         def _process_video(self) -> None:
             try:
-                source = files["video"]
+                source = files["source_video"]
                 if source is None:
                     raise ValueError("select and submit a video before processing")
                 upload_folder.mkdir(parents=True, exist_ok=True)
@@ -520,16 +550,24 @@ def make_handler(
                 process_video(source, output)
                 records = load_records(output)
                 timeline_metadata(records)
+                preview = unique_upload_path(
+                    upload_folder, f"{source.stem}_browser_preview.mp4"
+                )
+                create_browser_preview(source, preview)
                 files["jsonl"] = output
+                files["video"] = preview
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 if 'output' in locals() and output.is_file():
                     output.unlink()
+                if 'preview' in locals() and preview.is_file():
+                    preview.unlink()
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             self._json(HTTPStatus.OK, {
                 "jsonl": str(output),
                 "record_count": len(records),
                 "duration_s": float(records[-1]["timestamp_s"]),
+                "preview": str(preview),
             })
 
         def _generate_report(self) -> None:
@@ -581,6 +619,8 @@ def make_handler(
                     records = load_records(target)
                     timeline_metadata(records)
                 files[kind] = target
+                if kind == "video":
+                    files["source_video"] = target
             except (OSError, TypeError, ValueError) as exc:
                 if target is not None and target.is_file():
                     target.unlink()

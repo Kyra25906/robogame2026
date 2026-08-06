@@ -329,5 +329,9 @@ to VMware, override the threshold only in the mock launch configuration.
 4. 标注 `orange`、`purple` 或 `absent` 时间段并保存 manifest；
 5. 点击“生成 HTML 验收报告”，再点击页面出现的报告链接。
 
+手机录制的 HEVC/H.265 视频会保留为检测输入，并自动生成 H.264/YUV420p 网页预览。
+因此浏览器不需要安装 HEVC 扩展。该功能需要在运行标注菜单的 Python 环境安装
+`imageio-ffmpeg==0.6.0`；处理按钮执行期间会被禁用，以防止重复任务。
+
 视频处理使用 `config/vision_default.json`。如需使用另一套现场参数，可在启动菜单时增加
 `--config <配置文件路径>`。视频、JSONL、manifest 和 HTML 都保存在本地工作目录，不会上传互联网。
