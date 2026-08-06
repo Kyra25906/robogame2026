@@ -11,14 +11,46 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from .batch_report import EXPECTED_VALUES, MANIFEST_SCHEMA_VERSION, load_manifest
+from .batch_report import (
+    EXPECTED_VALUES,
+    MANIFEST_SCHEMA_VERSION,
+    evaluate_manifest,
+    format_html,
+    load_manifest,
+)
 from .report import load_records, timeline_metadata
+from .standalone import main as run_detector
 
 
 DEFAULTS = {
     "min_detection_ratio": 0.9,
     "max_unexpected_detection_ratio": 0.0,
 }
+
+
+def resolve_detector_config(explicit: Path | None) -> Path:
+    if explicit is not None:
+        candidate = explicit.resolve()
+        if not candidate.is_file():
+            raise ValueError(f"detector configuration does not exist: {candidate}")
+        return candidate
+    source_config = Path(__file__).resolve().parent.parent / "config" / "vision_default.json"
+    if source_config.is_file():
+        return source_config
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        installed_config = (
+            Path(get_package_share_directory("cube_perception"))
+            / "config" / "vision_default.json"
+        )
+    except (ImportError, LookupError):
+        installed_config = Path()
+    if installed_config.is_file():
+        return installed_config
+    raise ValueError(
+        "cannot find vision_default.json; pass its path with --config"
+    )
 
 
 def relative_path(target: Path, base: Path) -> str:
@@ -204,6 +236,7 @@ def render_editor_page(state: dict) -> str:
     <label>选择视频<input id="videoFile" type="file" accept="video/*,.mp4,.mov,.webm,.mkv,.avi"></label>
     <label>选择对应 JSONL<input id="jsonlFile" type="file" accept=".jsonl,application/x-ndjson"></label>
     <div><button id="uploadFiles">提交所选文件到本地工作目录</button></div>
+    <div><button id="processVideo" class="secondary">处理新视频并生成检测时间线</button></div>
     <div id="fileState" class="hint"></div>
   </section>
   <section class="panel"><video id="video" src="{video_source}" controls preload="metadata"></video></section>
@@ -220,6 +253,8 @@ def render_editor_page(state: dict) -> str:
     <button id="setEnd" class="secondary">把当前播放位置设为结束 ]</button>
     <button id="add">添加时间段</button>
     <button id="save">保存 manifest</button>
+    <button id="report">生成 HTML 验收报告</button>
+    <div id="reportLink"></div>
   </section>
   <section class="panel">
     <h2>已标注时间段</h2>
@@ -269,10 +304,29 @@ def render_editor_page(state: dict) -> str:
         showFiles(); show('文件已经提交到本地工作目录，可以开始标注。');
       }} catch(error) {{ show(error.message,true); }}
     }};
+    byId('processVideo').onclick = async () => {{
+      if(!videoReady) return show('请先选择并提交新视频。',true);
+      try {{
+        show('正在逐帧处理视频，请保持此页面打开……');
+        const response=await fetch('/process',{{method:'POST'}}); const result=await response.json();
+        if(!response.ok) throw new Error(result.error||'视频处理失败');
+        jsonlReady=true; showFiles();
+        show(`检测完成：${{result.record_count}} 帧，时间线已自动关联。`);
+      }} catch(error) {{ show(error.message,true); }}
+    }};
     byId('save').onclick = async () => {{
       try {{
         const response=await fetch('/save',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{manifest_name:byId('manifestName').value,dataset_name:byId('datasetName').value,segments}})}});
         const result=await response.json(); if(!response.ok) throw new Error(result.error||'保存失败'); show(`已保存 ${{result.segment_count}} 个时间段：${{result.manifest}}`);
+      }} catch(error) {{ show(error.message,true); }}
+    }};
+    byId('report').onclick = async () => {{
+      try {{
+        const response=await fetch('/report',{{method:'POST'}}); const result=await response.json();
+        if(!response.ok) throw new Error(result.error||'报告生成失败');
+        const link=document.createElement('a'); link.href=result.url; link.target='_blank';
+        link.textContent=`打开 HTML 报告（${{result.passed_segments}}/${{result.segment_count}} 通过）`;
+        byId('reportLink').replaceChildren(link); show(`HTML 报告已生成：${{result.report}}`);
       }} catch(error) {{ show(error.message,true); }}
     }};
     render(); showFiles();
@@ -311,10 +365,28 @@ def make_handler(
     video_path: Path | None,
     jsonl_path: Path | None,
     initial_state: dict,
+    detector_config: Path | None = None,
+    process_video_callback=None,
 ):
     page = render_editor_page(initial_state).encode("utf-8")
     files = {"video": video_path, "jsonl": jsonl_path}
     upload_folder = manifest_path.parent / "uploads"
+    report_path = manifest_path.parent / "vision_batch_report.html"
+
+    def process_video(source: Path, output: Path) -> None:
+        if process_video_callback is not None:
+            process_video_callback(source, output)
+            return
+        if detector_config is None or not detector_config.is_file():
+            raise ValueError("detector configuration is missing; use --config")
+        result = run_detector([
+            "--source", str(source),
+            "--config", str(detector_config),
+            "--jsonl", str(output),
+            "--headless",
+        ])
+        if result != 0:
+            raise ValueError(f"video detector exited with code {result}")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -339,6 +411,14 @@ def make_handler(
                 return
             if route == "/video":
                 self._serve_video()
+                return
+            if route == "/report.html" and report_path.is_file():
+                body = report_path.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -380,6 +460,12 @@ def make_handler(
             if route in {"/upload/video", "/upload/jsonl"}:
                 self._receive_upload(route.rsplit("/", 1)[-1])
                 return
+            if route == "/process":
+                self._process_video()
+                return
+            if route == "/report":
+                self._generate_report()
+                return
             if route != "/save":
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
@@ -411,6 +497,48 @@ def make_handler(
                 HTTPStatus.OK,
                 {"manifest": str(manifest_path), "segment_count": segment_count},
             )
+
+        def _process_video(self) -> None:
+            try:
+                source = files["video"]
+                if source is None:
+                    raise ValueError("select and submit a video before processing")
+                upload_folder.mkdir(parents=True, exist_ok=True)
+                output = unique_upload_path(
+                    upload_folder, f"{source.stem}_detections.jsonl"
+                )
+                process_video(source, output)
+                records = load_records(output)
+                timeline_metadata(records)
+                files["jsonl"] = output
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                if 'output' in locals() and output.is_file():
+                    output.unlink()
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._json(HTTPStatus.OK, {
+                "jsonl": str(output),
+                "record_count": len(records),
+                "duration_s": float(records[-1]["timestamp_s"]),
+            })
+
+        def _generate_report(self) -> None:
+            try:
+                if not manifest_path.is_file():
+                    raise ValueError("save the manifest before generating a report")
+                manifest = load_manifest(manifest_path)
+                result = evaluate_manifest(manifest_path, manifest)
+                report_path.write_text(format_html(result), encoding="utf-8")
+            except (OSError, TypeError, ValueError) as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._json(HTTPStatus.OK, {
+                "report": str(report_path),
+                "url": "/report.html",
+                "passed": result["passed"],
+                "passed_segments": result["passed_segments"],
+                "segment_count": result["segment_count"],
+            })
 
         def _receive_upload(self, kind: str) -> None:
             target = None
@@ -465,6 +593,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, default=Path("results/vision_annotations"))
     parser.add_argument("--manifest", type=Path, help="default: WORKSPACE/vision_acceptance.json")
     parser.add_argument("--dataset-name", default="Annotated video")
+    parser.add_argument(
+        "--config", type=Path,
+        default=None,
+        help="detector configuration used by the web processing button",
+    )
     parser.add_argument("--port", type=int, default=0, help="local port; 0 chooses a free port")
     parser.add_argument("--no-browser", action="store_true")
     return parser
@@ -488,6 +621,7 @@ def main(argv=None) -> int:
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
     try:
+        detector_config = resolve_detector_config(args.config)
         if jsonl_path is not None:
             timeline_metadata(load_records(jsonl_path))
         state = load_editor_state(
@@ -503,6 +637,7 @@ def main(argv=None) -> int:
         video_path=video,
         jsonl_path=jsonl_path,
         initial_state=state,
+        detector_config=detector_config,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     url = f"http://127.0.0.1:{server.server_port}/"

@@ -319,3 +319,15 @@ robot-bridge defect. Do not loosen the real-hardware stale-status threshold from
 this single sample. During later load and hardware tests, record the maximum and
 percentile intervals between received status messages. If the jitter is unique
 to VMware, override the threshold only in the mock launch configuration.
+### 网页内处理新视频并生成 HTML 报告
+
+新视频不再需要先在 PowerShell 中单独生成检测时间线。启动标注菜单后：
+
+1. 选择并提交原始视频；
+2. 点击“处理新视频并生成检测时间线”；
+3. 等待逐帧检测完成，页面会自动关联生成的 schema v2 JSONL；
+4. 标注 `orange`、`purple` 或 `absent` 时间段并保存 manifest；
+5. 点击“生成 HTML 验收报告”，再点击页面出现的报告链接。
+
+视频处理使用 `config/vision_default.json`。如需使用另一套现场参数，可在启动菜单时增加
+`--config <配置文件路径>`。视频、JSONL、manifest 和 HTML 都保存在本地工作目录，不会上传互联网。

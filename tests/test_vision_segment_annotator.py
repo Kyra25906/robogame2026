@@ -11,12 +11,18 @@ from cube_perception.segment_annotator import (
     make_handler,
     parse_byte_range,
     render_editor_page,
+    resolve_detector_config,
     save_editor_state,
     validate_segments,
 )
 
 
 class VisionSegmentAnnotatorTests(unittest.TestCase):
+    def test_default_detector_config_is_available(self):
+        config = resolve_detector_config(None)
+        self.assertTrue(config.is_file())
+        self.assertEqual(config.name, "vision_default.json")
+
     def test_validate_segments_normalizes_values(self):
         result = validate_segments([
             {"name": " Orange ", "start_s": "1.23456", "end_s": 2, "expected": "orange"}
@@ -195,6 +201,70 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                     saved = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(saved["segment_count"], 1)
                 self.assertTrue(manifest.is_file())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_web_flow_processes_new_video_and_generates_html_report(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = root / "vision_acceptance.json"
+
+            def fake_detector(source, output):
+                self.assertTrue(source.is_file())
+                records = [
+                    {"schema_version": 2, "frame": frame, "timestamp_s": float(frame),
+                     "timestamp_kind": "media", "source_fps": 1.0, "detections": []}
+                    for frame in range(2)
+                ]
+                output.write_text(
+                    "".join(json.dumps(item) + "\n" for item in records),
+                    encoding="utf-8",
+                )
+
+            state = load_editor_state(
+                manifest_path=manifest, video_path=None, jsonl_path=None,
+                dataset_name="new video",
+            )
+            handler = make_handler(
+                manifest_path=manifest, video_path=None, jsonl_path=None,
+                initial_state=state, process_video_callback=fake_detector,
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                upload = urllib.request.Request(
+                    base + "/upload/video", data=b"new video", method="POST",
+                    headers={"X-Filename": "new.mp4"},
+                )
+                urllib.request.urlopen(upload).close()
+                process = urllib.request.Request(base + "/process", data=b"", method="POST")
+                with urllib.request.urlopen(process) as response:
+                    processed = json.loads(response.read())
+                self.assertEqual(processed["record_count"], 2)
+
+                save_body = json.dumps({
+                    "manifest_name": "web closed loop", "dataset_name": "new video",
+                    "segments": [{"name": "empty", "start_s": 0, "end_s": 1,
+                                  "expected": "absent"}],
+                }).encode("utf-8")
+                save = urllib.request.Request(
+                    base + "/save", data=save_body, method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                urllib.request.urlopen(save).close()
+
+                report = urllib.request.Request(base + "/report", data=b"", method="POST")
+                with urllib.request.urlopen(report) as response:
+                    report_result = json.loads(response.read())
+                self.assertTrue(report_result["passed"])
+                with urllib.request.urlopen(base + report_result["url"]) as response:
+                    html = response.read().decode("utf-8")
+                self.assertIn("web closed loop", html)
+                self.assertIn("1 of 1 segments passed", html)
             finally:
                 server.shutdown()
                 server.server_close()
