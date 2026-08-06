@@ -66,7 +66,6 @@ vision_segment_annotator 命令入口
 功能：
 
 - 在本机浏览器播放视频；
-- 可以直接在页面中自主选择并提交原始视频和对应的 schema v2 JSONL，不要求启动命令预先写死文件路径；
 - 设置开始/结束时间；
 - 选择 `orange`、`purple` 或 `absent`；
 - 添加、删除多个时间段；
@@ -128,7 +127,7 @@ e97eb6c7c7133c7b76c2c8a2d0a22c318c08d6b3d05ac76324048400cdfcde9a  results/orange
 
 这些是本地实验产物，不提交 Git。暂停期间不要删除 `results/orange_distance_20260806`。
 
-注意：`annotated.mp4` 由 OpenCV 以 `mp4v` 编码生成，部分浏览器不能直接播放。人工标注时应播放原始 H.264 视频，并为它配套选择上面的新 `detections.jsonl`；标注工具会把上传文件复制到 manifest 旁的 `uploads` 目录。
+注意：`annotated.mp4` 由 OpenCV 以 `mp4v` 编码生成，部分浏览器可能不能直接播放。若浏览器无法播放它，可以在启动命令中改用原始 H.264 视频；新 JSONL 与原始视频使用同一个媒体时间轴。
 
 ## 5. 尚未完成的人工步骤
 
@@ -160,21 +159,20 @@ Set-Location -LiteralPath $projectRoot
 $env:PYTHONPATH = "$PWD\ros2_ws\src\cube_perception;$PWD\ros2_ws\src\robogame_core"
 
 python -m cube_perception.segment_annotator `
+  --video "$env:USERPROFILE\Pictures\Camera Roll\WIN_0803_orange_distance_test.mp4" `
+  --jsonl ".\results\orange_distance_20260806\detections.jsonl" `
   --manifest ".\results\orange_distance_20260806\vision_acceptance.json" `
   --dataset-name "Orange distance validation"
 ```
 
 浏览器操作：
 
-1. 选择原始视频 `%USERPROFILE%\Pictures\Camera Roll\WIN_0803_orange_distance_test.mp4`；
-2. 选择 `results\orange_distance_20260806\detections.jsonl` 并提交；
-3. 拖到明确开始帧，点击开始或按 `[`；
-4. 拖到明确结束帧，点击结束或按 `]`；
-5. 填写名称并选择期望结果；
-6. 添加时间段并点击保存；
-7. 回到终端按 `Ctrl+C`。
-
-也可以在启动命令中用 `--video` 和 `--jsonl` 预加载文件，但 `--video` 应指向原始 H.264 视频，不要指向浏览器可能无法播放的 `annotated.mp4`。
+1. 拖到明确开始帧，点击开始或按 `[`；
+2. 拖到明确结束帧，点击结束或按 `]`；
+3. 填写名称并选择期望结果；
+4. 添加时间段；
+5. 点击保存；
+6. 回到终端按 `Ctrl+C`。
 
 生成报告：
 
@@ -235,4 +233,4 @@ Word 临时文件
 
 ## 9. 暂停动作
 
-暂停前已停止本机后台运行的 `cube_perception.segment_annotator` 及其旧 PowerShell 启动窗口，避免继续占用端口。下次恢复时需重新执行第 6 节的启动命令。
+如果标注菜单的 PowerShell 窗口仍然打开，请在该窗口按 `Ctrl+C`，确认出现 `annotation menu stopped` 后关闭窗口。不要结束其他正在运行的 Python 项目。下次恢复时重新执行第 6 节启动命令。
