@@ -333,5 +333,20 @@ to VMware, override the threshold only in the mock launch configuration.
 因此浏览器不需要安装 HEVC 扩展。该功能需要在运行标注菜单的 Python 环境安装
 `imageio-ffmpeg==0.6.0`；处理按钮执行期间会被禁用，以防止重复任务。
 
+处理区会显示当前阶段、已处理帧数和进度百分比。点击“取消当前处理”后，检测循环或
+FFmpeg 转码会尽快停止，未完成的 JSONL/预览会被删除，已经保存的 manifest 不受影响。
+
+标注与报告默认保存在 `--workspace` 指定的目录：
+
+```text
+WORKSPACE/vision_acceptance.json   # 人工时间段、期望结果和数据文件路径
+WORKSPACE/vision_batch_report.html # HTML 验收报告
+WORKSPACE/uploads/                 # 原视频、检测时间线和浏览器预览
+```
+
+以后使用同一个 `--workspace` 再次启动，菜单会从 manifest 的最后一个数据集自动恢复
+视频、JSONL 和已保存时间段。也可以使用 `--manifest <vision_acceptance.json>` 明确打开。
+未点击“保存 manifest”的临时页面修改无法在关闭后恢复。
+
 视频处理使用 `config/vision_default.json`。如需使用另一套现场参数，可在启动菜单时增加
 `--config <配置文件路径>`。视频、JSONL、manifest 和 HTML 都保存在本地工作目录，不会上传互联网。

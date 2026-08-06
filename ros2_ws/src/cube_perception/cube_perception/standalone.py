@@ -160,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, progress_callback=None, cancel_event=None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
     detector = CubeDetector(config)
@@ -191,12 +191,17 @@ def main(argv=None) -> int:
     json_handle = None
     writer = None
     frame_index = 0
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    cancelled = False
     started = time.monotonic()
     try:
         if args.jsonl:
             args.jsonl.parent.mkdir(parents=True, exist_ok=True)
             json_handle = args.jsonl.open("w", encoding="utf-8")
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
             ok, frame = capture.read()
             if not ok:
                 break
@@ -240,6 +245,8 @@ def main(argv=None) -> int:
                 if key in (27, ord("q")):
                     break
             frame_index += 1
+            if progress_callback is not None:
+                progress_callback(frame_index, total_frames)
             if args.max_frames and frame_index >= args.max_frames:
                 break
     finally:
@@ -251,7 +258,7 @@ def main(argv=None) -> int:
         cv2.destroyAllWindows()
     elapsed = max(1e-6, time.monotonic() - started)
     print(f"processed {frame_index} frames, average {frame_index / elapsed:.1f} FPS")
-    return 0
+    return 130 if cancelled else 0
 
 
 if __name__ == "__main__":

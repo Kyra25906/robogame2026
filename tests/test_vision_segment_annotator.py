@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from cube_perception.segment_annotator import (
     parse_byte_range,
     render_editor_page,
     resolve_detector_config,
+    restore_manifest_files,
     save_editor_state,
     validate_segments,
 )
@@ -133,6 +135,24 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
             self.assertEqual(state["dataset_name"], "camera")
             self.assertEqual(state["segments"], [segment])
 
+    def test_restore_manifest_files_reopens_saved_dataset(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            video = root / "uploads" / "preview.mp4"
+            jsonl_path = root / "uploads" / "detections.jsonl"
+            video.parent.mkdir()
+            video.write_bytes(b"video")
+            jsonl_path.write_text("{}\n", encoding="utf-8")
+            manifest = root / "vision_acceptance.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 1, "name": "saved", "defaults": {},
+                "datasets": [{"name": "video", "video": "uploads/preview.mp4",
+                              "jsonl": "uploads/detections.jsonl", "segments": []}],
+            }), encoding="utf-8")
+            restored_video, restored_jsonl = restore_manifest_files(manifest)
+            self.assertEqual(restored_video, video.resolve())
+            self.assertEqual(restored_jsonl, jsonl_path.resolve())
+
     def test_editor_page_escapes_script_termination_and_has_controls(self):
         page = render_editor_page({
             "manifest_name": "</script><script>alert(1)</script>",
@@ -222,7 +242,7 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
             root = Path(folder)
             manifest = root / "vision_acceptance.json"
 
-            def fake_detector(source, output):
+            def fake_detector(source, output, update, cancel_event):
                 self.assertTrue(source.is_file())
                 records = [
                     {"schema_version": 2, "frame": frame, "timestamp_s": float(frame),
@@ -233,8 +253,10 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                     "".join(json.dumps(item) + "\n" for item in records),
                     encoding="utf-8",
                 )
+                update(phase="detecting", processed_frames=2, total_frames=2,
+                       percent=80.0, message="detected")
 
-            def fake_preview(source, output):
+            def fake_preview(source, output, update, cancel_event):
                 self.assertTrue(source.is_file())
                 output.write_bytes(b"h264 preview")
 
@@ -259,7 +281,15 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                 urllib.request.urlopen(upload).close()
                 process = urllib.request.Request(base + "/process", data=b"", method="POST")
                 with urllib.request.urlopen(process) as response:
-                    processed = json.loads(response.read())
+                    self.assertEqual(response.status, 202)
+                deadline = time.monotonic() + 2
+                while True:
+                    with urllib.request.urlopen(base + "/process/status") as response:
+                        processed = json.loads(response.read())
+                    if processed["state"] != "running":
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
                 self.assertEqual(processed["record_count"], 2)
                 self.assertTrue(Path(processed["preview"]).is_file())
 
@@ -282,6 +312,59 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                     html = response.read().decode("utf-8")
                 self.assertIn("web closed loop", html)
                 self.assertIn("1 of 1 segments passed", html)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_processing_can_be_cancelled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            started = threading.Event()
+
+            def cancellable_detector(source, output, update, cancel_event):
+                output.write_text("partial\n", encoding="utf-8")
+                started.set()
+                while not cancel_event.wait(0.01):
+                    update(processed_frames=1, total_frames=100, percent=0.8)
+                raise InterruptedError("cancelled")
+
+            state = load_editor_state(
+                manifest_path=root / "vision_acceptance.json", video_path=None,
+                jsonl_path=None, dataset_name="cancel",
+            )
+            handler = make_handler(
+                manifest_path=root / "vision_acceptance.json", video_path=None,
+                jsonl_path=None, initial_state=state,
+                process_video_callback=cancellable_detector,
+                create_preview_callback=lambda *args: None,
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                upload = urllib.request.Request(
+                    base + "/upload/video", data=b"video", method="POST",
+                    headers={"X-Filename": "cancel.mp4"},
+                )
+                urllib.request.urlopen(upload).close()
+                urllib.request.urlopen(urllib.request.Request(
+                    base + "/process", data=b"", method="POST"
+                )).close()
+                self.assertTrue(started.wait(1))
+                urllib.request.urlopen(urllib.request.Request(
+                    base + "/process/cancel", data=b"", method="POST"
+                )).close()
+                deadline = time.monotonic() + 2
+                while True:
+                    with urllib.request.urlopen(base + "/process/status") as response:
+                        status = json.loads(response.read())
+                    if status["state"] == "cancelled":
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                self.assertFalse(list((root / "uploads").glob("*detections*.jsonl")))
             finally:
                 server.shutdown()
                 server.server_close()

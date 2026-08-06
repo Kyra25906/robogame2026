@@ -137,6 +137,23 @@ def load_editor_state(
     }
 
 
+def restore_manifest_files(manifest_path: Path) -> tuple[Path | None, Path | None]:
+    if not manifest_path.is_file():
+        return None, None
+    manifest = load_manifest(manifest_path)
+    if not manifest["datasets"]:
+        return None, None
+    dataset = manifest["datasets"][-1]
+    video_value = dataset.get("video")
+    jsonl_value = dataset.get("jsonl")
+    video = (manifest_path.parent / video_value).resolve() if video_value else None
+    jsonl_path = (manifest_path.parent / jsonl_value).resolve() if jsonl_value else None
+    return (
+        video if video is not None and video.is_file() else None,
+        jsonl_path if jsonl_path is not None and jsonl_path.is_file() else None,
+    )
+
+
 def unique_upload_path(folder: Path, filename: str) -> Path:
     cleaned = Path(filename.replace("\\", "/")).name.strip()
     if not cleaned or cleaned in {".", ".."}:
@@ -223,6 +240,7 @@ def render_editor_page(state: dict) -> str:
     label {{ display: block; color: #4b5563; font-size: .9rem; }}
     input, select, button {{ box-sizing: border-box; width: 100%; margin-top: 5px; padding: 9px; font: inherit; }}
     button {{ border: 0; border-radius: 7px; color: white; background: #2563eb; cursor: pointer; }}
+    button:disabled {{ opacity: .55; cursor: not-allowed; }} progress {{ width: 100%; height: 22px; }}
     button.secondary {{ background: #475569; }} button.danger {{ background: #b91c1c; }}
     table {{ width: 100%; border-collapse: collapse; }} th, td {{ padding: 9px; border: 1px solid #d1d5db; text-align: left; }}
     th {{ background: #e5e7eb; }} .actions {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
@@ -238,7 +256,9 @@ def render_editor_page(state: dict) -> str:
     <label>选择对应 JSONL<input id="jsonlFile" type="file" accept=".jsonl,application/x-ndjson"></label>
     <div><button id="uploadFiles">提交所选文件到本地工作目录</button></div>
     <div><button id="processVideo" class="secondary">处理新视频并生成检测时间线</button></div>
+    <div><button id="cancelProcess" class="danger" disabled>取消当前处理</button></div>
     <div id="fileState" class="hint"></div>
+    <div><progress id="processProgress" max="100" value="0"></progress><div id="processState" class="hint">尚未开始处理</div></div>
   </section>
   <section class="panel"><video id="video" src="{video_source}" controls preload="metadata"></video></section>
   <section class="panel grid">
@@ -305,6 +325,20 @@ def render_editor_page(state: dict) -> str:
         showFiles(); show('文件已经提交到本地工作目录，可以开始标注。');
       }} catch(error) {{ show(error.message,true); }}
     }};
+    let processTimer=null;
+    async function pollProcess() {{
+      const response=await fetch('/process/status'); const result=await response.json();
+      byId('processProgress').value=result.percent||0;
+      byId('processState').textContent=result.message||result.state;
+      if(result.state==='running') return;
+      clearInterval(processTimer); processTimer=null;
+      byId('processVideo').disabled=false; byId('cancelProcess').disabled=true;
+      if(result.state==='completed') {{
+        jsonlReady=true; video.src=`/video?t=${{Date.now()}}`; video.load(); showFiles();
+        show(`检测完成：${{result.record_count}} 帧；H.264 预览已载入，时间线已自动关联。`);
+      }} else if(result.state==='cancelled') show('处理已取消，未完成文件已清理。');
+      else if(result.state==='failed') show(result.error||'视频处理失败',true);
+    }}
     byId('processVideo').onclick = async () => {{
       if(!videoReady) return show('请先选择并提交新视频。',true);
       const button=byId('processVideo'); button.disabled=true;
@@ -312,9 +346,14 @@ def render_editor_page(state: dict) -> str:
         show('正在检测并生成 H.264 网页预览，请保持此页面打开且不要重复点击……');
         const response=await fetch('/process',{{method:'POST'}}); const result=await response.json();
         if(!response.ok) throw new Error(result.error||'视频处理失败');
-        jsonlReady=true; video.src=`/video?t=${{Date.now()}}`; video.load(); showFiles();
-        show(`检测完成：${{result.record_count}} 帧；H.264 预览已载入，时间线已自动关联。`);
-      }} catch(error) {{ show(error.message,true); }} finally {{ button.disabled=false; }}
+        byId('cancelProcess').disabled=false; await pollProcess();
+        processTimer=setInterval(()=>pollProcess().catch(error=>show(error.message,true)),300);
+      }} catch(error) {{ button.disabled=false; show(error.message,true); }}
+    }};
+    byId('cancelProcess').onclick = async () => {{
+      byId('cancelProcess').disabled=true;
+      try {{ await fetch('/process/cancel',{{method:'POST'}}); show('正在取消，请稍候……'); }}
+      catch(error) {{ show(error.message,true); }}
     }};
     byId('save').onclick = async () => {{
       try {{
@@ -376,9 +415,20 @@ def make_handler(
     upload_folder = manifest_path.parent / "uploads"
     report_path = manifest_path.parent / "vision_batch_report.html"
 
+    job_lock = threading.Lock()
+    cancel_event = threading.Event()
+    job = {
+        "state": "idle", "phase": "idle", "processed_frames": 0,
+        "total_frames": 0, "percent": 0.0, "message": "尚未开始处理",
+    }
+
+    def update_job(**values) -> None:
+        with job_lock:
+            job.update(values)
+
     def process_video(source: Path, output: Path) -> None:
         if process_video_callback is not None:
-            process_video_callback(source, output)
+            process_video_callback(source, output, update_job, cancel_event)
             return
         if detector_config is None or not detector_config.is_file():
             raise ValueError("detector configuration is missing; use --config")
@@ -397,13 +447,19 @@ def make_handler(
             "--config", str(detector_config),
             "--jsonl", str(output),
             "--headless",
-        ])
+        ], progress_callback=lambda done, total: update_job(
+            phase="detecting", processed_frames=done, total_frames=total,
+            percent=(80.0 * done / total) if total > 0 else 0.0,
+            message=f"正在检测：{done}/{total or '?'} 帧",
+        ), cancel_event=cancel_event)
+        if result == 130:
+            raise InterruptedError("processing cancelled by user")
         if result != 0:
             raise ValueError(f"video detector exited with code {result}")
 
     def create_browser_preview(source: Path, output: Path) -> None:
         if create_preview_callback is not None:
-            create_preview_callback(source, output)
+            create_preview_callback(source, output, update_job, cancel_event)
             return
         try:
             import imageio_ffmpeg
@@ -418,9 +474,21 @@ def make_handler(
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
         ]
-        completed = subprocess.run(
-            command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
         )
+        while process.poll() is None:
+            if cancel_event.wait(0.1):
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                raise InterruptedError("processing cancelled by user")
+        stdout, stderr = process.communicate()
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         if completed.returncode != 0 or not output.is_file():
             detail = completed.stderr.strip() or f"exit code {completed.returncode}"
             raise ValueError(f"cannot create H.264 browser preview: {detail}")
@@ -456,6 +524,11 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if route == "/process/status":
+                with job_lock:
+                    snapshot = dict(job)
+                self._json(HTTPStatus.OK, snapshot)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -501,7 +574,10 @@ def make_handler(
                 self._receive_upload(route.rsplit("/", 1)[-1])
                 return
             if route == "/process":
-                self._process_video()
+                self._start_processing()
+                return
+            if route == "/process/cancel":
+                self._cancel_processing()
                 return
             if route == "/report":
                 self._generate_report()
@@ -538,11 +614,36 @@ def make_handler(
                 {"manifest": str(manifest_path), "segment_count": segment_count},
             )
 
-        def _process_video(self) -> None:
+        def _start_processing(self) -> None:
+            with job_lock:
+                if job["state"] == "running":
+                    self._json(HTTPStatus.CONFLICT, {"error": "a video is already processing"})
+                    return
+            source = files["source_video"]
+            if source is None:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "select and submit a video before processing"})
+                return
+            cancel_event.clear()
+            update_job(
+                state="running", phase="detecting", processed_frames=0,
+                total_frames=0, percent=0.0, message="正在启动视觉检测",
+                error=None,
+            )
+            threading.Thread(
+                target=self._processing_worker, args=(source,), daemon=True
+            ).start()
+            self._json(HTTPStatus.ACCEPTED, {"state": "running"})
+
+        def _cancel_processing(self) -> None:
+            with job_lock:
+                running = job["state"] == "running"
+            if running:
+                cancel_event.set()
+                update_job(message="正在取消，请稍候……")
+            self._json(HTTPStatus.OK, {"cancel_requested": running})
+
+        def _processing_worker(self, source: Path) -> None:
             try:
-                source = files["source_video"]
-                if source is None:
-                    raise ValueError("select and submit a video before processing")
                 upload_folder.mkdir(parents=True, exist_ok=True)
                 output = unique_upload_path(
                     upload_folder, f"{source.stem}_detections.jsonl"
@@ -550,25 +651,40 @@ def make_handler(
                 process_video(source, output)
                 records = load_records(output)
                 timeline_metadata(records)
+                update_job(
+                    phase="transcoding", percent=80.0,
+                    message="检测完成，正在生成 H.264 网页预览",
+                )
                 preview = unique_upload_path(
                     upload_folder, f"{source.stem}_browser_preview.mp4"
                 )
                 create_browser_preview(source, preview)
                 files["jsonl"] = output
                 files["video"] = preview
+            except InterruptedError:
+                if 'output' in locals() and output.is_file():
+                    output.unlink()
+                if 'preview' in locals() and preview.is_file():
+                    preview.unlink()
+                update_job(
+                    state="cancelled", phase="cancelled", percent=0.0,
+                    message="处理已取消，未完成文件已清理",
+                )
+                return
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 if 'output' in locals() and output.is_file():
                     output.unlink()
                 if 'preview' in locals() and preview.is_file():
                     preview.unlink()
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                update_job(state="failed", phase="failed", error=str(exc), message=str(exc))
                 return
-            self._json(HTTPStatus.OK, {
-                "jsonl": str(output),
-                "record_count": len(records),
-                "duration_s": float(records[-1]["timestamp_s"]),
-                "preview": str(preview),
-            })
+            update_job(
+                state="completed", phase="completed", percent=100.0,
+                processed_frames=len(records), record_count=len(records),
+                duration_s=float(records[-1]["timestamp_s"]),
+                jsonl=str(output), preview=str(preview),
+                message=f"处理完成：{len(records)} 帧，H.264 预览已就绪",
+            )
 
         def _generate_report(self) -> None:
             try:
@@ -672,6 +788,8 @@ def main(argv=None) -> int:
         parser.error("port must be between 0 and 65535")
     try:
         detector_config = resolve_detector_config(args.config)
+        if video is None and jsonl_path is None:
+            video, jsonl_path = restore_manifest_files(manifest)
         if jsonl_path is not None:
             timeline_metadata(load_records(jsonl_path))
         state = load_editor_state(
