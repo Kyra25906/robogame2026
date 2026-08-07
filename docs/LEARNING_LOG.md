@@ -102,4 +102,3 @@ python -c "import sys; print(sys.executable)"
 - 抓取、放置、撤退、稳定观察和取消的实现经过：见 `DEV_LOG_2026-08-04.md`；
 - 视觉参数、JSONL schema v2 和验收工具使用：见 `VISION_MODULE.md`；
 - Windows 与 Ubuntu 同步：见 `Windows到Ubuntu一键同步.md`。
-
