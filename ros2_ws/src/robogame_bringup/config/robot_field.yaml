@@ -8,4 +8,3 @@ manipulator_client:
   ros__parameters:
     runtime_mode: field
     placement_evidence_policy: unavailable
-

@@ -10,4 +10,3 @@ manipulator_client:
   ros__parameters:
     runtime_mode: mock
     placement_evidence_policy: mock_qualified
-
