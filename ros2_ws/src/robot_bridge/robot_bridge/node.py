@@ -7,6 +7,10 @@ import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from robogame_core.hardware_readiness import (
+    receive_timestamp_is_fresh,
+    robot_status_communication_ok,
+)
 from robogame_core.models import Pose2D, Velocity2D
 from robogame_core.manipulator import MechanismOperation
 from robogame_core.mock_mechanism import (
@@ -57,7 +61,8 @@ class RobotBridge(Node):
         self.sequence = 0
         self.serial = None
         self.decoder = StreamDecoder()
-        self.last_rx = 0.0
+        self.last_frame_rx: float | None = None
+        self.last_decoded_status_rx: float | None = None
         self.mock_mechanism_state = MockMechanismState()
         if not self.mock_mode:
             self._open_serial()
@@ -156,8 +161,22 @@ class RobotBridge(Node):
         self.last_tick = now
         if self.serial is not None and self.serial.in_waiting:
             for _frame in self.decoder.feed(self.serial.read(self.serial.in_waiting)):
-                self.last_rx = now
-        communication_ok = self.mock_mode or (self.serial is not None and now - self.last_rx < 0.30)
+                # Transport activity is diagnostic only. Do not update
+                # last_decoded_status_rx until a signed 0x81 payload adapter
+                # has parsed and validated every required RobotStatus field.
+                self.last_frame_rx = now
+        communication_ok = robot_status_communication_ok(
+            mock_mode=self.mock_mode,
+            serial_open=self.serial is not None,
+            last_decoded_status_s=self.last_decoded_status_rx,
+            now_s=now,
+            timeout_s=0.30,
+        )
+        transport_fresh = self.mock_mode or receive_timestamp_is_fresh(
+            last_received_s=self.last_frame_rx,
+            now_s=now,
+            timeout_s=0.30,
+        )
         if now - self.last_command > self.command_timeout:
             self.velocity = Velocity2D(0.0, 0.0, 0.0)
         pose = self.integrator.update(self.velocity, dt, self.velocity.wz)
@@ -195,7 +214,9 @@ class RobotBridge(Node):
         status.retreat_complete = self.mock_mechanism_state.retreat_complete
         status.battery_voltage = 24.0
         status.detail = "mock hardware" if self.mock_mode else (
-            "MCU frame received; status payload adapter pending" if communication_ok else "MCU heartbeat missing"
+            "MCU transport active; decoded RobotStatus unavailable"
+            if transport_fresh
+            else "MCU transport inactive; decoded RobotStatus unavailable"
         )
         self.status_pub.publish(status)
 
