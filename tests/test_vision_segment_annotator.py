@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
@@ -365,6 +366,40 @@ class VisionSegmentAnnotatorTests(unittest.TestCase):
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.01)
                 self.assertFalse(list((root / "uploads").glob("*detections*.jsonl")))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_restored_preview_cannot_be_reprocessed_as_original(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            preview = root / "preview.mp4"
+            preview.write_bytes(b"preview")
+            state = load_editor_state(
+                manifest_path=root / "vision_acceptance.json",
+                video_path=preview, jsonl_path=None, dataset_name="restored",
+            )
+            state["source_video_ready"] = False
+            handler = make_handler(
+                manifest_path=root / "vision_acceptance.json",
+                video_path=preview, jsonl_path=None, initial_state=state,
+                source_video_path=None,
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/process",
+                    data=b"", method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    urllib.request.urlopen(request)
+                self.assertEqual(raised.exception.code, 400)
+                error = json.loads(raised.exception.read())
+                raised.exception.close()
+                self.assertIn("select and submit", error["error"])
             finally:
                 server.shutdown()
                 server.server_close()

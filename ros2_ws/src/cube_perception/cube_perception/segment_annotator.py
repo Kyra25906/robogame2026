@@ -134,6 +134,7 @@ def load_editor_state(
         "segments": matched.get("segments", []) if matched else [],
         "video_ready": video_path is not None,
         "jsonl_ready": jsonl_path is not None,
+        "source_video_ready": video_path is not None,
     }
 
 
@@ -288,6 +289,7 @@ def render_editor_page(state: dict) -> str:
     const segments = [...initial.segments];
     let videoReady = initial.video_ready;
     let jsonlReady = initial.jsonl_ready;
+    let sourceVideoReady = initial.source_video_ready;
     const byId = id => document.getElementById(id);
     byId('manifestName').value = initial.manifest_name;
     byId('datasetName').value = initial.dataset_name;
@@ -320,7 +322,7 @@ def render_editor_page(state: dict) -> str:
       const videoFile=byId('videoFile').files[0]; const jsonlFile=byId('jsonlFile').files[0];
       if(!videoFile&&!jsonlFile) return show('请至少选择一个需要提交的文件。',true);
       try {{
-        if(videoFile) {{ await uploadFile('video',videoFile); videoReady=true; video.src=`/video?t=${{Date.now()}}`; }}
+        if(videoFile) {{ await uploadFile('video',videoFile); videoReady=true; sourceVideoReady=true; video.src=`/video?t=${{Date.now()}}`; }}
         if(jsonlFile) {{ await uploadFile('jsonl',jsonlFile); jsonlReady=true; }}
         showFiles(); show('文件已经提交到本地工作目录，可以开始标注。');
       }} catch(error) {{ show(error.message,true); }}
@@ -340,7 +342,7 @@ def render_editor_page(state: dict) -> str:
       else if(result.state==='failed') show(result.error||'视频处理失败',true);
     }}
     byId('processVideo').onclick = async () => {{
-      if(!videoReady) return show('请先选择并提交新视频。',true);
+      if(!sourceVideoReady) return show('当前是恢复的历史预览；如需重新检测，请先选择并提交原始视频。',true);
       const button=byId('processVideo'); button.disabled=true;
       try {{
         show('正在检测并生成 H.264 网页预览，请保持此页面打开且不要重复点击……');
@@ -406,12 +408,17 @@ def make_handler(
     video_path: Path | None,
     jsonl_path: Path | None,
     initial_state: dict,
+    source_video_path: Path | None = None,
     detector_config: Path | None = None,
     process_video_callback=None,
     create_preview_callback=None,
 ):
     page = render_editor_page(initial_state).encode("utf-8")
-    files = {"source_video": video_path, "video": video_path, "jsonl": jsonl_path}
+    files = {
+        "source_video": source_video_path,
+        "video": video_path,
+        "jsonl": jsonl_path,
+    }
     upload_folder = manifest_path.parent / "uploads"
     report_path = manifest_path.parent / "vision_batch_report.html"
 
@@ -774,6 +781,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     workspace = args.workspace.resolve()
     video = args.video.resolve() if args.video else None
+    source_video = video
     jsonl_path = args.jsonl.resolve() if args.jsonl else None
     manifest = (
         args.manifest.resolve()
@@ -798,6 +806,7 @@ def main(argv=None) -> int:
             jsonl_path=jsonl_path,
             dataset_name=args.dataset_name,
         )
+        state["source_video_ready"] = source_video is not None
     except ValueError as exc:
         parser.error(str(exc))
     handler = make_handler(
@@ -805,6 +814,7 @@ def main(argv=None) -> int:
         video_path=video,
         jsonl_path=jsonl_path,
         initial_state=state,
+        source_video_path=source_video,
         detector_config=detector_config,
     )
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
