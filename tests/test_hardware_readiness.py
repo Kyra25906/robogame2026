@@ -3,6 +3,7 @@ import unittest
 from robogame_core.hardware_readiness import (
     receive_timestamp_is_fresh,
     robot_status_communication_ok,
+    validate_runtime_evidence_policy,
 )
 
 
@@ -64,6 +65,33 @@ class RobotStatusCommunicationTests(unittest.TestCase):
             mock_mode=False, serial_open=True, last_decoded_status_s=9.0,
             now_s=10.0, timeout_s=0.3,
         ))
+
+
+class RuntimeEvidencePolicyTests(unittest.TestCase):
+    def test_mock_runtime_accepts_mock_evidence(self):
+        validate_runtime_evidence_policy(
+            runtime_mode="mock", placement_evidence_policy="mock_qualified"
+        )
+
+    def test_field_runtime_accepts_unavailable_evidence(self):
+        validate_runtime_evidence_policy(
+            runtime_mode="field", placement_evidence_policy="unavailable"
+        )
+
+    def test_field_runtime_rejects_every_mock_evidence_policy(self):
+        for policy in ("mock_qualified", "mock_failed"):
+            with self.subTest(policy=policy), self.assertRaisesRegex(
+                ValueError, "field runtime cannot use simulated"
+            ):
+                validate_runtime_evidence_policy(
+                    runtime_mode="field", placement_evidence_policy=policy
+                )
+
+    def test_unknown_runtime_mode_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "runtime_mode"):
+            validate_runtime_evidence_policy(
+                runtime_mode="production", placement_evidence_policy="unavailable"
+            )
 
 
 if __name__ == "__main__":

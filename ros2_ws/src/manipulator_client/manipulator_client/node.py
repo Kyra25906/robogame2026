@@ -5,6 +5,7 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from robogame_core.hardware_readiness import validate_runtime_evidence_policy
 from robogame_core.manipulator import (
     CancellationDecision,
     GrabVerificationPolicy,
@@ -37,6 +38,7 @@ class ManipulatorClientNode(Node):
     def __init__(self) -> None:
         super().__init__("manipulator_client")
         for name, default in {
+            "runtime_mode": "mock",
             "target_distance_m": 0.24, "distance_tolerance_m": 0.025,
             "lateral_tolerance_m": 0.018, "kp_distance": 0.8, "kp_lateral": 1.2,
             "max_speed": 0.18, "target_stale_s": 0.5, "action_timeout_s": 12.0,
@@ -102,6 +104,10 @@ class ManipulatorClientNode(Node):
                 "placement_evidence_policy must be mock_qualified, "
                 "mock_failed, or unavailable"
             )
+        validate_runtime_evidence_policy(
+            runtime_mode=str(self.get_parameter("runtime_mode").value),
+            placement_evidence_policy=self.placement_evidence_policy,
+        )
         # Construct once to validate the two configurable durations at startup.
         PlacementStabilityObserver(
             observation_started_s=0.0,

@@ -3,6 +3,28 @@ from __future__ import annotations
 import math
 
 
+RUNTIME_MODES = {"mock", "field"}
+MOCK_PLACEMENT_EVIDENCE_POLICIES = {"mock_qualified", "mock_failed"}
+
+
+def validate_runtime_evidence_policy(
+    *, runtime_mode: str, placement_evidence_policy: str
+) -> None:
+    """Reject simulated evidence in a field runtime."""
+    if runtime_mode not in RUNTIME_MODES:
+        raise ValueError(
+            f"runtime_mode must be one of: {', '.join(sorted(RUNTIME_MODES))}"
+        )
+    if (
+        runtime_mode == "field"
+        and placement_evidence_policy in MOCK_PLACEMENT_EVIDENCE_POLICIES
+    ):
+        raise ValueError(
+            "field runtime cannot use simulated placement evidence: "
+            f"{placement_evidence_policy}"
+        )
+
+
 def receive_timestamp_is_fresh(
     *, last_received_s: float | None, now_s: float, timeout_s: float
 ) -> bool:

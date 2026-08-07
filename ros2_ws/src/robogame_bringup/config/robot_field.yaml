@@ -1,0 +1,11 @@
+robot_bridge:
+  ros__parameters:
+    mock_mode: false
+    serial_port: /dev/ttyACM0
+    baud_rate: 115200
+
+manipulator_client:
+  ros__parameters:
+    runtime_mode: field
+    placement_evidence_policy: unavailable
+

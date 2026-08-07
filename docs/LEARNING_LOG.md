@@ -83,6 +83,28 @@ status_fresh：最近成功解码了完整 RobotStatus
 
 测试还发现了浮点时间边界：十进制的 `10.0 - 9.7 = 0.3` 在二进制浮点中可能略大于0.3。实现使用极小的数值容差，只把数学上等于截止点的状态视为新鲜；超过1毫秒的状态仍然过期。这个例子说明边界测试不仅检查业务逻辑，也检查计算机表示数字的方式。
 
+## 2026-08-07：配置分离还需要代码拒绝危险组合
+
+项目原来只有一个 `robot.yaml`，其中同时包含 `mock_mode: true` 和 `placement_evidence_policy: mock_qualified`。硬件启动文件只覆盖了 `robot_bridge.mock_mode=false`，却没有覆盖机构客户端的模拟放置证据，因此可能形成“真实机构 + 模拟成功证据”的混合运行。
+
+现在配置分成三层：
+
+```text
+robot.yaml       → 公共算法参数
+robot_mock.yaml  → 模拟硬件与模拟证据
+robot_field.yaml → 真实串口与保守证据
+```
+
+但文件分开只能减少误操作，不能阻止误操作。`manipulator_client` 因此新增 `runtime_mode`，并在启动时验证：
+
+```text
+runtime_mode=field + mock_qualified → 拒绝启动
+runtime_mode=field + mock_failed    → 拒绝启动
+runtime_mode=field + unavailable    → 允许启动
+```
+
+这体现了安全配置的通用原则：不要只让正确配置容易找到，还要让危险组合无法运行。现场使用 `unavailable` 会得到 `INCONCLUSIVE`，虽然不能宣称闭环成功，但比伪造 `STABLE` 更诚实、更安全。
+
 ## 2026-08-07：离线视觉验收形成完整工具链
 
 ### 背景

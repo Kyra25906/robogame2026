@@ -26,7 +26,7 @@
 ### 第一天：机构接入安全边界与配置审计
 
 - [x] `P0` 增加真实模式失败安全测试：没有成功解码 `0x81 RobotStatus` 时，`communication_ok` 不得仅因收到其他合法帧而变为真。证据：8项硬件准备测试、全项目148项测试通过。
-- [ ] `P0` 分离模拟与现场配置，确保现场配置不使用 `placement_evidence_policy: mock_qualified`。
+- [x] `P0` 分离模拟与现场配置：公共参数使用 `robot.yaml`，环境参数使用 `robot_mock.yaml`/`robot_field.yaml`；field模式在代码层拒绝 `mock_qualified` 和 `mock_failed`。证据：12项硬件准备测试、全项目152项测试通过。
 - [ ] `P0` 为抓取和放置建立时间预算表，检查 `action_timeout_s=12.0` 是否能覆盖全部真实步骤。
 - [ ] `P1` 把机械/电控必须回答的问题整理成现场可逐项填写的冻结表：动作、参数、完成证据、错误码、取消、断电行为。
 
@@ -167,7 +167,8 @@
 - 优先级：`P0`；
 - 现状：`robot.yaml` 中 `placement_evidence_policy: mock_qualified`；
 - 风险：现场若直接复用配置，可能在没有真实视觉证据时报告 `STABLE`；
-- 远程可完成：拆分模拟与现场配置，现场配置默认 `unavailable` 或明确拒绝启动，直到真实证据接入。
+- 已完成缓解：公共配置移除模拟证据，新增mock/field配置；field使用 `unavailable`，节点拒绝field与任何 `mock_*` 证据组合；
+- 仍未完成：在Ubuntu重新构建并分别验证mock启动、field失败安全启动；真实视觉证据接入前field仍只能得到 `INCONCLUSIVE`。
 
 ## 后续维护入口
 

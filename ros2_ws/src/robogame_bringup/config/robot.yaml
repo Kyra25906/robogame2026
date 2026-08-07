@@ -1,10 +1,6 @@
 robot_bridge:
   ros__parameters:
-    mock_mode: true
-    serial_port: /dev/ttyACM0
-    baud_rate: 115200
     command_timeout_s: 0.15
-    mock_start_after_s: 2.0
 
 motion_controller:
   ros__parameters:
@@ -64,7 +60,6 @@ manipulator_client:
     target_stale_s: 0.5
     action_timeout_s: 12.0
     status_stale_s: 0.30
-    placement_evidence_policy: mock_qualified
     placement_stable_duration_s: 3.0
     placement_observation_timeout_s: 6.0
     placement_max_unavailable_gap_s: 0.0
