@@ -104,12 +104,16 @@ class RobotStatusCommunicationTests(unittest.TestCase):
 
 
 class RobotBridgeDispatchSafetyTests(unittest.TestCase):
-    def test_placeholder_dispatch_cannot_mark_status_as_decoded(self):
+    @staticmethod
+    def _robot_bridge_tree():
         node_path = (
             Path(__file__).resolve().parents[1]
             / "ros2_ws" / "src" / "robot_bridge" / "robot_bridge" / "node.py"
         )
-        tree = ast.parse(node_path.read_text(encoding="utf-8"))
+        return ast.parse(node_path.read_text(encoding="utf-8"))
+
+    def test_placeholder_dispatch_cannot_mark_status_as_decoded(self):
+        tree = self._robot_bridge_tree()
         dispatch = next(
             node for node in ast.walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -129,6 +133,26 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
 
         self.assertNotIn("last_decoded_status_rx", assigned_attributes)
         self.assertNotIn("_on_status_boot_id", called_methods)
+
+    def test_external_shutdown_is_a_clean_exit_path(self):
+        tree = self._robot_bridge_tree()
+        main = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        handled_names = set()
+        for handler in (
+            node for node in ast.walk(main) if isinstance(node, ast.ExceptHandler)
+        ):
+            if isinstance(handler.type, ast.Name):
+                handled_names.add(handler.type.id)
+            elif isinstance(handler.type, ast.Tuple):
+                handled_names.update(
+                    item.id for item in handler.type.elts if isinstance(item, ast.Name)
+                )
+
+        self.assertIn("KeyboardInterrupt", handled_names)
+        self.assertIn("ExternalShutdownException", handled_names)
 
 
 class RuntimeEvidencePolicyTests(unittest.TestCase):

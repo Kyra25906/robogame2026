@@ -6,6 +6,7 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from robogame_core.hardware_readiness import (
     receive_timestamp_is_fresh,
@@ -351,7 +352,7 @@ def main(args=None) -> None:
     node = RobotBridge()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         if node.serial is not None:
