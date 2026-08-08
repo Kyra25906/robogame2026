@@ -21,6 +21,9 @@ from robogame_core.mock_mechanism import (
 from robogame_core.navigation import OdometryIntegrator
 from robogame_core.serial_protocol import (
     MSG_TYPE_ACK,
+    MSG_TYPE_IMU,
+    MSG_TYPE_ODOM,
+    MSG_TYPE_STATUS,
     StreamDecoder,
     encode_frame,
     encode_hello,
@@ -82,6 +85,7 @@ class RobotBridge(Node):
         self._handshake_last_hello = 0.0
         self._handshake_retries = 0
         self._last_boot_id: int | None = None
+        self._frame_types_seen: set[int] = set()
         if not self.mock_mode:
             self._open_serial()
         self.create_timer(0.02, self._tick)
@@ -237,6 +241,30 @@ class RobotBridge(Node):
             self._handshake_last_hello = 0.0
             self._handshake_retries = 0
 
+    # -- frame dispatch skeleton ------------------------------------------
+    # Payload decoders for 0x10 / 0x11 / 0x12 are not yet implemented.
+    # The dispatch routes each message type to the right handler so that
+    # downstream logic (handshake, boot_id, communication_ok) can be wired
+    # immediately; field decoding is backfilled once offsets are confirmed.
+
+    def _dispatch_frame(self, frame, now: float) -> None:
+        msg_type = frame.message_type
+        if msg_type not in self._frame_types_seen:
+            self._frame_types_seen.add(msg_type)
+            self.get_logger().info(
+                f"first frame received: type=0x{msg_type:02X}  "
+                f"seq={frame.sequence}  len={len(frame.payload)}"
+            )
+        if msg_type == MSG_TYPE_STATUS:
+            self.last_decoded_status_rx = now
+            # boot_id field offset is unknown; placeholder 0 keeps
+            # fail-safe behavior until the payload adapter exists.
+            self._on_status_boot_id(0)
+        elif msg_type == MSG_TYPE_ODOM:
+            pass  # placeholder: decode encoder counts, vx/vy/wz, tick
+        elif msg_type == MSG_TYPE_IMU:
+            pass  # placeholder: decode angular velocity, accel, quaternion
+
     def _tick(self) -> None:
         now = time.monotonic()
         dt = now - self.last_tick
@@ -248,14 +276,8 @@ class RobotBridge(Node):
 
         if self.serial is not None and self.serial.in_waiting:
             for _frame in self.decoder.feed(self.serial.read(self.serial.in_waiting)):
-                # Transport activity is diagnostic only. Do not update
-                # last_decoded_status_rx until a signed 0x81 payload adapter
-                # has parsed and validated every required RobotStatus field.
                 self._accept_frame_for_handshake(_frame)
-                # STATUS frames carry boot_id for MCU-reset detection.
-                # The 0x12 payload adapter is not yet implemented, so
-                # _on_status_boot_id will be called once field offsets
-                # are confirmed by the electrical team.
+                self._dispatch_frame(_frame, now)
                 self.last_frame_rx = now
         communication_ok = robot_status_communication_ok(
             mock_mode=self.mock_mode,
