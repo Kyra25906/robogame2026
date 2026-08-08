@@ -134,7 +134,11 @@ class MechanismTester:
     """Thin wrapper around a temporary ROS2 node that calls one mechanism
     service per invocation and records everything needed for acceptance."""
 
-    def __init__(self, service_wait_timeout_s: float = 5.0) -> None:
+    def __init__(
+        self,
+        service_wait_timeout_s: float = 5.0,
+        status_wait_timeout_s: float = 5.0,
+    ) -> None:
         if not rclpy.ok():
             rclpy.init()
         self._node = Node("mechanism_acceptance", allow_undeclared_parameters=True)
@@ -144,9 +148,9 @@ class MechanismTester:
         )
         self._service_wait_timeout = service_wait_timeout_s
         # Give the subscription a moment to receive the first message.
-        self._spin_until(
+        self.initial_status_received = self._spin_until(
             lambda: self._status is not None,
-            timeout_s=min(service_wait_timeout_s, 2.0),
+            timeout_s=status_wait_timeout_s,
             label="initial RobotStatus",
         )
 
@@ -279,7 +283,20 @@ class MechanismTester:
 
 
 def run_acceptance(args: argparse.Namespace) -> int:
-    tester = MechanismTester(service_wait_timeout_s=args.wait_timeout)
+    tester = MechanismTester(
+        service_wait_timeout_s=args.wait_timeout,
+        status_wait_timeout_s=args.status_timeout,
+    )
+
+    if not tester.initial_status_received:
+        summary = format_mechanism_status_summary(tester.capture_status())
+        print(
+            "[SUMMARY] result=FAIL actions=0 failures=0 "
+            f"detail=STATUS_UNAVAILABLE {summary}",
+            file=sys.stderr,
+        )
+        tester.destroy()
+        return 2
 
     specs: list[ActionSpec]
     if args.all:
@@ -426,6 +443,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=5.0,
         help="Max seconds to wait for the service to become ready (default: 5.0).",
+    )
+    parser.add_argument(
+        "--status-timeout",
+        type=float,
+        default=5.0,
+        help="Max seconds to wait for the first RobotStatus before running actions (default: 5.0).",
     )
     parser.add_argument(
         "--repeat",

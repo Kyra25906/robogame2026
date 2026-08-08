@@ -141,12 +141,33 @@ if [ "$skip_mechanism" = "0" ]; then
     result_csv="acceptance_results/mechanism_${short_commit}_${stamp}.csv"
     bridge_log="acceptance_results/robot_bridge_${short_commit}_${stamp}.log"
 
-    ros2 run robot_bridge robot_bridge --ros-args \
+    setsid env PYTHONUNBUFFERED=1 ros2 run robot_bridge robot_bridge --ros-args \
         -p mock_mode:=true -p mock_start_after_s:=0.2 \
         >"$bridge_log" 2>&1 &
     bridge_pid=$!
     cleanup_bridge() {
-        kill -INT "$bridge_pid" 2>/dev/null || true
+        if ! kill -0 -- "-$bridge_pid" 2>/dev/null; then
+            wait "$bridge_pid" 2>/dev/null || true
+            return
+        fi
+
+        kill -INT -- "-$bridge_pid" 2>/dev/null || true
+        for _ in $(seq 1 30); do
+            if ! kill -0 -- "-$bridge_pid" 2>/dev/null; then
+                wait "$bridge_pid" 2>/dev/null || true
+                return
+            fi
+            sleep 0.1
+        done
+
+        echo "robot_bridge did not stop after SIGINT; sending SIGTERM" >&2
+        kill -TERM -- "-$bridge_pid" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+            if ! kill -0 -- "-$bridge_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
         wait "$bridge_pid" 2>/dev/null || true
     }
     trap cleanup_bridge EXIT
@@ -164,8 +185,13 @@ if [ "$skip_mechanism" = "0" ]; then
         exit 21
     fi
 
+    if ! timeout 8 ros2 topic echo --once /robot/status >/dev/null 2>&1; then
+        echo "ERROR: RobotStatus did not become available" >&2
+        exit 22
+    fi
+
     python3 tools/mechanism_acceptance.py \
-        --all --repeat 1 --output "$result_csv"
+        --all --repeat 1 --status-timeout 5 --output "$result_csv"
     cleanup_bridge
     trap - EXIT
 

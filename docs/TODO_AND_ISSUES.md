@@ -53,6 +53,7 @@
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
 - [x] `P1` 增加 Windows→Ubuntu 一键干净验收入口：按当前已推送提交创建独立 Ubuntu 仓库，自动执行构建、单元测试、模拟闭环和机构摘要，不覆盖两个历史目录。入口：`tools/sync_accept_ubuntu.cmd`。
+- [ ] `P1` 复验一键验收首次实跑暴露的启动与退出竞态修复：已实现首条 RobotStatus 缺失时禁止动作，以及后台 bridge 独立进程组、SIGINT/SIGTERM 有界退出和无缓冲日志；等待 Ubuntu 一键实跑确认四次状态完整且脚本自行结束。
 
 ## 现场第一天建议顺序
 
