@@ -12,8 +12,8 @@
 | 6 | **localization IMU 降级**：imu_valid=false 或数据过期时退回纯里程计 | `a93d073` | localization/node.py |
 
 额外产出：
-- `docs/FIELD_DAY1_EXECUTION_ORDER.md`（491 行，五阶段现场执行清单）
-- `docs/FREEZE_TABLE.md` 更新（电控 20 条答复已填入）
+- `docs/field/FIELD_DAY1_EXECUTION_ORDER.md`（491 行，五阶段现场执行清单）
+- `docs/field/FREEZE_TABLE.md` 更新（电控 20 条答复已填入）
 - `docs/TODO_AND_ISSUES.md` 同步更新（已完成项标记，新增 7 个待办）
 - `tools/sync_to_ubuntu.ps1` 修复（打包范围加入 tools 目录）
 
@@ -103,11 +103,11 @@ Ubuntu VM：192.168.253.128，用户 panwenhui
 
 | 文件 | 用途 |
 |---|---|
-| `docs/FIELD_DAY1_EXECUTION_ORDER.md` | 明天现场照着做的事 |
-| `docs/FREEZE_TABLE.md` | 机械/电控待确认问题（电控 20 条已答） |
-| `docs/TIME_BUDGET.csv` | 时间预算，待现场填实测值 |
-| `docs/FAULT_INJECTION_TEST_CARD.md` | 7 张故障注入测试卡 |
-| `docs/MCU_PROTOCOL.md` | 串口协议说明 |
+| `docs/field/FIELD_DAY1_EXECUTION_ORDER.md` | 明天现场照着做的事 |
+| `docs/field/FREEZE_TABLE.md` | 机械/电控待确认问题（电控 20 条已答） |
+| `docs/field/TIME_BUDGET.csv` | 时间预算，待现场填实测值 |
+| `docs/field/FAULT_INJECTION_TEST_CARD.md` | 7 张故障注入测试卡 |
+| `docs/field/MCU_PROTOCOL.md` | 串口协议说明 |
 | `tools/mechanism_acceptance.py` | 单动作验收工具 |
 | `tools/sync_to_ubuntu.ps1` | Windows → Ubuntu 同步脚本 |
 | `ros2_ws/src/robot_bridge/robot_bridge/node.py` | bridge 主逻辑（握手、帧分发、boot_id） |

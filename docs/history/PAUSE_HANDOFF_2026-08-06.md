@@ -189,9 +189,9 @@ Start-Process ".\results\orange_distance_20260806\vision_batch_report.html"
 应保存到 Git 的本轮正式文件：
 
 ```text
-docs/VISION_MODULE.md
-docs/BEGINNER_PROJECT_LEARNING_GUIDE.md
-docs/PAUSE_HANDOFF_2026-08-06.md
+docs/vision/VISION_MODULE.md
+docs/guides/BEGINNER_PROJECT_LEARNING_GUIDE.md
+docs/history/PAUSE_HANDOFF_2026-08-06.md
 ros2_ws/src/cube_perception/setup.py
 ros2_ws/src/cube_perception/cube_perception/batch_report.py
 ros2_ws/src/cube_perception/cube_perception/segment_annotator.py

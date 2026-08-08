@@ -44,7 +44,7 @@
 - [ ] `P0` 固定相机安装，采集橙色、紫色、空场景和遮挡数据。
 - [ ] `P0` 完成并重复验证第一个单方块物理闭环。
 
-8 月 9—14 日每日安排见 `PLAN_2026-08-09_TO_14.md`。
+8 月 9—14 日每日安排见 `PLAN_2026-08-09_TO_14.md`，现场资料集中在 `field/`。
 
 ## 已完成的远程准备阶段记录
 
@@ -52,21 +52,21 @@
 
 - [x] `P0` 增加真实模式失败安全测试：没有成功解码 `0x12 RobotStatus` 时，`communication_ok` 不得仅因收到其他合法帧而变为真。证据：8项硬件准备测试、全项目148项测试通过。
 - [x] `P0` 分离模拟与现场配置：公共参数使用 `robot.yaml`，环境参数使用 `robot_mock.yaml`/`robot_field.yaml`；field模式在代码层拒绝 `mock_qualified` 和 `mock_failed`。证据：12项硬件准备测试、全项目152项测试通过。
-- [x] `P0` 为抓取和放置建立时间预算表，检查 `action_timeout_s=12.0` 是否能覆盖全部真实步骤。证据：`docs/TIME_BUDGET.csv`，结论为 12.0s 最坏情况不足，建议现场先用 18s 调试。
-- [x] `P1` 把机械/电控必须回答的问题整理成现场可逐项填写的冻结表：动作、参数、完成证据、错误码、取消、断电行为。证据：`docs/FREEZE_TABLE.md`，含十节共 50+ 待填项；2026-08-08 电控组已答复底盘速度命令、里程计、IMU、串口与安全共 20 条，FREEZE_TABLE 已同步更新。
+- [x] `P0` 为抓取和放置建立时间预算表，检查 `action_timeout_s=12.0` 是否能覆盖全部真实步骤。证据：`docs/field/TIME_BUDGET.csv`，结论为 12.0s 最坏情况不足，建议现场先用 18s 调试。
+- [x] `P1` 把机械/电控必须回答的问题整理成现场可逐项填写的冻结表：动作、参数、完成证据、错误码、取消、断电行为。证据：`docs/field/FREEZE_TABLE.md`，含十节共 50+ 待填项；2026-08-08 电控组已答复底盘速度命令、里程计、IMU、串口与安全共 20 条，FREEZE_TABLE 已同步更新。
 
 ### 第二天：现场验收工具与交接准备
 
 - [x] `P0` 准备单动作验收入口，能够独立调用 `GRAB`、`LIFT`、`RELEASE`、`STOP`，记录请求、耗时、响应和 RobotStatus；在协议未冻结前只连模拟服务。证据：`tools/mechanism_acceptance.py`，435行，支持 `--action`/`--all`/`--repeat`/`--output`。
-- [x] `P0` 为状态过期、服务不可用、服务失败、急停和机构故障准备可复现的测试步骤。证据：`docs/FAULT_INJECTION_TEST_CARD.md`，含七张卡片，每张有模拟和真车两种触发方式。
+- [x] `P0` 为状态过期、服务不可用、服务失败、急停和机构故障准备可复现的测试步骤。证据：`docs/field/FAULT_INJECTION_TEST_CARD.md`，含七张卡片，每张有模拟和真车两种触发方式。
 - [x] `P1` 在 Ubuntu 完整构建并运行机构模拟 smoke，保存终端证据和提交号。证据：40/40 PASS，Ubuntu 边界测试（不启动 robot_bridge 时 SERVICE_UNAVAILABLE）通过；commit `4265759`。
-- [x] `P1` 输出现场第一天执行顺序，禁止一开始运行完整任务。证据：`docs/FIELD_DAY1_EXECUTION_ORDER.md`，包含分阶段验收、停止条件和证据记录要求。
+- [x] `P1` 输出现场第一天执行顺序，禁止一开始运行完整任务。证据：`docs/field/FIELD_DAY1_EXECUTION_ORDER.md`，包含分阶段验收、停止条件和证据记录要求。
 
 两天内不做：猜测 `0x10/0x11/0x12` 或机构命令的字节载荷、大规模改成 ROS2 Action、增加未经机械确认的新动作、调真实三层高度。
 
 ## 电控协议确认后新增待办（2026-08-08）
 
-电控组通过 `电控协议确认清单.xlsx` 答复了 20 条问题。分析结论见 `docs/FREEZE_TABLE.md`（已更新）和当天对话记录。
+电控组通过 `电控协议确认清单.xlsx` 答复了 20 条问题。分析结论见 `docs/field/FREEZE_TABLE.md`（已更新）和当天对话记录。
 
 - [x] `P0` RobotStatus 消息新增 `calibrating`、`imu_valid`、`boot_id` 三个字段，用于区分 IMU 校准状态和 MCU 复位检测。证据：commit `2ccc0a6`，Ubuntu 验证通过，`ros2 topic echo /robot/status` 正确输出新字段。
 - [x] `P0` `robot_bridge` 新增握手状态机：HELLO → 等 ACK → READY，握手完成前不接受运动命令。握手超时 3s，最多 3 次重试。证据：commit `9891799`，Ubuntu 模拟验收 12/12 通过，mock 模式直接 READY 不受影响。
@@ -196,7 +196,7 @@
 ### ISSUE-010：真实放置流程的总超时预算未冻结
 
 - 优先级：`P0`；
-- 最新进展（2026-08-08）：已建立 `docs/TIME_BUDGET.csv`，逐项列出 PICK/PLACE 各阶段的 min/max/typical 估计值。
+- 最新进展（2026-08-08）：已建立 `docs/field/TIME_BUDGET.csv`，逐项列出 PICK/PLACE 各阶段的 min/max/typical 估计值。
 - 分析结论：`action_timeout_s=12.0` 在最坏情况下不够用 —— PICK 最坏 14.3s，PLACE 最坏 12.5s。典型情况下够用（PICK 7.1s，PLACE 6.55s）。
 - 建议：现场调试阶段先用 18s，实测真实耗时后再收紧到合理值。
 - 现场数据：升降、释放、撤退、状态回传的正常值、P95值和最大安全值。填入 TIME_BUDGET.csv 的 `estimated_real_*` 列替换当前估计值。

@@ -7,7 +7,7 @@
 - 每完成一个有意义的小步骤，按日期追加一条记录；
 - 每条记录尽量包含：背景、核心知识、代码如何体现、可以迁移到哪里；
 - 命令执行结果和未完成任务不放在这里，统一记录到 `TODO_AND_ISSUES.md`；
-- 系统性的完整教程继续保留在 `BEGINNER_PROJECT_LEARNING_GUIDE.md`。
+- 系统性的完整教程继续保留在 `guides/BEGINNER_PROJECT_LEARNING_GUIDE.md`。
 
 ## 阶段性学习地图
 
@@ -16,7 +16,7 @@
 | 能力 | 已学到的核心观念 | 在项目中的体现 |
 |---|---|---|
 | 模块化 | 流程状态、机构动作、视觉证据和硬件通信应分开 | 九个 ROS2 包及 `robogame_core` 纯逻辑层 |
-| 接口设计 | 消息字段、单位、方向和完成条件必须由双方冻结 | `RobotStatus.msg`、`FREEZE_TABLE.md`、协议清单 |
+| 接口设计 | 消息字段、单位、方向和完成条件必须由双方冻结 | `RobotStatus.msg`、`field/FREEZE_TABLE.md`、协议清单 |
 | 状态机 | 明确状态比大量真假变量组合更容易维护 | 任务流程、握手、机构动作和处理任务状态 |
 | 自动测试 | 先测试边界、失败和恢复，不只测试成功路径 | 185 项单元测试、串口噪声恢复、运动安全测试 |
 | 失败安全 | 状态不可信时宁可拒绝动作，不能用默认值假装正常 | field 无硬件 smoke、握手门控、机构服务 2001 拒绝 |
@@ -367,7 +367,7 @@ MCU/模拟器状态
 
 ## 之前阶段的重要学习索引
 
-- 模块职责、ROS2 模拟闭环、机构动作和流程状态分离：见 `BEGINNER_PROJECT_LEARNING_GUIDE.md`；
-- 抓取、放置、撤退、稳定观察和取消的实现经过：见 `DEV_LOG_2026-08-04.md`；
-- 视觉参数、JSONL schema v2 和验收工具使用：见 `VISION_MODULE.md`；
-- Windows 与 Ubuntu 同步：见 `Windows到Ubuntu一键同步.md`。
+- 模块职责、ROS2 模拟闭环、机构动作和流程状态分离：见 `guides/BEGINNER_PROJECT_LEARNING_GUIDE.md`；
+- 抓取、放置、撤退、稳定观察和取消的实现经过：见 `history/DEV_LOG_2026-08-04.md`；
+- 视觉参数、JSONL schema v2 和验收工具使用：见 `vision/VISION_MODULE.md`；
+- Windows 与 Ubuntu 同步：见 `guides/Windows到Ubuntu一键同步.md`。
