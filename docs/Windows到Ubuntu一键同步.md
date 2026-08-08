@@ -2,6 +2,49 @@
 
 本项目推荐使用“SSH 密钥 + 一键同步脚本”，而不是 VMware 拖拽或共享文件夹。
 
+## 推荐方式：Git 干净副本同步并自动验收
+
+项目提交并推送 GitHub 后，在 Windows 项目根目录运行：
+
+```powershell
+.\tools\sync_accept_ubuntu.cmd
+```
+
+脚本会自动读取当前提交号，并依次执行：
+
+```text
+确认 Windows 已提交并推送
+→ Ubuntu 从 GitHub 创建独立干净仓库
+→ 检出 Windows 当前提交
+→ colcon build
+→ Python 单元测试
+→ 机构模拟闭环 smoke
+→ 单动作摘要验收
+→ 保存 CSV 和 robot_bridge 日志
+```
+
+脚本不再依赖 `/home/panwenhui/robogame` 或 `/home/panwenhui/robogame2026`。两个旧目录都不会被覆盖；全新的验收仓库按提交号命名，例如：
+
+```text
+/home/panwenhui/robogame_acceptance_fc8150e
+```
+
+只检查本次将使用的提交和路径，不连接虚拟机：
+
+```powershell
+.\tools\sync_accept_ubuntu.cmd -PlanOnly
+```
+
+虚拟机 IP 改变时：
+
+```powershell
+.\tools\sync_accept_ubuntu.cmd -UbuntuHost 192.168.253.129
+```
+
+验收结果位于新副本的 `acceptance_results/`。只有脚本最后显示 `ACCEPTANCE PASS`，才表示构建、测试和模拟验收全部完成。
+
+下面的压缩包覆盖方式保留作备用，适合无法从 Ubuntu 访问 GitHub 时使用，但它不会创建同等严格的干净提交副本。
+
 脚本只同步以下内容：
 
 - `ros2_ws/src`

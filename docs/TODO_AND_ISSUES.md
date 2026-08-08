@@ -52,6 +52,7 @@
 - [x] `P0` 修正 STATUS 解析骨架的失败安全边界：在 0x12 载荷尚未完成长度、字段和值域校验时，不更新 `last_decoded_status_rx`，也不把占位 `boot_id=0` 当成真实 MCU 状态。证据：新增静态回归测试，防止占位分支重新写入这两个状态入口；硬件安全测试 13/13、全项目 153/153 通过。
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
+- [x] `P1` 增加 Windows→Ubuntu 一键干净验收入口：按当前已推送提交创建独立 Ubuntu 仓库，自动执行构建、单元测试、模拟闭环和机构摘要，不覆盖两个历史目录。入口：`tools/sync_accept_ubuntu.cmd`。
 
 ## 现场第一天建议顺序
 
