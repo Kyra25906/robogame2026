@@ -96,7 +96,14 @@ class RobotBridge(Node):
 
         port = str(self.get_parameter("serial_port").value)
         baud = int(self.get_parameter("baud_rate").value)
-        self.serial = serial.Serial(port, baud, timeout=0.0)
+        try:
+            self.serial = serial.Serial(port, baud, timeout=0.0)
+        except (serial.SerialException, OSError) as exc:
+            self.serial = None
+            self.get_logger().error(
+                f"MCU serial unavailable at {port}: {exc}; staying fail-safe"
+            )
+            return
         self.get_logger().info(f"opened MCU serial port {port} at {baud}")
 
     def _on_cmd_vel(self, msg: Twist) -> None:

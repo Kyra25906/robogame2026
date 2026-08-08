@@ -154,6 +154,33 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
         self.assertIn("KeyboardInterrupt", handled_names)
         self.assertIn("ExternalShutdownException", handled_names)
 
+    def test_missing_serial_device_is_contained_by_bridge(self):
+        tree = self._robot_bridge_tree()
+        open_serial = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_open_serial"
+        )
+        handled_names = set()
+        assigns_serial_none = False
+        for node in ast.walk(open_serial):
+            if isinstance(node, ast.ExceptHandler) and isinstance(node.type, ast.Tuple):
+                handled_names.update(
+                    item.id for item in node.type.elts if isinstance(item, ast.Name)
+                )
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and node.value.value is None
+            ):
+                assigns_serial_none |= any(
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "serial"
+                    for target in node.targets
+                )
+
+        self.assertIn("OSError", handled_names)
+        self.assertTrue(assigns_serial_none)
+
 
 class RuntimeEvidencePolicyTests(unittest.TestCase):
     def test_mock_runtime_accepts_mock_evidence(self):

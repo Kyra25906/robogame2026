@@ -11,4 +11,5 @@ install_requires=[],zip_safe=True,maintainer="RoboGame Team",maintainer_email="t
 description="RoboGame bringup",license="MIT",
 entry_points={"console_scripts":[
     "manipulator_mock_smoke = robogame_bringup.manipulator_mock_smoke:main",
+    "field_no_hardware_smoke = robogame_bringup.field_no_hardware_smoke:main",
 ]})

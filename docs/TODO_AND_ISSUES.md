@@ -50,6 +50,7 @@
 - [x] `P1` `localization` 融合时检查 `imu_valid`：false 或数据过期时降级为纯里程计定位。证据：commit `a93d073`，`_imu_usable()` 同时检查 imu_valid 标志和 imu_stale_s 新鲜度（0.2s）。Ubuntu 验证新订阅 /robot/status 已生效，152 测试全过。
 - [x] `P1` `StreamDecoder` 增加 0x10（里程计）、0x11（IMU）、0x12（STATUS）帧解析骨架。证据：commit `8c8fe43`，`_dispatch_frame()` 已可按消息类型路由；实际载荷解析仍等待逐字节布局。
 - [x] `P1` 补齐串口外层协议抗异常测试：覆盖逐字节分片、多帧粘包、帧头跨读取、payload 内帧头、CRC 损坏、截断恢复、错误版本、超长声明、序号回绕、长噪声和编码边界；14/14 通过，未猜测 0x10/0x11/0x12 内部字段。
+- [ ] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：已实现缺失串口时 bridge 保持运行且通信不可信，并检查机构以 2001 拒绝、非零 cmd_vel 被握手门控；等待一键脚本实跑 PASS 后完成。
 - [x] `P0` 修正 STATUS 解析骨架的失败安全边界：在 0x12 载荷尚未完成长度、字段和值域校验时，不更新 `last_decoded_status_rx`，也不把占位 `boot_id=0` 当成真实 MCU 状态。证据：新增静态回归测试，防止占位分支重新写入这两个状态入口；硬件安全测试 13/13、全项目 153/153 通过。
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。

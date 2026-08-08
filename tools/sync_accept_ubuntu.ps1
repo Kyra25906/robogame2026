@@ -129,6 +129,8 @@ if [ "$skip_smoke" = "0" ]; then
     echo "[4/6] Running mock closed-loop smoke"
     cd "$acceptance_dir/ros2_ws"
     ros2 launch robogame_bringup manipulator_mock_smoke.launch.py
+    echo "Running field no-hardware fail-safe smoke"
+    ros2 launch robogame_bringup field_no_hardware_smoke.launch.py
 else
     echo "[4/6] Mock smoke skipped"
 fi
