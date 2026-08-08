@@ -79,7 +79,9 @@ else {
 }
 
 $remoteScript = @'
-set -euo pipefail
+# ROS 2 setup.bash reads optional variables that may be unset, so nounset
+# (-u) is intentionally disabled. We still stop on command and pipeline errors.
+set -eo pipefail
 
 repo_url="$1"
 acceptance_dir="$2"
