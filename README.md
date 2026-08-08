@@ -65,6 +65,8 @@ mission_manager → manipulator_client → 夹爪/升降服务 → 机械机构
 
 ## 文档入口
 
+完整文档分类和当前执行入口见 [docs 文档导航](docs/README.md)。
+
 | 角色或任务 | 文档 |
 |---|---|
 | 第一次安装、编译和运行 | [快速开始](docs/GETTING_STARTED.md) |
