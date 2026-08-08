@@ -84,6 +84,9 @@ _STATUS_FIELDS: list[str] = [
     "mechanism_fault",
     "battery_voltage",
     "error_code",
+    "calibrating",
+    "imu_valid",
+    "boot_id",
 ]
 
 
@@ -105,6 +108,9 @@ def _snapshot(status: RobotStatus | None) -> dict[str, Any]:
         "mechanism_fault": status.mechanism_fault,
         "battery_voltage": status.battery_voltage,
         "error_code": status.error_code,
+        "calibrating": status.calibrating,
+        "imu_valid": status.imu_valid,
+        "boot_id": status.boot_id,
     }
 
 

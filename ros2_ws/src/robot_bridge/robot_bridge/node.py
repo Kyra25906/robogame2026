@@ -213,6 +213,17 @@ class RobotBridge(Node):
         status.cube_present = self.mock_mechanism_state.cube_present
         status.retreat_complete = self.mock_mechanism_state.retreat_complete
         status.battery_voltage = 24.0
+        # IMU calibration state (mock: 2s calibration; real: fail-safe until
+        # 0x12 STATUS decoder provides actual values).
+        mock_start_after = float(self.get_parameter("mock_start_after_s").value)
+        if self.mock_mode:
+            status.calibrating = (now - self.started_at) < mock_start_after
+            status.imu_valid = not status.calibrating
+            status.boot_id = 0
+        else:
+            status.calibrating = True
+            status.imu_valid = False
+            status.boot_id = 0
         status.detail = "mock hardware" if self.mock_mode else (
             "MCU transport active; decoded RobotStatus unavailable"
             if transport_fresh

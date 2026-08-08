@@ -9,3 +9,6 @@ bool mechanism_fault
 float32 battery_voltage
 uint16 error_code
 string detail
+bool calibrating
+bool imu_valid
+uint16 boot_id
