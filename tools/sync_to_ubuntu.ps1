@@ -41,6 +41,7 @@ $tarArguments = @(
     "ros2_ws/src",
     "tests",
     "docs",
+    "tools",
     "README.md"
 )
 
