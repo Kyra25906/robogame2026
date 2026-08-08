@@ -25,6 +25,7 @@ from typing import Any
 
 import rclpy
 from rclpy.node import Node
+from robogame_core.hardware_readiness import format_mechanism_status_summary
 from robogame_interfaces.msg import RobotStatus
 from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
 
@@ -117,6 +118,11 @@ def _snapshot(status: RobotStatus | None) -> dict[str, Any]:
 def _flatten(prefix: str, snapshot: dict[str, Any]) -> dict[str, Any]:
     """Prefix keys so 'before' and 'after' snapshots fit in one CSV row."""
     return {f"{prefix}_{k}": v for k, v in snapshot.items()}
+
+
+def _status_from_row(row: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Rebuild one status snapshot from the flattened CSV row."""
+    return {field: row.get(f"{prefix}_{field}") for field in _STATUS_FIELDS}
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +303,7 @@ def run_acceptance(args: argparse.Namespace) -> int:
 
     wrote_header = False
     failures = 0
+    final_status = tester.capture_status()
 
     try:
         for spec in specs:
@@ -326,6 +333,8 @@ def run_acceptance(args: argparse.Namespace) -> int:
                 if not row["success"]:
                     failures += 1
 
+                final_status = _status_from_row(row, "status_after")
+
                 # Print a one-liner to stderr so the user can watch progress
                 # even when CSV goes to a file.
                 status_icon = "PASS" if row["success"] else "FAIL"
@@ -334,7 +343,8 @@ def run_acceptance(args: argparse.Namespace) -> int:
                     f"trial={trial}  "
                     f"duration={row['duration_s']}s  "
                     f"error_code={row['error_code']}  "
-                    f"detail={row['detail']}",
+                    f"detail={row['detail']}  "
+                    f"{format_mechanism_status_summary(final_status)}",
                     file=sys.stderr,
                 )
     finally:
@@ -342,13 +352,13 @@ def run_acceptance(args: argparse.Namespace) -> int:
             file_handle.close()
         tester.destroy()
 
-    if failures:
-        print(f"\n{failures} action(s) failed.", file=sys.stderr)
-    else:
-        print(
-            f"\nAll {args.repeat * len(specs)} action(s) passed.",
-            file=sys.stderr,
-        )
+    total = args.repeat * len(specs)
+    result = "FAIL" if failures else "PASS"
+    print(
+        f"[SUMMARY] result={result} actions={total} failures={failures} "
+        f"{format_mechanism_status_summary(final_status)}",
+        file=sys.stderr,
+    )
     return 1 if failures else 0
 
 

@@ -1,10 +1,40 @@
 from __future__ import annotations
 
 import math
+from typing import Any, Mapping
 
 
 RUNTIME_MODES = {"mock", "field"}
 MOCK_PLACEMENT_EVIDENCE_POLICIES = {"mock_qualified", "mock_failed"}
+
+
+def _flag_word(value: Any, *, true_word: str, false_word: str) -> str:
+    if value is None:
+        return "UNKNOWN"
+    return true_word if bool(value) else false_word
+
+
+def format_mechanism_status_summary(status: Mapping[str, Any]) -> str:
+    """Format the five field-critical status flags on one terminal line."""
+    return " ".join(
+        (
+            "comm=" + _flag_word(
+                status.get("communication_ok"), true_word="OK", false_word="BAD"
+            ),
+            "estop=" + _flag_word(
+                status.get("emergency_stop"), true_word="ON", false_word="OFF"
+            ),
+            "calibrating=" + _flag_word(
+                status.get("calibrating"), true_word="YES", false_word="NO"
+            ),
+            "imu_valid=" + _flag_word(
+                status.get("imu_valid"), true_word="YES", false_word="NO"
+            ),
+            "mechanism_fault=" + _flag_word(
+                status.get("mechanism_fault"), true_word="YES", false_word="NO"
+            ),
+        )
+    )
 
 
 def validate_runtime_evidence_policy(

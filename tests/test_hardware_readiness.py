@@ -3,10 +3,44 @@ import unittest
 from pathlib import Path
 
 from robogame_core.hardware_readiness import (
+    format_mechanism_status_summary,
     receive_timestamp_is_fresh,
     robot_status_communication_ok,
     validate_runtime_evidence_policy,
 )
+
+
+class MechanismStatusSummaryTests(unittest.TestCase):
+    def test_healthy_status_is_compact_and_unambiguous(self):
+        self.assertEqual(
+            format_mechanism_status_summary({
+                "communication_ok": True,
+                "emergency_stop": False,
+                "calibrating": False,
+                "imu_valid": True,
+                "mechanism_fault": False,
+            }),
+            "comm=OK estop=OFF calibrating=NO imu_valid=YES mechanism_fault=NO",
+        )
+
+    def test_missing_status_is_never_displayed_as_healthy(self):
+        self.assertEqual(
+            format_mechanism_status_summary({}),
+            "comm=UNKNOWN estop=UNKNOWN calibrating=UNKNOWN "
+            "imu_valid=UNKNOWN mechanism_fault=UNKNOWN",
+        )
+
+    def test_fault_flags_are_visible(self):
+        summary = format_mechanism_status_summary({
+            "communication_ok": False,
+            "emergency_stop": True,
+            "calibrating": True,
+            "imu_valid": False,
+            "mechanism_fault": True,
+        })
+        self.assertIn("comm=BAD", summary)
+        self.assertIn("estop=ON", summary)
+        self.assertIn("mechanism_fault=YES", summary)
 
 
 class ReceiveFreshnessTests(unittest.TestCase):
