@@ -12,6 +12,7 @@ vision_batch_smoke/
 vision_report_smoke/
 timeline_v2_smoke.jsonl
 timestamp_smoke.jsonl
+lessons/*/output/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
