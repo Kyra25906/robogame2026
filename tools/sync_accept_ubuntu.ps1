@@ -116,6 +116,9 @@ cd "$acceptance_dir/ros2_ws"
 source "/opt/ros/$ros_distro/setup.bash"
 colcon build --symlink-install
 source install/setup.bash
+echo "Running configuration consistency check"
+cd "$acceptance_dir"
+python3 tools/validate_config.py
 
 if [ "$skip_tests" = "0" ]; then
     echo "[3/6] Running unit tests"

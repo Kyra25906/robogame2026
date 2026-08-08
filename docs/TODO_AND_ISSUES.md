@@ -56,6 +56,7 @@
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
 - [x] `P1` 增加 Windows→Ubuntu 一键干净验收入口：按当前已推送提交创建独立 Ubuntu 仓库，自动执行构建、单元测试、模拟闭环和机构摘要，不覆盖两个历史目录。入口：`tools/sync_accept_ubuntu.cmd`。
 - [x] `P1` 复验一键验收首次实跑暴露的启动与退出竞态修复：Ubuntu 提交 `343bdec` 实跑构建 9 包、测试 156/156、模拟闭环 STABLE；四个动作状态完整、CSV 5 行、日志非空、脚本自行显示 ACCEPTANCE PASS，退出后无残留进程。
+- [ ] `P1` Ubuntu 复验配置一致性检查：已实现 common/mock/field 分层、正数与时间关系、场地航点、视觉范围、单方块目标及 legacy hardware 漂移检查，纯逻辑测试 8/8；等待真实五份 YAML 输出 `CONFIG PASS`。
 
 ## 现场第一天建议顺序
 
