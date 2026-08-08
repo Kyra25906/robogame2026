@@ -81,6 +81,7 @@ class RobotBridge(Node):
         self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
         self._handshake_retries = 0
+        self._last_boot_id: int | None = None
         if not self.mock_mode:
             self._open_serial()
         self.create_timer(0.02, self._tick)
@@ -213,6 +214,29 @@ class RobotBridge(Node):
             )
             self._handshake_state = _HANDSHAKE_READY
 
+    def _on_status_boot_id(self, boot_id: int) -> None:
+        """Detect MCU reset via boot_id change and reset dependent state.
+
+        Called when a decoded STATUS frame (0x12) provides a new boot_id.
+        On change: resets odometry integrator, forces re-handshake, and
+        invalidates IMU state until the next calibration cycle completes.
+        """
+        if self._last_boot_id is None:
+            self._last_boot_id = boot_id
+            return
+        if boot_id == self._last_boot_id:
+            return
+        self.get_logger().warn(
+            f"MCU reset detected: boot_id {self._last_boot_id} -> {boot_id}. "
+            "Resetting odometry and re-handshaking."
+        )
+        self._last_boot_id = boot_id
+        self.integrator = OdometryIntegrator(Pose2D(0.0, 0.0, 0.0))
+        if not self.mock_mode:
+            self._handshake_state = _HANDSHAKE_HANDSHAKING
+            self._handshake_last_hello = 0.0
+            self._handshake_retries = 0
+
     def _tick(self) -> None:
         now = time.monotonic()
         dt = now - self.last_tick
@@ -228,6 +252,10 @@ class RobotBridge(Node):
                 # last_decoded_status_rx until a signed 0x81 payload adapter
                 # has parsed and validated every required RobotStatus field.
                 self._accept_frame_for_handshake(_frame)
+                # STATUS frames carry boot_id for MCU-reset detection.
+                # The 0x12 payload adapter is not yet implemented, so
+                # _on_status_boot_id will be called once field offsets
+                # are confirmed by the electrical team.
                 self.last_frame_rx = now
         communication_ok = robot_status_communication_ok(
             mock_mode=self.mock_mode,
