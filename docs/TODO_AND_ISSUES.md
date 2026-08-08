@@ -50,13 +50,14 @@
 - [x] `P1` `localization` 融合时检查 `imu_valid`：false 或数据过期时降级为纯里程计定位。证据：commit `a93d073`，`_imu_usable()` 同时检查 imu_valid 标志和 imu_stale_s 新鲜度（0.2s）。Ubuntu 验证新订阅 /robot/status 已生效，152 测试全过。
 - [x] `P1` `StreamDecoder` 增加 0x10（里程计）、0x11（IMU）、0x12（STATUS）帧解析骨架。证据：commit `8c8fe43`，`_dispatch_frame()` 已可按消息类型路由；实际载荷解析仍等待逐字节布局。
 - [x] `P1` 补齐串口外层协议抗异常测试：覆盖逐字节分片、多帧粘包、帧头跨读取、payload 内帧头、CRC 损坏、截断恢复、错误版本、超长声明、序号回绕、长噪声和编码边界；14/14 通过，未猜测 0x10/0x11/0x12 内部字段。
-- [ ] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：已实现缺失串口时 bridge 保持运行且通信不可信，并检查机构以 2001 拒绝、非零 cmd_vel 被握手门控；等待一键脚本实跑 PASS 后完成。
+- [x] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：缺失串口时 bridge 保持运行且通信不可信，机构以 2001 拒绝、非零 cmd_vel 被握手门控。证据：commit `e49d088` 在 Ubuntu 构建 9 个包，field 无硬件 smoke 输出 PASS，并正常退出。
 - [x] `P0` 修正 STATUS 解析骨架的失败安全边界：在 0x12 载荷尚未完成长度、字段和值域校验时，不更新 `last_decoded_status_rx`，也不把占位 `boot_id=0` 当成真实 MCU 状态。证据：新增静态回归测试，防止占位分支重新写入这两个状态入口；硬件安全测试 13/13、全项目 153/153 通过。
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
 - [x] `P1` 增加 Windows→Ubuntu 一键干净验收入口：按当前已推送提交创建独立 Ubuntu 仓库，自动执行构建、单元测试、模拟闭环和机构摘要，不覆盖两个历史目录。入口：`tools/sync_accept_ubuntu.cmd`。
 - [x] `P1` 复验一键验收首次实跑暴露的启动与退出竞态修复：Ubuntu 提交 `343bdec` 实跑构建 9 包、测试 156/156、模拟闭环 STABLE；四个动作状态完整、CSV 5 行、日志非空、脚本自行显示 ACCEPTANCE PASS，退出后无残留进程。
-- [ ] `P1` Ubuntu 复验配置一致性检查：已实现 common/mock/field 分层、正数与时间关系、场地航点、视觉范围、单方块目标及 legacy hardware 漂移检查，纯逻辑测试 8/8；等待真实五份 YAML 输出 `CONFIG PASS`。
+- [x] `P1` Ubuntu 复验配置一致性检查：覆盖 common/mock/field 分层、正数与时间关系、场地航点、视觉范围、单方块目标及 legacy hardware 漂移。证据：commit `d022743` 在 Ubuntu 构建 9 个包，真实五份 YAML 输出 `CONFIG PASS: errors=0 warnings=0`。
+- [x] `P1` 补充 `motion_control` 远程安全边界测试：覆盖速度限幅、反向加减速、零时间步、异常里程计时间、角度跨越 ±π、到达目标归零、参数拒绝，以及所有结束路径先停车。测试发现并修复 `mechanism_fault` 未从 RobotStatus 传入运动安全判断的问题；全项目 185/185 通过。
 
 ## 现场第一天建议顺序
 
