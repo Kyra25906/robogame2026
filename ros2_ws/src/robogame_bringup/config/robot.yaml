@@ -82,4 +82,6 @@ mission_manager:
 localization:
   ros__parameters:
     imu_stale_s: 0.2
+    max_speed_mps: 3.0
+    divergence_threshold: 0.5
 
