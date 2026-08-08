@@ -243,9 +243,8 @@ class RobotBridge(Node):
 
     # -- frame dispatch skeleton ------------------------------------------
     # Payload decoders for 0x10 / 0x11 / 0x12 are not yet implemented.
-    # The dispatch routes each message type to the right handler so that
-    # downstream logic (handshake, boot_id, communication_ok) can be wired
-    # immediately; field decoding is backfilled once offsets are confirmed.
+    # Routing may record diagnostics, but it must not refresh decoded-state
+    # freshness or boot_id until the complete payload has passed validation.
 
     def _dispatch_frame(self, frame, now: float) -> None:
         msg_type = frame.message_type
@@ -256,10 +255,11 @@ class RobotBridge(Node):
                 f"seq={frame.sequence}  len={len(frame.payload)}"
             )
         if msg_type == MSG_TYPE_STATUS:
-            self.last_decoded_status_rx = now
-            # boot_id field offset is unknown; placeholder 0 keeps
-            # fail-safe behavior until the payload adapter exists.
-            self._on_status_boot_id(0)
+            # Fail closed: receiving a frame with the STATUS type is not the
+            # same as successfully decoding a complete RobotStatus payload.
+            # The future payload adapter owns last_decoded_status_rx and
+            # _on_status_boot_id() after length, field, and range validation.
+            pass
         elif msg_type == MSG_TYPE_ODOM:
             pass  # placeholder: decode encoder counts, vx/vy/wz, tick
         elif msg_type == MSG_TYPE_IMU:

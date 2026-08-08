@@ -1,4 +1,6 @@
+import ast
 import unittest
+from pathlib import Path
 
 from robogame_core.hardware_readiness import (
     receive_timestamp_is_fresh,
@@ -65,6 +67,34 @@ class RobotStatusCommunicationTests(unittest.TestCase):
             mock_mode=False, serial_open=True, last_decoded_status_s=9.0,
             now_s=10.0, timeout_s=0.3,
         ))
+
+
+class RobotBridgeDispatchSafetyTests(unittest.TestCase):
+    def test_placeholder_dispatch_cannot_mark_status_as_decoded(self):
+        node_path = (
+            Path(__file__).resolve().parents[1]
+            / "ros2_ws" / "src" / "robot_bridge" / "robot_bridge" / "node.py"
+        )
+        tree = ast.parse(node_path.read_text(encoding="utf-8"))
+        dispatch = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_dispatch_frame"
+        )
+
+        assigned_attributes = {
+            node.attr
+            for node in ast.walk(dispatch)
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+        }
+        called_methods = {
+            node.func.attr
+            for node in ast.walk(dispatch)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+
+        self.assertNotIn("last_decoded_status_rx", assigned_attributes)
+        self.assertNotIn("_on_status_boot_id", called_methods)
 
 
 class RuntimeEvidencePolicyTests(unittest.TestCase):
