@@ -19,7 +19,13 @@ from robogame_core.mock_mechanism import (
     execute_mock_mechanism,
 )
 from robogame_core.navigation import OdometryIntegrator
-from robogame_core.serial_protocol import StreamDecoder, encode_frame, encode_velocity
+from robogame_core.serial_protocol import (
+    MSG_TYPE_ACK,
+    StreamDecoder,
+    encode_frame,
+    encode_hello,
+    encode_velocity,
+)
 from robogame_interfaces.msg import RobotStatus
 from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
 from sensor_msgs.msg import Imu
@@ -27,6 +33,14 @@ from sensor_msgs.msg import Imu
 
 def yaw_to_quaternion(yaw: float) -> tuple[float, float, float, float]:
     return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+
+
+_HANDSHAKE_HELLO_INTERVAL_S = 0.5
+_HANDSHAKE_TIMEOUT_S = 3.0
+_HANDSHAKE_MAX_RETRIES = 3
+_HANDSHAKE_UNAVAILABLE = "UNAVAILABLE"
+_HANDSHAKE_HANDSHAKING = "HANDSHAKING"
+_HANDSHAKE_READY = "READY"
 
 
 class RobotBridge(Node):
@@ -64,6 +78,9 @@ class RobotBridge(Node):
         self.last_frame_rx: float | None = None
         self.last_decoded_status_rx: float | None = None
         self.mock_mechanism_state = MockMechanismState()
+        self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
+        self._handshake_last_hello = 0.0
+        self._handshake_retries = 0
         if not self.mock_mode:
             self._open_serial()
         self.create_timer(0.02, self._tick)
@@ -77,6 +94,8 @@ class RobotBridge(Node):
         self.get_logger().info(f"opened MCU serial port {port} at {baud}")
 
     def _on_cmd_vel(self, msg: Twist) -> None:
+        if self._handshake_state != _HANDSHAKE_READY:
+            return
         self.velocity = Velocity2D(msg.linear.x, msg.linear.y, msg.angular.z)
         self.last_command = time.monotonic()
         if self.serial is not None:
@@ -155,15 +174,60 @@ class RobotBridge(Node):
         response.detail = result.detail
         return response
 
+    def _run_handshake(self, now: float) -> None:
+        """Send periodic HELLO frames and watch for an ACK or STATUS reply.
+
+        After _HANDSHAKE_MAX_RETRIES failed attempts the state moves to
+        UNAVAILABLE and the bridge stays in fail-safe mode.
+        """
+        elapsed = now - self._handshake_last_hello
+        if elapsed >= _HANDSHAKE_HELLO_INTERVAL_S and self.serial is not None:
+            self.serial.write(encode_frame(MSG_TYPE_ACK, self.sequence, encode_hello()))
+            self.sequence = (self.sequence + 1) & 0xFFFF
+            self._handshake_last_hello = now
+
+        if now - self._handshake_last_hello > _HANDSHAKE_TIMEOUT_S:
+            if self._handshake_retries >= _HANDSHAKE_MAX_RETRIES:
+                self.get_logger().error(
+                    f"handshake failed after {self._handshake_retries + 1} attempts"
+                )
+                self._handshake_state = _HANDSHAKE_UNAVAILABLE
+                return
+            self._handshake_retries += 1
+            self._handshake_last_hello = now
+            self.get_logger().warn(
+                f"handshake timeout, retry {self._handshake_retries}/{_HANDSHAKE_MAX_RETRIES}"
+            )
+
+    def _accept_frame_for_handshake(self, frame) -> None:
+        """Check whether an incoming frame completes the handshake.
+
+        An ACK (0x13) or STATUS (0x12) frame is required before the bridge
+        enters READY and allows velocity commands.
+        """
+        if self._handshake_state != _HANDSHAKE_HANDSHAKING:
+            return
+        if frame.message_type in (MSG_TYPE_ACK, 0x12):
+            self.get_logger().info(
+                f"handshake complete (received type=0x{frame.message_type:02X})"
+            )
+            self._handshake_state = _HANDSHAKE_READY
+
     def _tick(self) -> None:
         now = time.monotonic()
         dt = now - self.last_tick
         self.last_tick = now
+
+        # ---------- handshake state machine ----------
+        if self._handshake_state == _HANDSHAKE_HANDSHAKING:
+            self._run_handshake(now)
+
         if self.serial is not None and self.serial.in_waiting:
             for _frame in self.decoder.feed(self.serial.read(self.serial.in_waiting)):
                 # Transport activity is diagnostic only. Do not update
                 # last_decoded_status_rx until a signed 0x81 payload adapter
                 # has parsed and validated every required RobotStatus field.
+                self._accept_frame_for_handshake(_frame)
                 self.last_frame_rx = now
         communication_ok = robot_status_communication_ok(
             mock_mode=self.mock_mode,

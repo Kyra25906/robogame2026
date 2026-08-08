@@ -10,6 +10,13 @@ HEADER = struct.Struct("<2sBBHH")
 CRC = struct.Struct("<H")
 VELOCITY_PAYLOAD = struct.Struct("<fffB")
 
+MSG_TYPE_VELOCITY = 0x01
+MSG_TYPE_HEARTBEAT = 0x02
+MSG_TYPE_ODOM = 0x10
+MSG_TYPE_IMU = 0x11
+MSG_TYPE_STATUS = 0x12
+MSG_TYPE_ACK = 0x13
+
 
 class ProtocolError(ValueError):
     pass
@@ -64,6 +71,11 @@ def decode_frame(data: bytes) -> Frame:
 
 def encode_velocity(vx: float, vy: float, wz: float, mode: int = 1) -> bytes:
     return VELOCITY_PAYLOAD.pack(vx, vy, wz, mode)
+
+
+def encode_hello() -> bytes:
+    """Return a HELLO frame payload carrying the protocol version."""
+    return bytes([VERSION])
 
 
 class StreamDecoder:
