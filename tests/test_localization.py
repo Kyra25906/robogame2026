@@ -1,5 +1,7 @@
+import ast
 import math
 import unittest
+from pathlib import Path
 
 from localization.quality import (
     choose_yaw_rate,
@@ -241,6 +243,49 @@ class TestClassifyPoseQuality(unittest.TestCase):
         result = classify_pose_quality(0.8, True, 10.0, True, True, True)
         self.assertEqual(result, "REJECT")
 
+
+class LocalizationNodeStructureTests(unittest.TestCase):
+    """ROS依赖不可用时，静态保护关键集成门控不被冲突覆盖。"""
+
+    @staticmethod
+    def _node_tree():
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "ros2_ws" / "src" / "localization"
+            / "localization" / "node.py"
+        )
+        return ast.parse(path.read_text(encoding="utf-8"))
+
+    def test_imu_selection_receives_robot_status_validity(self):
+        tree = self._node_tree()
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "choose_yaw_rate"
+        ]
+        self.assertEqual(len(calls), 1)
+        keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+        self.assertIn("status_valid", keywords)
+        self.assertIsInstance(keywords["status_valid"], ast.Attribute)
+        self.assertEqual(keywords["status_valid"].attr, "_imu_valid")
+
+    def test_pose_publication_path_keeps_all_required_rejections(self):
+        tree = self._node_tree()
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        string_literals = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        self.assertIn("odometry_is_finite", called)
+        self.assertIn("detect_yaw_divergence", called)
+        self.assertIn("detect_pose_jump", called)
+        self.assertTrue(any("all-zero quaternion" in text for text in string_literals))
 
 if __name__ == "__main__":
     unittest.main()
