@@ -211,6 +211,11 @@ echo "[6/6] All selected checks completed"
 echo "ACCEPTANCE PASS: commit $short_commit"
 '@
 
+# Windows PowerShell preserves CRLF inside here-strings. Normalize the script
+# body before piping it to Linux bash so options such as "pipefail" do not
+# receive a trailing carriage-return character.
+$remoteScript = $remoteScript -replace "`r`n", "`n"
+
 Write-Host "Connecting to ${UbuntuUser}@${UbuntuHost}..."
 $remoteScript | ssh @sshOptions "${UbuntuUser}@${UbuntuHost}" bash -s -- @remoteArgs
 if ($LASTEXITCODE -ne 0) {
