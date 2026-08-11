@@ -76,3 +76,11 @@ mission_manager:
     purple_waypoint: [1.5, 1.0, 0.0]
     build_waypoint: [0.5, 1.5, 1.5708]
     retreat_waypoint: [0.5, 1.2, 1.5708]
+
+
+localization:
+  ros__parameters:
+    imu_stale_s: 0.2
+    max_speed_mps: 3.0
+    divergence_threshold: 0.5
+

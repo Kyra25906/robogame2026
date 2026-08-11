@@ -52,6 +52,10 @@ def valid_bundle():
             build_waypoint=[0.5, 1.5, 1.57],
             retreat_waypoint=[0.5, 1.2, 1.57],
         ),
+        "localization": _node(
+            imu_stale_s=0.2, max_speed_mps=3.0,
+            divergence_threshold=0.5,
+        ),
     }
     mock = {
         "robot_bridge": _node(mock_mode=True),
@@ -186,6 +190,15 @@ class ConfigValidationTests(unittest.TestCase):
         bundle[0]["cube_perception"]["ros__parameters"]["orange_hsv"] = ["bad"] * 6
         issues = validate(bundle)
         self.assertTrue(any("orange_hsv" in issue.path for issue in issues))
+
+    def test_invalid_localization_safety_parameter_is_rejected(self):
+        bundle = valid_bundle()
+        bundle[0]["localization"]["ros__parameters"]["imu_stale_s"] = 0.0
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "imu_stale_s" in issue.path
+            for issue in issues
+        ))
 
     def test_input_can_be_copied_without_hidden_mutation(self):
         bundle = valid_bundle()

@@ -40,7 +40,7 @@ def validate_config_bundle(
 
     required_nodes = {
         "robot_bridge", "motion_controller", "cube_perception",
-        "manipulator_client", "mission_manager",
+        "manipulator_client", "mission_manager", "localization",
     }
     for node in sorted(required_nodes):
         if not _params(common, node):
@@ -51,6 +51,7 @@ def validate_config_bundle(
     perception = _params(common, "cube_perception")
     mission = _params(common, "mission_manager")
     bridge = _params(common, "robot_bridge")
+    localization = _params(common, "localization")
 
     positive_groups = {
         "robot.yaml:robot_bridge": (bridge, ["command_timeout_s"]),
@@ -72,6 +73,9 @@ def validate_config_bundle(
         ]),
         "robot.yaml:mission_manager": (mission, [
             "state_timeout_s", "build_stability_s",
+        ]),
+        "robot.yaml:localization": (localization, [
+            "imu_stale_s", "max_speed_mps", "divergence_threshold",
         ]),
     }
     for prefix, (params, names) in positive_groups.items():
