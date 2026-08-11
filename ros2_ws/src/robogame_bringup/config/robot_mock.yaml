@@ -1,0 +1,12 @@
+robot_bridge:
+  ros__parameters:
+    mock_mode: true
+    mock_start_after_s: 2.0
+    mock_grab_success: true
+    mock_release_success: true
+    mock_lift_success: true
+
+manipulator_client:
+  ros__parameters:
+    runtime_mode: mock
+    placement_evidence_policy: mock_qualified

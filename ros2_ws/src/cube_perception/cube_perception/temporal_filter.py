@@ -63,9 +63,11 @@ class TemporalDetectionFilter:
         self.config = config or TemporalFilterConfig()
         self.config.validate()
         self._tracks: dict[CubeColor, _Track] = {}
+        self._ambiguous: set[CubeColor] = set()
 
     def reset(self) -> None:
         self._tracks.clear()
+        self._ambiguous.clear()
 
     def update(self, detections: list[DetectionEstimate]) -> list[DetectionEstimate]:
         confirmed: list[DetectionEstimate] = []
@@ -74,6 +76,7 @@ class TemporalDetectionFilter:
             track = self._tracks.get(color)
 
             if not candidates:
+                self._ambiguous.discard(color)
                 if track is not None:
                     track.missed += 1
                     track.streak = 0
@@ -82,6 +85,16 @@ class TemporalDetectionFilter:
                 continue
 
             candidate = self._choose_candidate(candidates, track)
+            if candidate is None:
+                self._ambiguous.add(color)
+                if track is not None:
+                    track.missed += 1
+                    track.streak = 0
+                    if track.missed > self.config.max_missed_frames:
+                        del self._tracks[color]
+                continue
+
+            self._ambiguous.discard(color)
             matched = track is not None and _pixel_distance(track.estimate, candidate) <= self.config.match_distance_px
             if not matched:
                 track = _Track(candidate)
@@ -99,20 +112,30 @@ class TemporalDetectionFilter:
 
     def _choose_candidate(
         self, candidates: list[DetectionEstimate], track: _Track | None
-    ) -> DetectionEstimate:
+    ) -> DetectionEstimate | None:
         if track is not None:
-            nearest = min(candidates, key=lambda item: _pixel_distance(track.estimate, item))
-            if _pixel_distance(track.estimate, nearest) <= self.config.match_distance_px:
-                return nearest
-        return max(candidates, key=lambda item: (item.confidence, -item.distance_m))
+            nearby = [
+                item
+                for item in candidates
+                if _pixel_distance(track.estimate, item) <= self.config.match_distance_px
+            ]
+            if len(nearby) == 1:
+                return nearby[0]
+            if len(nearby) > 1:
+                return None
+        return candidates[0] if len(candidates) == 1 else None
 
     def debug_state(self) -> dict[str, dict[str, int | bool]]:
         return {
             color.value: {
-                "streak": track.streak,
-                "missed": track.missed,
-                "confirmed": track.streak >= self.config.confirm_frames,
+                "streak": self._tracks[color].streak if color in self._tracks else 0,
+                "missed": self._tracks[color].missed if color in self._tracks else 0,
+                "confirmed": (
+                    color in self._tracks
+                    and self._tracks[color].streak >= self.config.confirm_frames
+                    and color not in self._ambiguous
+                ),
+                "ambiguous": color in self._ambiguous,
             }
-            for color, track in self._tracks.items()
+            for color in self._tracks.keys() | self._ambiguous
         }
-

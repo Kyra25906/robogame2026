@@ -1,0 +1,20 @@
+action,phase,planned_budget_s,estimated_real_min_s,estimated_real_max_s,estimated_real_typical_s,can_parallel,depends_on,risk_if_exceeded,notes
+GRAB,clamp_close,3.0,0.5,2.0,1.0,no,ARM_READY,timeout triggers MECHANISM_ERROR,fingers closing + sensor confirmation delay
+GRAB,cube_detect,0.0,0.05,0.3,0.1,yes,CLAMP_CLOSED,missed detection → false FAIL,embedded in clamp close wait
+LIFT,raise_to_layer1,3.0,1.0,3.0,2.0,no,GRAB_DONE,max height 0.1m; short stroke
+LIFT,raise_to_layer2,3.0,1.5,4.0,2.5,no,GRAB_DONE,0.2m lift; motor under load
+LIFT,raise_to_layer3,3.0,2.0,5.0,3.0,no,GRAB_DONE,0.3m max lift; heaviest load case
+RELEASE,clamp_open,3.0,0.3,1.5,0.5,no,LIFT_DONE,timeout → false FAIL,simple open; fast operation
+STOP,chassis_halt,0.5,0.02,0.2,0.05,no,ANY,通信断时由电控独立执行,电控端 ≤150ms 硬件超时
+APPROACH,visual_search,0.0,0.5,3.0,1.0,yes,CMD_RECEIVED,no target found → SEARCH or TIMEOUT,rotate/find color block
+APPROACH,low_speed_align,0.0,1.5,5.0,3.0,no,TARGET_LOCKED,overshoot → back-and-forth oscillation,<0.18 m/s P-control approach
+RETREAT,back_off,2.0,0.5,2.0,1.0,no,RELEASE_DONE,must clear placement ROI,small reverse motion ~0.3m
+OBSERVE,stability_check,3.0,1.0,4.0,2.0,no,RETREAT_DONE,false FAIL → unnecessary retry,visual evidence accumulation ≥3s
+PICK_TOTAL,full_pick_sequence,12.0,4.55,14.3,7.1,,,see breakdown below,
+PICK_BREAKDOWN,,,min=APPROACH(2.0)+GRAB(0.55)+LIFT(1.0)+RETREAT(0.5)+MARGIN(0.5),,,,,,
+PICK_BREAKDOWN,,,max=APPROACH(8.0)+GRAB(2.3)+LIFT(5.0)+RETREAT(2.0)+MARGIN(1.0),,,,,,
+PICK_BREAKDOWN,,,typical=APPROACH(4.0)+GRAB(1.1)+LIFT(2.5)+RETREAT(1.0)+MARGIN(0.5),,,,,,
+PLACE_TOTAL,full_place_sequence,12.0,3.32,12.5,6.55,,,see breakdown below,
+PLACE_BREAKDOWN,,,min=LIFT(0.5)+RELEASE(0.3)+RETREAT(0.5)+OBSERVE(1.0)+MARGIN(1.02),,,,,,
+PLACE_BREAKDOWN,,,max=LIFT(5.0)+RELEASE(1.5)+RETREAT(2.0)+OBSERVE(4.0)+MARGIN(0.0),,,,,,
+PLACE_BREAKDOWN,,,typical=LIFT(2.5)+RELEASE(0.5)+RETREAT(1.0)+OBSERVE(2.0)+MARGIN(0.55),,,,,,

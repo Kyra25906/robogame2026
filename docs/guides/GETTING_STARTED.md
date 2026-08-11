@@ -30,7 +30,7 @@ ros2 launch robogame_bringup single_cube.launch.py
 ```
 
 Do not run `hardware.launch.py` until the MCU frame mapping in
-`docs/MCU_PROTOCOL.md` has been implemented and bench-tested with the wheels raised.
+`docs/field/MCU_PROTOCOL.md` has been implemented and bench-tested with the wheels raised.
 
 ## Core tests without ROS
 

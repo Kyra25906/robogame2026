@@ -1,0 +1,16 @@
+robot_bridge:
+  ros__parameters:
+    mock_mode: false
+    serial_port: /dev/ttyACM0
+    baud_rate: 115200
+
+manipulator_client:
+  ros__parameters:
+    runtime_mode: field
+    placement_evidence_policy: unavailable
+
+cube_perception:
+  ros__parameters:
+    # GF100 bench candidate only: 1280x720 with the current manual focus.
+    # Revalidate after the final camera mount, resolution, or focus changes.
+    fallback_focal_px: 2550.0

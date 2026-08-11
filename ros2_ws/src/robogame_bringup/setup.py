@@ -8,5 +8,8 @@ data_files=[("share/ament_index/resource_index/packages",["resource/"+name]),
             ("share/"+name+"/launch",glob("launch/*.launch.py")),
             ("share/"+name+"/config",glob("config/*.yaml"))],
 install_requires=[],zip_safe=True,maintainer="RoboGame Team",maintainer_email="team@example.com",
-description="RoboGame bringup",license="MIT")
-
+description="RoboGame bringup",license="MIT",
+entry_points={"console_scripts":[
+    "manipulator_mock_smoke = robogame_bringup.manipulator_mock_smoke:main",
+    "field_no_hardware_smoke = robogame_bringup.field_no_hardware_smoke:main",
+]})

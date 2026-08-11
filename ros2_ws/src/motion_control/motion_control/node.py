@@ -78,14 +78,23 @@ class MotionControllerNode(Node):
             status_received=status_fresh,
             communication_ok=bool(status and status.communication_ok),
             emergency_stop=bool(status and status.emergency_stop),
+            mechanism_fault=bool(status and status.mechanism_fault),
         )
+
+    @staticmethod
+    def _status_failure_detail(failure, unavailable_detail: str) -> str:
+        if failure.value == "SAFETY_STOP":
+            return "emergency stop"
+        if failure.value == "MECHANISM_ERROR":
+            return "mechanism fault"
+        return unavailable_detail
 
     def _on_robot_status(self, msg: RobotStatus) -> None:
         self.robot_status = msg
         self.robot_status_time = time.monotonic()
         failure = self._status_failure()
         if self.goal is not None and failure is not None:
-            detail = "emergency stop" if failure.value == "SAFETY_STOP" else "robot communication unavailable"
+            detail = self._status_failure_detail(failure, "robot communication unavailable")
             self._finish(f"{failure.value}: {detail}")
 
     def _on_pose(self, msg: Odometry) -> None:
@@ -105,7 +114,9 @@ class MotionControllerNode(Node):
     def _on_goal(self, msg: Pose2DMsg) -> None:
         failure = self._status_failure()
         if failure is not None:
-            detail = "emergency stop" if failure.value == "SAFETY_STOP" else "robot status missing or communication unavailable"
+            detail = self._status_failure_detail(
+                failure, "robot status missing or communication unavailable"
+            )
             self._finish(f"{failure.value}: {detail}")
             return
         candidate = Pose2D(msg.x, msg.y, msg.theta)
@@ -139,7 +150,9 @@ class MotionControllerNode(Node):
         now = time.monotonic()
         status_failure = self._status_failure()
         if status_failure is not None:
-            detail = "emergency stop" if status_failure.value == "SAFETY_STOP" else "robot status stale or communication unavailable"
+            detail = self._status_failure_detail(
+                status_failure, "robot status stale or communication unavailable"
+            )
             self._finish(f"{status_failure.value}: {detail}")
             return
         if self.pose is None or now - self.pose_time > float(self.get_parameter("pose_stale_s").value):

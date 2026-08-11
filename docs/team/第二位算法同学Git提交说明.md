@@ -155,7 +155,7 @@ tests/test_localization.py
 tests/test_navigation.py
 tools/navigation_acceptance.py
 ros2_ws/src/robogame_bringup/config/robot.yaml
-docs/MCU_PROTOCOL.md
+docs/field/MCU_PROTOCOL.md
 定位和导航测试记录
 ```
 
