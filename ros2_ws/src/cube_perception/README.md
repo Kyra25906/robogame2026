@@ -246,7 +246,10 @@ ros2 run cube_perception mock_perception
 - `min_rectangularity`、`min_solidity`、`max_rotated_aspect_ratio`：排除不像方块的轮廓。
 - `confirm_frames`：连续看到多少帧才对外发布。
 - `max_missed_frames`：短暂丢失多少帧后删除跟踪记录。
-- `fallback_focal_px`／JSON 中的 `focal_px`：没有相机内参时的临时焦距。
+- `fallback_focal_px`／JSON 中的 `focal_px`：没有相机内参时使用的像素焦距。
+  通用配置保留开发兜底值 `700.0`；GF100、1280×720、当前手动对焦状态的台架
+  候选值 `2550.0` 单独保存在 `config/vision_gf100_1280x720_bench.json`，现场模式
+  由 `robot_field.yaml` 显式覆盖。改变分辨率、镜头或对焦后必须重新标定。
 
 ## 7. 当前完成度与现场待办
 

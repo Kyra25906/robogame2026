@@ -1,7 +1,13 @@
 import copy
+import json
+from pathlib import Path
+import re
 import unittest
 
 from robogame_core.config_validation import validate_config_bundle
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _node(**params):
@@ -82,6 +88,50 @@ def validate(bundle):
 
 
 class ConfigValidationTests(unittest.TestCase):
+    def test_camera_specific_focal_calibration_is_separated_from_defaults(self):
+        vision_default = json.loads(
+            (
+                PROJECT_ROOT
+                / "ros2_ws/src/cube_perception/config/vision_default.json"
+            ).read_text(encoding="utf-8")
+        )
+        vision_demo = json.loads(
+            (
+                PROJECT_ROOT
+                / "ros2_ws/src/cube_perception/config/vision_demo_roi.json"
+            ).read_text(encoding="utf-8")
+        )
+        vision_gf100 = json.loads(
+            (
+                PROJECT_ROOT
+                / "ros2_ws/src/cube_perception/config/vision_gf100_1280x720_bench.json"
+            ).read_text(encoding="utf-8")
+        )
+        robot_text = (
+            PROJECT_ROOT
+            / "ros2_ws/src/robogame_bringup/config/robot.yaml"
+        ).read_text(encoding="utf-8")
+        field_text = (
+            PROJECT_ROOT
+            / "ros2_ws/src/robogame_bringup/config/robot_field.yaml"
+        ).read_text(encoding="utf-8")
+        common_focal_matches = re.findall(
+            r"^\s+fallback_focal_px:\s*([0-9]+(?:\.[0-9]+)?)\s*$",
+            robot_text,
+            flags=re.MULTILINE,
+        )
+        field_focal_matches = re.findall(
+            r"^\s+fallback_focal_px:\s*([0-9]+(?:\.[0-9]+)?)\s*$",
+            field_text,
+            flags=re.MULTILINE,
+        )
+
+        self.assertEqual(vision_default["focal_px"], 700.0)
+        self.assertEqual(vision_demo["focal_px"], vision_default["focal_px"])
+        self.assertEqual(common_focal_matches, [str(vision_default["focal_px"])])
+        self.assertEqual(vision_gf100["focal_px"], 2550.0)
+        self.assertEqual(field_focal_matches, [str(vision_gf100["focal_px"])])
+
     def test_valid_bundle_has_no_issues(self):
         self.assertEqual(validate(valid_bundle()), [])
 
