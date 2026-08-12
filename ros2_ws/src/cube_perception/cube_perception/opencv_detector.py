@@ -32,6 +32,7 @@ class DetectorConfig:
     min_solidity: float = 0.50
     min_side_px: float = 12.0
     max_rotated_aspect_ratio: float = 3.2
+    max_working_distance_m: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "DetectorConfig":
@@ -66,6 +67,7 @@ class DetectorConfig:
             "min_solidity": self.min_solidity,
             "min_side_px": self.min_side_px,
             "max_rotated_aspect_ratio": self.max_rotated_aspect_ratio,
+            "max_working_distance_m": self.max_working_distance_m,
         }
 
     def validate(self) -> None:
@@ -109,6 +111,8 @@ class DetectorConfig:
             raise ValueError("min_solidity must be in [0, 1]")
         if self.min_side_px <= 0.0 or self.max_rotated_aspect_ratio < 1.0:
             raise ValueError("min_side_px must be positive and max aspect ratio at least 1")
+        if self.max_working_distance_m is not None and self.max_working_distance_m <= 0.0:
+            raise ValueError("max_working_distance_m must be positive when set")
 
 
 class CubeDetector:
@@ -156,6 +160,7 @@ class CubeDetector:
                 "small": 0,
                 "large": 0,
                 "clipped": 0,
+                "far": 0,
                 "shape": 0,
                 "accepted": 0,
             }
@@ -221,7 +226,14 @@ class CubeDetector:
                         distance_m=distance_m,
                         lateral_m=lateral_m,
                     )
-                if estimate and estimate.confidence >= self.config.min_confidence:
+                if estimate is None:
+                    stats["shape"] += 1
+                elif (
+                    self.config.max_working_distance_m is not None
+                    and estimate.distance_m > self.config.max_working_distance_m
+                ):
+                    stats["far"] += 1
+                elif estimate.confidence >= self.config.min_confidence:
                     estimates.append(estimate)
                     stats["accepted"] += 1
                 else:
