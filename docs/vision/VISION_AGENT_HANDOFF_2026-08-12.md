@@ -11,9 +11,17 @@
 ```text
 repository: https://github.com/Kyra25906/robogame2026.git
 branch: codex/vision-field-readiness
-baseline commit: d81d277c108d300ac11ed9484737af7d9a5c15e7
+baseline commit: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
 ROS: ROS 2 Jazzy
 vision package: ros2_ws/src/cube_perception/
+```
+
+基线包含三个视觉修复 commit（按时间顺序）：
+
+```text
+d81d277 feat(vision): reject ambiguous targets and isolate GF100 config
+e1388fa fix(vision): reject clipped targets and correct distance sizing
+f6f736e feat(vision): add configurable max working distance filter
 ```
 
 优先允许修改：
@@ -32,18 +40,20 @@ vision package: ros2_ws/src/cube_perception/
 
 不要在树莓派上修改代码，不连接 STM32，不启动 `robot_bridge`，不运行整车 launch。
 
-## 3. 本次交付候选状态
-
-交接文档生成前的工作区如下；完成交付后，应以包含本文的分支最新提交和 `git status` 为准：
+## 3. 当前交付状态（已推送）
 
 ```text
 branch: codex/vision-field-readiness
-HEAD: d81d277c108d300ac11ed9484737af7d9a5c15e7
+HEAD: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
+remote: origin/codex/vision-field-readiness (已同步)
 
-M ros2_ws/src/cube_perception/cube_perception/opencv_detector.py
-M tests/test_opencv_detector.py
+已追踪修改（三个 commit 均已推送，工作区无已追踪文件的修改）：
+M ros2_ws/src/cube_perception/cube_perception/opencv_detector.py (触边+短边+距离过滤)
+M ros2_ws/src/cube_perception/cube_perception/node.py (+max_working_distance_m 参数)
+M tests/test_opencv_detector.py (+6 tests)
 
-?? docs/vision/CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md
+新增未跟踪文档：
+?? docs/vision/TEACHING_INCREMENTAL_DEVELOPMENT_AGREEMENT.md
 ?? docs/vision/GF100_CAMERA_CALIBRATION_CANDIDATE_REPORT_2026-08-12.md
 ?? docs/vision/VISION_FIELD_TASKS_2026-08-12.md
 ?? docs/vision/VISION_AGENT_HANDOFF_2026-08-12.md
@@ -97,49 +107,53 @@ tests/test_opencv_detector.py
 
 ## 5. 已完成测试
 
-使用：
+使用 `D:\python.exe`（含 OpenCV 4.13.0）：
 
 ```powershell
-$env:PYTHONPATH=((Resolve-Path 'ros2_ws/src/cube_perception').Path+';'+(Resolve-Path 'ros2_ws/src/robogame_core').Path)
+$env:PYTHONPATH = "$repo\ros2_ws\src\cube_perception;$repo\ros2_ws\src\robogame_core"
 ```
 
 检测器测试：
 
 ```powershell
-python -B -m unittest tests.test_opencv_detector -v
+& "D:\python.exe" -B -m unittest tests.test_opencv_detector -v
 ```
 
 结果：
 
 ```text
-7 tests, OK
-```
-
-必要回归：
-
-```powershell
-python -B -m unittest tests.test_perception tests.test_temporal_filter tests.test_config_validation -v
-```
-
-结果：
-
-```text
-20 tests, OK
+10 tests, OK
 ```
 
 完整回归：
 
 ```powershell
-python -B -m unittest discover -s tests -v
+& "D:\python.exe" -B -m unittest discover -s tests -v
 ```
 
 结果：
 
 ```text
-192 tests, OK
+195 tests, OK
 ```
 
-`git diff --check` 已通过。
+### 5.1 空场景端到端验证
+
+```powershell
+& "D:\python.exe" -B -m cube_perception.standalone `
+  --source "C:\Users\dahli\Pictures\Camera Roll\environment\WIN_20260812_17_46_24_Pro.mp4" `
+  --config results/workspace/gf100_environment_empty_20260812/vision_gf100_maxdist_1.2.json `
+  --headless `
+  --jsonl results/workspace/gf100_environment_empty_20260812/maxdist_test/detections.jsonl
+```
+
+结果：
+
+```text
+523 帧, 46.0 FPS
+0 帧出现橙色确认目标（修复前：176/523，33.65%）
+所有橙色轮廓被 far 拒绝（5-6 个/帧）
+```
 
 ## 6. GF100 候选标定
 
@@ -398,14 +412,14 @@ distance_invalid_reason: side_rotated | occluded | clipped | out_of_working_rang
 
 ## 13. P0/P1 清单
 
-### P0
+### P0（2026-08-12 更新）
 
-- [ ] 复核当前四个视觉交付文件的最终 diff。
-- [ ] 决定 `CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md` 是否已过时；不要把过时状态混入新提交。
-- [ ] 确认 ACQUIRE 阶段是否允许只在 `<=1.2 m` 建立方块轨迹。
-- [ ] 若确认，独立实现可配置最大抓取距离，并补单元测试。
-- [ ] 重跑空场景视频、60张正面样本、困难样本和完整回归。
-- [ ] 将触边拒绝、短边测距、必要文档作为独立视觉修复 commit 提交并推送。
+- [x] 复核当前四个视觉交付文件的最终 diff。
+- [x] 独立实现可配置最大抓取距离，并补单元测试。
+- [x] 重跑空场景视频、60张正面样本和完整回归（195 项测试，空场景 0 误检）。
+- [x] 将触边拒绝、短边测距、最大工作距离和必要文档作为独立 commit 提交并推送。
+- [ ] 决定 `CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md` 是否已过时。
+- [ ] 由总集成确认 ACQUIRE 阶段是否允许只在 `<=1.2 m` 建立方块轨迹。
 
 ### P1
 
@@ -422,18 +436,15 @@ distance_invalid_reason: side_rotated | occluded | clipped | out_of_working_rang
 docs/vision/VISION_FIELD_TASKS_2026-08-12.md
 ```
 
-## 14. 下一步唯一任务
+## 14. 当前下一步（2026-08-12 更新）
 
-先审计当前视觉节点是否已经能接收或推导 `SEARCH / ACQUIRE / VERIFY` 阶段。
+P0 软件层面已全部完成。下一步：
 
-输出仅应是：
+1. 由总集成确认任务是否需要在 1.2 m 以外发现方块。
+2. 确认后在 `vision_gf100_1280x720_bench.json` 中正式启用 `max_working_distance_m`。
+3. 或确认需要远距离检测后，设计 SEARCH/ACQUIRE 阶段切换。
 
-1. 已有阶段输入来自哪里；
-2. 若没有，最小接口需求是什么；
-3. `1.2 m` 最大抓取距离应在哪一层启用；
-4. 不直接修改 `mission_manager`、消息接口、launch 或 `robot.yaml`。
-
-在该接口决策完成前，不要把 `1.2 m` 写入通用 `vision_default.json`，也不要同时调整 HSV、ROI、面积或时序参数。
+在该接口决策完成前，不调整 HSV、ROI、面积或时序参数。
 
 ## 15. 交付边界
 

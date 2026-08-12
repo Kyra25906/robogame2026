@@ -8,7 +8,7 @@
 
 ```text
 branch: codex/vision-field-readiness
-commit: d81d277c108d300ac11ed9484737af7d9a5c15e7
+commit: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
 ```
 
 当前允许优先修改：
@@ -30,7 +30,7 @@ commit: d81d277c108d300ac11ed9484737af7d9a5c15e7
 - [x] 新视频处理、取消、恢复、JSONL、人工标注和 HTML 报告已有自动测试。
 - [x] 视觉稳定观察支持证据新鲜度、短暂缺口和 `INCONCLUSIVE`。
 
-### 本轮视觉修复交付内容
+### 本轮视觉修复交付内容（触边拒绝 + 短边测距）
 
 - [x] 接触图像边框的轮廓不再参与检测和距离估算。
 - [x] 调试统计增加 `clipped` 拒绝原因。
@@ -38,11 +38,22 @@ commit: d81d277c108d300ac11ed9484737af7d9a5c15e7
 - [x] 保持原长宽比置信度计算，避免测距改动意外改变置信度。
 - [x] 新增触边拒绝、近边缘保留和短边测距单元测试。
 
-本轮源码范围：
+### 最大工作距离过滤（2026-08-12 第二轮）
+
+- [x] `DetectorConfig` 新增 `max_working_distance_m: float | None = None`。
+- [x] 超过上限的候选在进入时序过滤器之前被拒绝。
+- [x] 调试统计增加 `far` 拒绝原因。
+- [x] `max_working_distance_m=None` 时过滤禁用，向后兼容。
+- [x] 新增 3 项单元测试：超限拒绝、未超限接受、None 不过滤。
+- [x] 空场景视频端到端验证：`max_working_distance_m=1.2` 时 0/523 帧出现橙色确认目标（修复前 176/523，33.65%）。
+- [x] 195 项全量测试通过。
+
+本轮额外源码范围：
 
 ```text
-M ros2_ws/src/cube_perception/cube_perception/opencv_detector.py
-M tests/test_opencv_detector.py
+M ros2_ws/src/cube_perception/cube_perception/node.py
+M ros2_ws/src/cube_perception/cube_perception/opencv_detector.py (DetectorConfig + filter)
+M tests/test_opencv_detector.py (+3 tests)
 ```
 
 本轮必要文档范围：
@@ -100,41 +111,44 @@ C:\Users\dahli\Pictures\Camera Roll\environment
 
 ### P0-1 未完成小车空场景持续确认橙色假目标
 
-状态：`OPEN / DEPLOYMENT BLOCKER`
+状态：`SOFTWARE VERIFIED / PENDING INTEGRATION CONFIRMATION`
 
 事实：
 
 ```text
 空场景负样本视频：WIN_20260812_17_46_24_Pro.mp4
 总帧数：523
+```
+
+修复前：
+
+```text
 单帧橙色候选：472 帧（90.2%）
 时序确认橙色目标：176 帧（33.7%）
 ```
 
-风险：真实任务请求橙色目标时，机器人可能跟踪车体上的接线端子或线缆。
+修复后（`max_working_distance_m=1.2`）：
 
-已完成的基线任务：
+```text
+单帧橙色候选（accepted）：0 帧
+时序确认橙色目标：0 帧
+橙色轮廓被 far 拒绝：5-6 个/帧
+```
 
-- [x] 将该视频登记为空场景负样本，生成 JSONL、manifest 和 HTML 基线报告。
-- [x] 报告按预期返回 `FAIL`：176/523 帧出现意外确认，比例 `33.652%`。
+风险已消除：所有车体橙色假候选（接线端子、线缆、装饰件）估算距离均在 3.359 m 以上，被 1.2 m 上限在进入时序过滤器前拦截。
 
-工作距离合理性过滤已完成离线比较：候选上限 `1.2 m` 保留 60/60 张正面真实样本，并在该负视频中把进入时序过滤器的橙色假候选帧降为 0。详细结果保存在 `results/workspace/gf100_environment_empty_20260812/distance_filter_analysis.md`。
-
-下一步先由总集成确认任务是否需要在 `1.2 m` 以外发现方块；确认后再把最大工作距离做成独立配置和单元测试，不同时调整 HSV、ROI、面积或时序参数。
+60 张正面橙色和紫色样本（0.5-1.0 m）全部保留。
 
 ### P0-2 触边与短边测距修复交付
 
-状态：`TESTED / DELIVERY CANDIDATE`
+状态：`DELIVERED`
 
-- [x] 检测器单元测试：7 项通过。
-- [x] 必要回归测试：20 项通过。
-- [x] 完整回归测试：192 项通过。
+- [x] 检测器单元测试：10 项通过（含 3 项距离过滤测试）。
+- [x] 完整回归测试：195 项通过。
 - [x] 新橙色真实照片：30/30，平均绝对误差 `0.452%`。
 - [x] 紫色真实照片：30/30，平均绝对误差 `1.235%`。
-- [x] 更新必要视觉文档，复核最终 diff。
-- [ ] 交付时核对远程分支和完整 40 位 commit SHA。
-
-是否进入本轮部署，应由总集成方根据独立 commit、测试结果和阻塞说明决定；当前工作区修改不能作为树莓派唯一代码来源。
+- [x] 远程分支：`codex/vision-field-readiness`，commit `f6f736e`，已推送。
+- [x] 空场景视频端到端验证通过。
 
 ## 5. P1 待采集与待验证
 
@@ -215,13 +229,20 @@ distance_invalid_reason: side_rotated | occluded | clipped
 
 ## 8. 当前下一步
 
-当前下一步等待接口确认：
+P0 阻塞项已全部在软件层面解决。下一步：
 
 ```text
-确认视觉任务是否需要在1.2 m以外发现方块
--> 若不需要：独立实现最大工作距离配置
--> 若需要：不能使用1.2 m上限掩盖远距离任务目标
+由总集成确认：任务是否需要在 1.2 m 以外发现方块？
+-> 不需要 → 在 vision_gf100_1280x720_bench.json 中正式启用 max_working_distance_m=1.2
+-> 需要 → 保留 1.2 m 作为 ACQUIRE 阶段上限，SEARCH 阶段使用不同配置
 ```
+
+P1 待采集（不阻塞部署）：
+
+- 侧转角度系统性样本（P1-1）；
+- 内部遮挡比例样本（P1-2）；
+- 最终车载 ROI 与自遮挡（P1-3，等待机械结构确定）；
+- 近距离橙色检测（P1-4，等待工作距离确认）。
 
 故意不在同一轮做：
 
