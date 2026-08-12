@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -151,7 +151,14 @@ class CubeDetector:
             mask = cv2.bitwise_and(mask, roi_mask)
             masks[color] = mask
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            stats = {"contours": len(contours), "small": 0, "large": 0, "shape": 0, "accepted": 0}
+            stats = {
+                "contours": len(contours),
+                "small": 0,
+                "large": 0,
+                "clipped": 0,
+                "shape": 0,
+                "accepted": 0,
+            }
             for contour in contours:
                 contour_area = float(cv2.contourArea(contour))
                 if contour_area < self.config.min_area_px:
@@ -159,6 +166,15 @@ class CubeDetector:
                     continue
                 if contour_area / image_area > self.config.max_area_ratio:
                     stats["large"] += 1
+                    continue
+                bound_x, bound_y, bound_width, bound_height = cv2.boundingRect(contour)
+                if (
+                    bound_x <= 0
+                    or bound_y <= 0
+                    or bound_x + bound_width >= image_width
+                    or bound_y + bound_height >= image_height
+                ):
+                    stats["clipped"] += 1
                     continue
                 (center_x, center_y), (raw_width, raw_height), _angle = cv2.minAreaRect(contour)
                 short_side = min(float(raw_width), float(raw_height))
@@ -193,6 +209,18 @@ class CubeDetector:
                     min_area=self.config.min_area_px,
                     max_aspect_error=self.config.max_aspect_error,
                 )
+                if estimate is not None:
+                    distance_m = self.config.cube_size_m * self.config.focal_px / short_side
+                    lateral_m = (
+                        (center_x - image_width / 2.0)
+                        * distance_m
+                        / self.config.focal_px
+                    )
+                    estimate = replace(
+                        estimate,
+                        distance_m=distance_m,
+                        lateral_m=lateral_m,
+                    )
                 if estimate and estimate.confidence >= self.config.min_confidence:
                     estimates.append(estimate)
                     stats["accepted"] += 1
