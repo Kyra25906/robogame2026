@@ -85,6 +85,8 @@ class RobotBridge(Node):
         self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
         self._handshake_retries = 0
+        self._communication_ok = self.mock_mode
+        self._cmd_vel_block_warned = False
         self._last_boot_id: int | None = None
         self._frame_types_seen: set[int] = set()
         if not self.mock_mode:
@@ -108,7 +110,21 @@ class RobotBridge(Node):
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         if self._handshake_state != _HANDSHAKE_READY:
+            if not self._cmd_vel_block_warned:
+                self.get_logger().warn(
+                    f"cmd_vel blocked: handshake_state={self._handshake_state}"
+                )
+                self._cmd_vel_block_warned = True
             return
+        if not self._communication_ok:
+            if not self._cmd_vel_block_warned:
+                self.get_logger().warn(
+                    "cmd_vel blocked: communication_ok=False "
+                    "(STATUS payload undecoded or stale)"
+                )
+                self._cmd_vel_block_warned = True
+            return
+        self._cmd_vel_block_warned = False
         self.velocity = Velocity2D(msg.linear.x, msg.linear.y, msg.angular.z)
         self.last_command = time.monotonic()
         if self.serial is not None:
@@ -294,6 +310,7 @@ class RobotBridge(Node):
             now_s=now,
             timeout_s=0.30,
         )
+        self._communication_ok = communication_ok
         transport_fresh = self.mock_mode or receive_timestamp_is_fresh(
             last_received_s=self.last_frame_rx,
             now_s=now,
