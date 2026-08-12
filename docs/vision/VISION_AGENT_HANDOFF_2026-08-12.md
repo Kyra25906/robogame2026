@@ -436,15 +436,21 @@ distance_invalid_reason: side_rotated | occluded | clipped | out_of_working_rang
 docs/vision/VISION_FIELD_TASKS_2026-08-12.md
 ```
 
-## 14. 当前下一步（2026-08-12 更新）
+## 14. 当前下一步（2026-08-12 最终更新）
 
-P0 软件层面已全部完成。下一步：
+P0 全部完成并推送。P1-1（侧转角度）和 P1-2（内部遮挡）分析完成，结论：
 
-1. 由总集成确认任务是否需要在 1.2 m 以外发现方块。
-2. 确认后在 `vision_gf100_1280x720_bench.json` 中正式启用 `max_working_distance_m`。
-3. 或确认需要远距离检测后，设计 SEARCH/ACQUIRE 阶段切换。
+- 侧转：短边测距天然鲁棒，无需角度过滤。
+- 遮挡：10% 安全，30% 距离不可靠，50% 失效。`distance_valid` 字段需求已记录。
 
-在该接口决策完成前，不调整 HSV、ROI、面积或时序参数。
+GF100 配置已正式启用 `max_working_distance_m=1.2`。全量 195 测试通过。
+
+剩余 P1-3（车载 ROI）和 P1-4（近距离）等待外部条件，不阻塞当前部署。
+
+```text
+remote: codex/vision-field-readiness
+HEAD: f2b9f5d  (尚未推送文档更新)
+```
 
 ## 15. 交付边界
 
