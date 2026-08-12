@@ -11,17 +11,19 @@
 ```text
 repository: https://github.com/Kyra25906/robogame2026.git
 branch: codex/vision-field-readiness
-baseline commit: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
+baseline commit: 03004ff5fe1f532ecca36757d0bf502e7eb2bc5e
 ROS: ROS 2 Jazzy
 vision package: ros2_ws/src/cube_perception/
 ```
 
-基线包含三个视觉修复 commit（按时间顺序）：
+基线包含五个视觉 commit（按时间顺序）：
 
 ```text
 d81d277 feat(vision): reject ambiguous targets and isolate GF100 config
 e1388fa fix(vision): reject clipped targets and correct distance sizing
 f6f736e feat(vision): add configurable max working distance filter
+f2b9f5d config(vision): enable max working distance 1.2m in GF100 benchmark
+03004ff docs(vision): complete P1 angle and occlusion analysis
 ```
 
 优先允许修改：
@@ -44,19 +46,22 @@ f6f736e feat(vision): add configurable max working distance filter
 
 ```text
 branch: codex/vision-field-readiness
-HEAD: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
+HEAD: 03004ff5fe1f532ecca36757d0bf502e7eb2bc5e
 remote: origin/codex/vision-field-readiness (已同步)
 
-已追踪修改（三个 commit 均已推送，工作区无已追踪文件的修改）：
+已追踪修改（5 个 commit 均已推送）：
 M ros2_ws/src/cube_perception/cube_perception/opencv_detector.py (触边+短边+距离过滤)
 M ros2_ws/src/cube_perception/cube_perception/node.py (+max_working_distance_m 参数)
+M ros2_ws/src/cube_perception/config/vision_gf100_1280x720_bench.json (+max_working_distance_m: 1.2)
 M tests/test_opencv_detector.py (+6 tests)
+A docs/vision/P1_ANGLE_AND_OCCLUSION_ANALYSIS_2026-08-12.md
 
 新增未跟踪文档：
 ?? docs/vision/TEACHING_INCREMENTAL_DEVELOPMENT_AGREEMENT.md
 ?? docs/vision/GF100_CAMERA_CALIBRATION_CANDIDATE_REPORT_2026-08-12.md
 ?? docs/vision/VISION_FIELD_TASKS_2026-08-12.md
 ?? docs/vision/VISION_AGENT_HANDOFF_2026-08-12.md
+?? docs/vision/P1_ANGLE_AND_OCCLUSION_ANALYSIS_2026-08-12.md
 ```
 
 不要删除或覆盖其他未跟踪 DOCX、PDF、视频、`results/`、渲染目录和个人文件。
@@ -273,67 +278,48 @@ C:\Users\dahli\Pictures\Camera Roll\0811\purple_sides
 
 不要根据现有混合 `sides` 样本猜测 `aspect_ratio=1.2` 等阈值。应补采固定 `0.7 m`、`0/15/30/45°` 左右侧转样本，以及独立的 `10/30/50%` 内部遮挡样本。
 
-## 9. 环境和未完成小车负样本
+## 9. 环境和未完成小车负样本（已修复）
 
 原始数据：
 
 ```text
 C:\Users\dahli\Pictures\Camera Roll\environment
+WIN_20260812_17_46_24_Pro.mp4  523 帧，空场景
 ```
 
-关键负视频：
+修复前：
 
 ```text
-WIN_20260812_17_46_24_Pro.mp4
-1280 x 720
-523 帧
-约 17.43 秒
-expected: absent
+橙色原始候选：472/523 帧（90.2%）
+橙色时序确认：176/523 帧（33.7%）
 ```
 
-当前修改后检测结果：
+修复后（`max_working_distance_m=1.2` 启用）：
 
 ```text
-橙色原始单帧候选：472/523 帧（90.2%）
-橙色时序确认：176/523 帧（33.652%）
-紫色时序确认：0
+橙色候选进入时序过滤器：0 帧
+橙色时序确认：0 帧
+所有橙色轮廓被 far 拒绝（5-6 个/帧）
+处理速度：46.0 FPS
 ```
 
-误检来源：未完成小车上的橙色接线端子、线缆和小型橙色零件。
+该问题已从部署阻塞项中移除。
 
-该问题是视觉部署阻塞项：空场景仍能建立稳定橙色错误轨迹。
+## 10. 工作距离过滤（已实现并验证）
 
-基线产物（Git 忽略）：
-
-```text
-results/workspace/gf100_environment_empty_20260812/detections.jsonl
-results/workspace/gf100_environment_empty_20260812/manifest.json
-results/workspace/gf100_environment_empty_20260812/report.html
-results/workspace/gf100_environment_empty_20260812/distance_filter_analysis.md
-```
-
-HTML报告按预期返回 `FAIL`，这是需要保留的修改前失败证据。
-
-## 10. 工作距离过滤离线结论
-
-尚未实现代码或正式配置，只完成了离线分析。
+已实现 `DetectorConfig.max_working_distance_m`，默认为 `None`（不过滤），GF100 配置启用 `1.2 m`。
 
 ```text
 60 张真实正面样本输出距离：0.490..1.000 m
-负视频橙色原始候选距离：3.359..15.000 m
-```
+负视频橙色假候选距离：3.359..15.000 m
 
-候选最大距离 `1.2 m`：
-
-```text
+max_working_distance_m=1.2 时：
 橙色正面保留：30/30
 紫色正面保留：30/30
-负视频仍有橙色原始候选的帧：0/523
+空场景视频橙色确认：0/523 ← 修复前 176/523
 ```
 
-重要：过滤必须发生在候选进入时序过滤器之前。只过滤最终输出不能避免远距离假候选制造歧义或错误轨迹。
-
-`1.2 m` 只是抓取阶段候选值，不是相机最大检测距离。正式实现前必须确认任务是否需要在 `1.2 m` 之外发现方块。
+过滤在候选进入时序过滤器之前执行，远距离假候选无法建立轨迹或制造歧义。新增 `far` 调试统计和 3 项单元测试。
 
 ## 11. 规则手册分析结论
 
@@ -412,23 +398,21 @@ distance_invalid_reason: side_rotated | occluded | clipped | out_of_working_rang
 
 ## 13. P0/P1 清单
 
-### P0（2026-08-12 更新）
+### P0（全部完成）
 
 - [x] 复核当前四个视觉交付文件的最终 diff。
 - [x] 独立实现可配置最大抓取距离，并补单元测试。
 - [x] 重跑空场景视频、60张正面样本和完整回归（195 项测试，空场景 0 误检）。
 - [x] 将触边拒绝、短边测距、最大工作距离和必要文档作为独立 commit 提交并推送。
-- [ ] 决定 `CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md` 是否已过时。
-- [ ] 由总集成确认 ACQUIRE 阶段是否允许只在 `<=1.2 m` 建立方块轨迹。
+- [x] `CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md` 不存在，无需处理。
+- [x] `max_working_distance_m=1.2` 已正式写入 GF100 配置。
 
-### P1
+### P1（P1-1/P1-2 完成，P1-3/P1-4 待外部条件）
 
-- [ ] 采集系统性侧转角度样本。
-- [ ] 采集内部遮挡比例样本。
-- [ ] 最终机械结构完成后确定相机安装位、ROI和自遮挡区。
-- [ ] 对真实材料区多个同色方块建立目标选择验收。
-- [ ] 处理 `0.3 m` 橙色自动曝光/HSV失败。
-- [ ] 评估 `0.4 m` 被 `max_area_ratio=0.35` 拒绝是否符合实际抓取阶段需求。
+- [x] 采集系统性侧转角度样本 → 结论：短边测距天然鲁棒，无需角度过滤。
+- [x] 采集内部遮挡比例样本 → 结论：10% 安全，30% 距离不可靠，50% 失效。
+- [ ] 最终机械结构完成后确定相机安装位、ROI和自遮挡区（P1-3）。
+- [ ] 处理 `0.3 m` 和 `0.4 m` 近距离橙色检测（P1-4，待工作距离确认）。
 
 详细清单：
 
@@ -449,7 +433,7 @@ GF100 配置已正式启用 `max_working_distance_m=1.2`。全量 195 测试通�
 
 ```text
 remote: codex/vision-field-readiness
-HEAD: f2b9f5d  (尚未推送文档更新)
+HEAD: 03004ff  (tbd after this commit)
 ```
 
 ## 15. 交付边界

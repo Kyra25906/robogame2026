@@ -8,7 +8,7 @@
 
 ```text
 branch: codex/vision-field-readiness
-commit: f6f736ea9c4dce44f49c0b2c6009bcdc0d4aa16b
+commit: 03004ff5fe1f532ecca36757d0bf502e7eb2bc5e
 ```
 
 当前允许优先修改：
