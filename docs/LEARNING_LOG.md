@@ -373,6 +373,88 @@ MCU/模拟器状态
 
 真实视频还说明检测和跟踪必须分开分析：橙色多候选问题可以由歧义规则阻止，但中央紫色方块在检测阶段就因画面裁切和长宽比超限被拒绝，时序逻辑看不到它，也就无法选择它。工程上应先保证目标进入候选集合，再用真实 ROI 或任务提示选择目标，不能期待时间滤波修复上游漏检。
 
+## 2026-08-12：传输层与应用层信任分离 + 安全审计方法
+
+### 背景
+
+交接文档指出 `/cmd_vel` 门控存在缺口：握手由合法 0x12 帧信封完成，但 STATUS payload 尚未解码，`communication_ok` 依然为 False，非零速度仍可能被转发到串口。本轮回合修复了这个缺口，并对 robot_bridge 做了完整安全审计。
+
+### 学到的知识一：两层信任边界必须分开
+
+串口通信至少有三层：
+
+```text
+收到字节 → 帧头+长度+CRC合法（传输层）→ payload全字段解码+值域校验成功（应用层）
+```
+
+旧代码的 `_on_cmd_vel` 只检查了传输层握手状态（`_handshake_state`），没检查应用层状态可信度（`_communication_ok`）。修复后两道门都必须通过：
+
+```python
+if self._handshake_state != _HANDSHAKE_READY:  # 传输层：能通信吗
+    return
+if not self._communication_ok:                   # 应用层：数据可信吗
+    return
+```
+
+这叫 **defense in depth**（纵深防御）：不是一道万能门，而是多道窄门，每道只管自己那一层。一层被绕过，下一层仍然能拦。
+
+### 学到的知识二：握手不应该等 payload 解码
+
+有人会问：既然握手只查帧类型不够，为什么不让握手也等 payload 解码？答案是 **关注点分离**（separation of concerns）：
+
+- 握手 = 传输层："电话接通了没"
+- `communication_ok` = 应用层："对方身份核实了没"
+
+两层分开的好处：
+1. **独立调试**：payload 解码器没实现时，握手仍能建立，可以先验证链路质量
+2. **独立替换**：换 MCU 固件时只改 payload 解码器，握手不动
+3. **不会锁死**：如果握手也等 payload，而 payload 解码器还没写，整个通信链路永远建立不了
+
+这种"宁可部分功能不可用，也不把不同层的判断混在一起"的设计，在工程中叫 **fail-closed**：不确定时拒绝动作，而不是用默认值假装正常。
+
+### 学到的知识三：AST 测试与行为测试互补
+
+本轮写了两种测试：
+
+| 类型 | 检查什么 | 局限 |
+|---|---|---|
+| AST 测试 | 代码里有没有 `_communication_ok` 变量名 | 把 `if not` 写成 `if` 也能过 |
+| 行为测试 | 设不同状态调 `_on_cmd_vel`，检查 velocity 是否更新 | 需要 rclpy，Windows 上跑不了 |
+
+两者互补：AST 保证"写了这道门"，行为测试保证"门的方向对"。行为测试用真值表覆盖了所有状态组合：
+
+| 握手 | communication_ok | 应该放行？ |
+|---|---|---|
+| READY | True | 放行 |
+| READY | False | **拦截**（本次修复的核心） |
+| HANDSHAKING | True | 拦截 |
+| HANDSHAKING | False | 拦截 |
+
+### 学到的知识四：诊断日志的限流设计
+
+`_on_cmd_vel` 可能被高频调用（20-50Hz），如果每次拦截都打 warning，日志几秒就爆了。用了一个哨兵标记 `_cmd_vel_block_warned`：
+
+```python
+if not self._cmd_vel_block_warned:         # 首次？打一次
+    self.get_logger().warn(...)
+    self._cmd_vel_block_warned = True
+# 命令通过时重置标记
+self._cmd_vel_block_warned = False
+```
+
+这叫 **rate-limited logging**（限流日志），是分布式系统中处理高频事件的常见模式。本质是用一点内存状态（一个 bool）换取大幅减少日志量。
+
+### 学到的知识五：安全审计不只是找 bug
+
+对 robot_bridge 逐行动审计发现了 10 个观察项，但只有 2 个需要修复：
+
+- **HIGH**：串口读写无异常保护——USB 断开可能冻结整个 bridge
+- **MEDIUM**：命令超时不发零速度帧——MCU 可能短暂失控
+
+其余 8 项要么是设计意图（握手跳过 communication_ok），要么在当前单线程执行器下安全（线程安全），要么依赖 MCU 自行处理（encode_velocity 不校验 NaN）。
+
+审计的价值不仅在于找到要修的，还在于**确认哪些不需要修**。把"看起来可疑但实际正确"的设计写成文档，防止下一个人重复调查。
+
 ## 之前阶段的重要学习索引
 
 - 模块职责、ROS2 模拟闭环、机构动作和流程状态分离：见 `guides/BEGINNER_PROJECT_LEARNING_GUIDE.md`；

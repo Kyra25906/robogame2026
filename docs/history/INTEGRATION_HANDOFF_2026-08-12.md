@@ -145,22 +145,29 @@ REAL-CAR PASS
 
 ## 6. 当前已知P0问题
 
-### 6.1 `/cmd_vel`可信状态门控
+### 6.1 `/cmd_vel`可信状态门控 ✅ 已修复 (2026-08-12)
 
-已审计到以下风险：外层合法的`0x12 STATUS`帧可能完成握手，但payload尚未完整解码，`communication_ok`仍为false；当前非零速度门控需要增加“可信且新鲜的RobotStatus”条件。
+**原问题**：外层合法的`0x12 STATUS`帧可能完成握手，但payload尚未完整解码，`communication_ok`仍为false；当前非零速度门控需要增加”可信且新鲜的RobotStatus”条件。
 
-下一轮最小代码任务：
-
-```text
-先写失败回归测试
-→ 未解码STATUS不得解锁非零cmd_vel
-→ 最小修复门控
-→ 全量测试
-→ Ubuntu九包构建
-→ 生成新部署SHA
+**修复提交**：
+```
+e50529c fix(test): mock _logger for behavioral tests using __new__
+33020a7 fix(test): initialize _cmd_vel_block_warned in behavioral test setUp
+fe33a24 fix(bridge): require communication_ok before forwarding cmd_vel
 ```
 
-在该问题修复前，不允许连接STM32后发送非零速度。
+**修复内容**：
+- `_on_cmd_vel` 新增 `_communication_ok` 门控（handshake READY + communication_ok 双重条件）
+- `_tick` 每 20ms 刷新 `_communication_ok` 状态
+- 被门控拦截时打印一次性 warning（限流日志）
+- 新增 2 个 AST 回归测试 + 6 个行为测试（真值表覆盖全部状态组合）
+- Ubuntu 验证：239 测试全过，9 包 colcon build 通过，配置检查 PASS
+
+**当前部署 SHA**：`e50529c`（分支 `integration/robogame-t26`）
+
+**后续安全审计新增待办**（待阶段 5 前修复）：
+- `P1` 串口读写缺乏 try/except 异常保护（`node.py` 132/214/302 行）
+- `P1` 命令超时不发零速度帧给 MCU（`node.py` 319-320 行）
 
 ### 6.2 MCU真实payload尚未冻结
 
