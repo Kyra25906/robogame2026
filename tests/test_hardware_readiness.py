@@ -300,6 +300,7 @@ class RobotBridgeCmdVelBehavioralTests(unittest.TestCase):
         bridge.serial = None
         bridge.sequence = 0
         bridge.last_command = 0.0
+        bridge._cmd_vel_block_warned = False
         self.bridge = bridge
         self.Velocity2D = Velocity2D
 
