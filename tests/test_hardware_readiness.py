@@ -222,6 +222,37 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
         self.assertIn("OSError", handled_names)
         self.assertTrue(assigns_serial_none)
 
+    def test_serial_io_routes_through_safe_helpers(self):
+        tree = self._robot_bridge_tree()
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for name in ("_safe_serial_write", "_safe_serial_read"):
+            self.assertIn(name, methods, f"{name} must be defined")
+            handled = {
+                handler.type.id
+                for handler in ast.walk(methods[name])
+                if isinstance(handler, ast.ExceptHandler)
+                and isinstance(handler.type, ast.Name)
+            }
+            self.assertIn("OSError", handled, f"{name} must catch OSError")
+
+        for name in ("_on_cmd_vel", "_run_handshake", "_tick"):
+            direct_io = {
+                (call.func.value.attr, call.func.attr)
+                for call in ast.walk(methods[name])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Attribute)
+                and call.func.value.attr == "serial"
+                and call.func.attr in ("write", "read")
+            }
+            self.assertFalse(
+                direct_io, f"{name} must not call self.serial.write/read directly"
+            )
+
 
 class RuntimeEvidencePolicyTests(unittest.TestCase):
     def test_mock_runtime_accepts_mock_evidence(self):
@@ -361,6 +392,96 @@ class RobotBridgeCmdVelBehavioralTests(unittest.TestCase):
         self.bridge._on_cmd_vel(self._cmd_vel_msg(0.0, 0.0, 0.0))
         self.assertAlmostEqual(self.bridge.velocity.vx, 0.0)
         self.assertAlmostEqual(self.bridge.velocity.wz, 0.0)
+
+
+class _FakeSerial:
+    def __init__(self, read_data=b"", write_error=None, read_error=None):
+        self._read_data = read_data
+        self._write_error = write_error
+        self._read_error = read_error
+        self.writes = []
+        self.closed = False
+        self.in_waiting = len(read_data)
+
+    def write(self, data):
+        if self._write_error is not None:
+            raise self._write_error
+        self.writes.append(data)
+        return len(data)
+
+    def read(self, n):
+        if self._read_error is not None:
+            raise self._read_error
+        return self._read_data[:n]
+
+    def close(self):
+        self.closed = True
+
+
+class RobotBridgeSerialSafetyTests(unittest.TestCase):
+    """Serial read/write failures must be contained, not crash the bridge.
+
+    USB unplug raises serial.SerialException (an OSError subclass) on the next
+    read/write. The safe helpers must catch it, close the port, and return a
+    benign value so the timer callback keeps running and cmd_vel is gated off.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._skip_reason = None
+        try:
+            import rclpy  # noqa: F401
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"rclpy unavailable ({exc}); skipping"
+            return
+        try:
+            from robot_bridge.node import RobotBridge
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"robot_bridge unavailable ({exc}); skipping"
+            return
+        cls.RobotBridge = RobotBridge
+
+    def setUp(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+        from unittest.mock import MagicMock
+
+        bridge = self.RobotBridge.__new__(self.RobotBridge)
+        bridge.serial = None
+        bridge.get_logger = MagicMock(return_value=MagicMock())
+        self.bridge = bridge
+
+    def test_write_success_returns_true(self):
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.assertTrue(self.bridge._safe_serial_write(b"\x01\x02"))
+        self.assertEqual(serial.writes, [b"\x01\x02"])
+        self.assertIsNotNone(self.bridge.serial)
+
+    def test_write_failure_closes_serial_and_returns_false(self):
+        serial = _FakeSerial(write_error=OSError("device disconnected"))
+        self.bridge.serial = serial
+        self.assertFalse(self.bridge._safe_serial_write(b"\x01"))
+        self.assertIsNone(self.bridge.serial)
+        self.assertTrue(serial.closed)
+
+    def test_write_when_serial_none_returns_false(self):
+        self.assertFalse(self.bridge._safe_serial_write(b"\x01"))
+
+    def test_read_success_returns_data(self):
+        serial = _FakeSerial(read_data=b"\xaa\xbb")
+        self.bridge.serial = serial
+        self.assertEqual(self.bridge._safe_serial_read(), b"\xaa\xbb")
+
+    def test_read_failure_closes_serial_and_returns_empty(self):
+        serial = _FakeSerial(read_data=b"\x00\x00", read_error=OSError("device disconnected"))
+        self.bridge.serial = serial
+        self.assertEqual(self.bridge._safe_serial_read(), b"")
+        self.assertIsNone(self.bridge.serial)
+        self.assertTrue(serial.closed)
+
+    def test_read_when_serial_none_returns_empty(self):
+        self.assertEqual(self.bridge._safe_serial_read(), b"")
 
 
 if __name__ == "__main__":

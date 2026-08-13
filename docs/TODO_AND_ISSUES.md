@@ -249,9 +249,7 @@
 - 优先级：`P1`；
 - 发现时间：2026-08-12 安全审计；
 - 现象：`serial.write()` 和 `serial.read()` 没有 try/except。USB 意外断开时 SerialException 传播到定时器回调，可能导致整个 bridge 功能（里程计、状态发布、握手、命令超时）全部冻结；
-- 位置：`robot_bridge/node.py` 第 132、214、302 行；
-- 修复方向：捕获 SerialException，关闭串口设 None，记录错误后继续运行；
-- 暂不修复原因：与串口行为相关，无 MCU 无法验证实际效果；记录到阶段 5（真车只读通信）之前修复。
+- 已完成（2026-08-13）：新增 `_safe_serial_write` / `_safe_serial_read`，捕获 `OSError`（`serial.SerialException` 是其子类，覆盖 USB 拔线），失败时关闭串口、置 None、记日志后继续；`node.py` 三处读写（原 132/214/302 行）改走助手。证据：新增 1 个 AST 回归测试 + 6 个行为测试（假串口），Windows 全量 252 项通过（12 项 rclpy 行为测试按预期 skip）。
 
 ### ISSUE-016：命令超时不发零速度帧给 MCU
 

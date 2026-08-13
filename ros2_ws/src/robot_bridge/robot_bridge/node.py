@@ -108,6 +108,38 @@ class RobotBridge(Node):
             return
         self.get_logger().info(f"opened MCU serial port {port} at {baud}")
 
+    def _close_serial_after_error(self, operation: str, exc: Exception) -> None:
+        self.get_logger().error(
+            f"MCU serial {operation} failed: {exc}; closing port (fail-safe)"
+        )
+        try:
+            self.serial.close()
+        except Exception:
+            pass
+        self.serial = None
+
+    def _safe_serial_write(self, frame: bytes) -> bool:
+        if self.serial is None:
+            return False
+        try:
+            self.serial.write(frame)
+            return True
+        except OSError as exc:
+            # serial.SerialException is an OSError subclass, so this covers USB unplug.
+            self._close_serial_after_error("write", exc)
+            return False
+
+    def _safe_serial_read(self) -> bytes:
+        if self.serial is None:
+            return b""
+        try:
+            if not self.serial.in_waiting:
+                return b""
+            return self.serial.read(self.serial.in_waiting)
+        except OSError as exc:
+            self._close_serial_after_error("read", exc)
+            return b""
+
     def _on_cmd_vel(self, msg: Twist) -> None:
         if self._handshake_state != _HANDSHAKE_READY:
             if not self._cmd_vel_block_warned:
@@ -129,8 +161,8 @@ class RobotBridge(Node):
         self.last_command = time.monotonic()
         if self.serial is not None:
             payload = encode_velocity(self.velocity.vx, self.velocity.vy, self.velocity.wz)
-            self.serial.write(encode_frame(0x01, self.sequence, payload))
-            self.sequence = (self.sequence + 1) & 0xFFFF
+            if self._safe_serial_write(encode_frame(0x01, self.sequence, payload)):
+                self.sequence = (self.sequence + 1) & 0xFFFF
 
     def _mechanism(self, request, response):
         started = time.monotonic()
@@ -211,8 +243,8 @@ class RobotBridge(Node):
         """
         elapsed = now - self._handshake_last_hello
         if elapsed >= _HANDSHAKE_HELLO_INTERVAL_S and self.serial is not None:
-            self.serial.write(encode_frame(MSG_TYPE_ACK, self.sequence, encode_hello()))
-            self.sequence = (self.sequence + 1) & 0xFFFF
+            if self._safe_serial_write(encode_frame(MSG_TYPE_ACK, self.sequence, encode_hello())):
+                self.sequence = (self.sequence + 1) & 0xFFFF
             self._handshake_last_hello = now
 
         if now - self._handshake_last_hello > _HANDSHAKE_TIMEOUT_S:
@@ -298,8 +330,9 @@ class RobotBridge(Node):
         if self._handshake_state == _HANDSHAKE_HANDSHAKING:
             self._run_handshake(now)
 
-        if self.serial is not None and self.serial.in_waiting:
-            for _frame in self.decoder.feed(self.serial.read(self.serial.in_waiting)):
+        data = self._safe_serial_read()
+        if data:
+            for _frame in self.decoder.feed(data):
                 self._accept_frame_for_handshake(_frame)
                 self._dispatch_frame(_frame, now)
                 self.last_frame_rx = now
