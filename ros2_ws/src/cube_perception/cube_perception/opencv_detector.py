@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -32,6 +32,7 @@ class DetectorConfig:
     min_solidity: float = 0.50
     min_side_px: float = 12.0
     max_rotated_aspect_ratio: float = 3.2
+    max_working_distance_m: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "DetectorConfig":
@@ -66,6 +67,7 @@ class DetectorConfig:
             "min_solidity": self.min_solidity,
             "min_side_px": self.min_side_px,
             "max_rotated_aspect_ratio": self.max_rotated_aspect_ratio,
+            "max_working_distance_m": self.max_working_distance_m,
         }
 
     def validate(self) -> None:
@@ -109,6 +111,8 @@ class DetectorConfig:
             raise ValueError("min_solidity must be in [0, 1]")
         if self.min_side_px <= 0.0 or self.max_rotated_aspect_ratio < 1.0:
             raise ValueError("min_side_px must be positive and max aspect ratio at least 1")
+        if self.max_working_distance_m is not None and self.max_working_distance_m <= 0.0:
+            raise ValueError("max_working_distance_m must be positive when set")
 
 
 class CubeDetector:
@@ -151,7 +155,15 @@ class CubeDetector:
             mask = cv2.bitwise_and(mask, roi_mask)
             masks[color] = mask
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            stats = {"contours": len(contours), "small": 0, "large": 0, "shape": 0, "accepted": 0}
+            stats = {
+                "contours": len(contours),
+                "small": 0,
+                "large": 0,
+                "clipped": 0,
+                "far": 0,
+                "shape": 0,
+                "accepted": 0,
+            }
             for contour in contours:
                 contour_area = float(cv2.contourArea(contour))
                 if contour_area < self.config.min_area_px:
@@ -159,6 +171,15 @@ class CubeDetector:
                     continue
                 if contour_area / image_area > self.config.max_area_ratio:
                     stats["large"] += 1
+                    continue
+                bound_x, bound_y, bound_width, bound_height = cv2.boundingRect(contour)
+                if (
+                    bound_x <= 0
+                    or bound_y <= 0
+                    or bound_x + bound_width >= image_width
+                    or bound_y + bound_height >= image_height
+                ):
+                    stats["clipped"] += 1
                     continue
                 (center_x, center_y), (raw_width, raw_height), _angle = cv2.minAreaRect(contour)
                 short_side = min(float(raw_width), float(raw_height))
@@ -193,7 +214,26 @@ class CubeDetector:
                     min_area=self.config.min_area_px,
                     max_aspect_error=self.config.max_aspect_error,
                 )
-                if estimate and estimate.confidence >= self.config.min_confidence:
+                if estimate is not None:
+                    distance_m = self.config.cube_size_m * self.config.focal_px / short_side
+                    lateral_m = (
+                        (center_x - image_width / 2.0)
+                        * distance_m
+                        / self.config.focal_px
+                    )
+                    estimate = replace(
+                        estimate,
+                        distance_m=distance_m,
+                        lateral_m=lateral_m,
+                    )
+                if estimate is None:
+                    stats["shape"] += 1
+                elif (
+                    self.config.max_working_distance_m is not None
+                    and estimate.distance_m > self.config.max_working_distance_m
+                ):
+                    stats["far"] += 1
+                elif estimate.confidence >= self.config.min_confidence:
                     estimates.append(estimate)
                     stats["accepted"] += 1
                 else:

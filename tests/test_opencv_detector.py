@@ -56,6 +56,70 @@ class OpenCvDetectorTests(unittest.TestCase):
         self.assertEqual(len(detections), 1)
         self.assertEqual(detections[0].color, CubeColor.PURPLE)
 
+    def test_object_clipped_by_image_border_is_rejected(self):
+        hsv = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (0, 70), (80, 160), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        detector = CubeDetector()
+
+        detections, _masks = detector.detect(frame)
+
+        self.assertEqual(detections, [])
+        self.assertEqual(detector.last_debug[CubeColor.ORANGE.value]["clipped"], 1)
+
+    def test_object_near_image_border_is_still_accepted(self):
+        hsv = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (6, 70), (86, 160), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        detector = CubeDetector()
+
+        detections, _masks = detector.detect(frame)
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detector.last_debug[CubeColor.ORANGE.value]["clipped"], 0)
+
+    def test_complete_candidate_uses_short_side_for_distance(self):
+        hsv = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (100, 60), (180, 160), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        config = DetectorConfig(focal_px=800.0, cube_size_m=0.1)
+
+        detections, _masks = CubeDetector(config).detect(frame)
+
+        self.assertEqual(len(detections), 1)
+        self.assertAlmostEqual(detections[0].distance_m, 1.0, places=2)
+
+
+    def test_candidate_beyond_max_working_distance_is_rejected(self):
+        hsv = np.zeros((240, 480, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (190, 110), (215, 130), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        config = DetectorConfig(focal_px=400.0, cube_size_m=0.1, max_working_distance_m=1.0)
+
+        detections, _masks = CubeDetector(config).detect(frame)
+
+        self.assertEqual(detections, [])
+
+    def test_candidate_within_max_working_distance_is_accepted(self):
+        hsv = np.zeros((240, 480, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (100, 40), (220, 160), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        config = DetectorConfig(focal_px=400.0, cube_size_m=0.1, max_working_distance_m=0.5)
+
+        detections, _masks = CubeDetector(config).detect(frame)
+
+        self.assertEqual(len(detections), 1)
+
+    def test_max_working_distance_none_does_not_filter(self):
+        hsv = np.zeros((240, 480, 3), dtype=np.uint8)
+        cv2.rectangle(hsv, (190, 110), (215, 130), (15, 220, 220), -1)
+        frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        config = DetectorConfig(focal_px=400.0, cube_size_m=0.1, max_working_distance_m=None)
+
+        detections, _masks = CubeDetector(config).detect(frame)
+
+        self.assertEqual(len(detections), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

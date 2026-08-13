@@ -36,6 +36,7 @@ class CubePerceptionNode(Node):
             "min_solidity": 0.50,
             "min_side_px": 12.0,
             "max_rotated_aspect_ratio": 3.2,
+            "max_working_distance_m": None,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -69,6 +70,7 @@ class CubePerceptionNode(Node):
             min_solidity=float(self.get_parameter("min_solidity").value),
             min_side_px=float(self.get_parameter("min_side_px").value),
             max_rotated_aspect_ratio=float(self.get_parameter("max_rotated_aspect_ratio").value),
+            max_working_distance_m=self.get_parameter("max_working_distance_m").value,
         )
 
     def _read_temporal_config(self) -> TemporalFilterConfig:

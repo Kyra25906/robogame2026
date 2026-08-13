@@ -19,5 +19,6 @@
   "min_rectangularity": 0.35,
   "min_solidity": 0.50,
   "min_side_px": 12.0,
-  "max_rotated_aspect_ratio": 3.2
+  "max_rotated_aspect_ratio": 3.2,
+  "max_working_distance_m": 1.2
 }
