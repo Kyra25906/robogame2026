@@ -164,6 +164,24 @@ class RobotBridge(Node):
             if self._safe_serial_write(encode_frame(0x01, self.sequence, payload)):
                 self.sequence = (self.sequence + 1) & 0xFFFF
 
+    def _send_zero_velocity(self) -> None:
+        """Explicitly zero the MCU velocity on command timeout.
+
+        The MCU keeps executing its last non-zero velocity until its own
+        watchdog fires; sending zero here closes that gap as soon as our
+        command_timeout expires. Mirrors _on_cmd_vel's trust gating.
+        """
+        if self._handshake_state != _HANDSHAKE_READY:
+            return
+        if not self._communication_ok:
+            return
+        if self.serial is None:
+            return
+        if self._safe_serial_write(
+            encode_frame(0x01, self.sequence, encode_velocity(0.0, 0.0, 0.0))
+        ):
+            self.sequence = (self.sequence + 1) & 0xFFFF
+
     def _mechanism(self, request, response):
         started = time.monotonic()
         if not self.mock_mode:
@@ -350,6 +368,8 @@ class RobotBridge(Node):
             timeout_s=0.30,
         )
         if now - self.last_command > self.command_timeout:
+            if self.velocity.vx or self.velocity.vy or self.velocity.wz:
+                self._send_zero_velocity()
             self.velocity = Velocity2D(0.0, 0.0, 0.0)
         pose = self.integrator.update(self.velocity, dt, self.velocity.wz)
         stamp = self.get_clock().now().to_msg()

@@ -253,6 +253,29 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
                 direct_io, f"{name} must not call self.serial.write/read directly"
             )
 
+    def test_timeout_stop_gates_on_trust(self):
+        tree = self._robot_bridge_tree()
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertIn("_send_zero_velocity", methods, "_send_zero_velocity must be defined")
+        stop = methods["_send_zero_velocity"]
+        refs = {node.attr for node in ast.walk(stop) if isinstance(node, ast.Attribute)}
+        self.assertIn("_handshake_state", refs)
+        self.assertIn("_communication_ok", refs)
+
+        tick_refs = {
+            node.func.attr
+            for node in ast.walk(methods["_tick"])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        self.assertIn(
+            "_send_zero_velocity", tick_refs,
+            "_tick must call _send_zero_velocity on timeout",
+        )
+
 
 class RuntimeEvidencePolicyTests(unittest.TestCase):
     def test_mock_runtime_accepts_mock_evidence(self):
@@ -482,6 +505,68 @@ class RobotBridgeSerialSafetyTests(unittest.TestCase):
 
     def test_read_when_serial_none_returns_empty(self):
         self.assertEqual(self.bridge._safe_serial_read(), b"")
+
+
+class RobotBridgeTimeoutStopTests(unittest.TestCase):
+    """Command timeout must send an explicit zero-velocity frame to the MCU.
+
+    The MCU keeps executing its last non-zero velocity until its own watchdog
+    fires (~350ms+). When our command_timeout expires, _send_zero_velocity must
+    close that gap — but only when the link is trusted (handshake READY +
+    communication_ok), mirroring _on_cmd_vel's gating.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._skip_reason = None
+        try:
+            import rclpy  # noqa: F401
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"rclpy unavailable ({exc}); skipping"
+            return
+        try:
+            from robot_bridge.node import RobotBridge, _HANDSHAKE_READY
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"robot_bridge unavailable ({exc}); skipping"
+            return
+        cls.RobotBridge = RobotBridge
+        cls._HANDSHAKE_READY = _HANDSHAKE_READY
+
+    def setUp(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+        from unittest.mock import MagicMock
+
+        bridge = self.RobotBridge.__new__(self.RobotBridge)
+        bridge.serial = None
+        bridge.sequence = 0
+        bridge.get_logger = MagicMock(return_value=MagicMock())
+        self.bridge = bridge
+
+    def test_sends_zero_velocity_when_link_trusted(self):
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.bridge._handshake_state = self._HANDSHAKE_READY
+        self.bridge._communication_ok = True
+        self.bridge._send_zero_velocity()
+        self.assertEqual(len(serial.writes), 1)
+        self.assertEqual(self.bridge.sequence, 1)
+
+    def test_blocks_zero_velocity_when_communication_untrusted(self):
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.bridge._handshake_state = self._HANDSHAKE_READY
+        self.bridge._communication_ok = False
+        self.bridge._send_zero_velocity()
+        self.assertEqual(len(serial.writes), 0)
+        self.assertEqual(self.bridge.sequence, 0)
+
+    def test_blocks_zero_velocity_when_no_serial(self):
+        self.bridge.serial = None
+        self.bridge._handshake_state = self._HANDSHAKE_READY
+        self.bridge._communication_ok = True
+        self.bridge._send_zero_velocity()
+        self.assertEqual(self.bridge.sequence, 0)
 
 
 if __name__ == "__main__":
