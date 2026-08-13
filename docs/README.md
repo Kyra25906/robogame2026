@@ -48,6 +48,10 @@
 - [VISION_MODULE.md](vision/VISION_MODULE.md)：视频处理、JSONL schema v2、时间段标注和 HTML 报告。
 - [连续帧确认使用说明.md](vision/连续帧确认使用说明.md)：连续帧过滤参数与使用方法。
 - [VISION_AGENT_HANDOFF_2026-08-12.md](vision/VISION_AGENT_HANDOFF_2026-08-12.md)：视觉 agent 交接。
+- [GF100_CAMERA_CALIBRATION_CANDIDATE_REPORT_2026-08-12.md](vision/GF100_CAMERA_CALIBRATION_CANDIDATE_REPORT_2026-08-12.md)：GF100 候选标定（37 张棋盘格，RMS 0.82px）。
+- [P1_ANGLE_AND_OCCLUSION_ANALYSIS_2026-08-12.md](vision/P1_ANGLE_AND_OCCLUSION_ANALYSIS_2026-08-12.md)：侧转与遮挡分析。
+- [VISION_FIELD_TASKS_2026-08-12.md](vision/VISION_FIELD_TASKS_2026-08-12.md)：现场任务清单。
+- [CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md](vision/CURRENT_STATUS_HANDOFF_REAL_CAMERA_2026-08-11.md)：真机视觉现状。
 - 视频、JSONL、标注和报告默认保存在 `results/`，不进入普通 Git 历史，必须另行备份。
 
 ### 新手学习与项目协作
