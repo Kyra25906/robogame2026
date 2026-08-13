@@ -23,3 +23,13 @@ ros2_ws/log/
 *.mp4
 *.avi
 *.mov
+
+# Generated documents and render directories (produced by build_*.py / extract_*.py)
+*.docx
+*.pdf
+_field_summary_*/
+_lo_*/
+_pi_*/
+_six_day_*/
+_learning_review_*/
+_vision_doc_render/
