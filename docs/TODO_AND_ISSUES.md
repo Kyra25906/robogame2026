@@ -109,7 +109,15 @@
 - [x] P1-2 内部遮挡分析：10% 安全、30% 距离不可靠、50% 失效；`distance_valid` 字段需求已记录。
 - [ ] `P1` P1-3 车载 ROI 与自遮挡区：等机械结构冻结。
 - [ ] `P1` P1-4 0.3m/0.4m 近距离：等工作距离确认。
-- [ ] `P0` 接口需求（待总集成）：视觉阶段 SEARCH/ACQUIRE/VERIFY、多合法同色目标选择约束、`distance_valid` 字段表达「检测到但距离不可信」。
+（接口需求单列于下方「视觉→集成接口需求」。）
+
+## 视觉→集成接口需求（P0 待办，源自视觉交接 08-12）
+
+视觉检测/标定已完成，但闭环还缺三个集成侧接口（`VISION_AGENT_HANDOFF_2026-08-12.md` 第 12 节）。这些是解锁「视觉找目标 → manipulator 抓取」的硬依赖，改消息接口前先审计现状。
+
+- [ ] `P0` 视觉阶段 SEARCH / ACQUIRE / VERIFY：集成需能驱动视觉节点进入不同阶段——SEARCH 允许远距观察、只给方向/粗略颜色线索；ACQUIRE 在材料区附近用 1.2m 工作距离建立抓取轨迹；VERIFY 用于抓取/放置/稳定观察证据。当前视觉节点是否已有阶段输入待审计，不要直接改消息接口。
+- [ ] `P0` 多合法同色目标选择约束：材料区会同时出现 10 个橙色 / 3 个紫色合法目标，集成需提供至少一种约束（`desired_color` / `expected_material_zone` / `desired_slot` / `expected_grasp_center` 或明确选择策略），不能只靠最高置信度或离画面中心最近。
+- [ ] `P0` `distance_valid` 字段：`DetectionEstimate` 现无法表达「检测到但距离因侧转/遮挡不可信」，只能整候选拒绝。需扩展消息接口：`detected:true + distance_valid:false + distance_invalid_reason(side_rotated|occluded|clipped|out_of_working_range)`。
 
 ## 视觉验收模块待办
 
