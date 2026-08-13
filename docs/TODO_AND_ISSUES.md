@@ -262,9 +262,9 @@
 ### ISSUE-017：软件 CANCEL 不调用 STOP 服务
 
 - 优先级：`P0`（ISSUE-009 的软件侧）；
-- 现象：`manipulator_client/node.py` 的 `_cancel_current_action`（205-225 行）最终只 `_publish_stop()`（发零速度 Twist），从不调用已创建的 `/chassis/stop` 服务（71 行）；结果字符串也承认 `active {operation} service may still complete`；
-- 影响：软件取消后真实执行器可能仍在动作；
-- 修复方向：cancel 路径显式调用 STOP 服务并等待完成证据；真实 STOP 能否物理停止执行器仍须电控/机械确认（ISSUE-009）。
+- 现象：`manipulator_client/node.py` 的 `_cancel_current_action` 最终只 `_publish_stop()`（发零速度 Twist），从不调用已创建的 `/chassis/stop` 服务；结果字符串也承认 `active {operation} service may still complete`；
+- 已完成（2026-08-13，软件侧）：新增 `self.stop` 客户端（`/chassis/stop`），`_cancel_current_action` 顶部调用 `_request_stop()` fire-and-forget 发送 STOP，失败经 `_on_stop_done` 记日志。证据：新增 1 个 AST 回归测试 + 1 个行为测试，Windows 全量 258 项通过（16 项 rclpy 行为测试按预期 skip）。
+- 仍未完成：等待 STOP 完成证据、以及真实 STOP 能否物理停止执行器，仍须电控/机械确认（ISSUE-009）。
 
 ### ISSUE-018：测试数量文档不一致
 

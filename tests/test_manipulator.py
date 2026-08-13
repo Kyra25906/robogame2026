@@ -1,4 +1,6 @@
+import ast
 import unittest
+from pathlib import Path
 
 from robogame_core.manipulator import (
     CancellationDecision,
@@ -530,6 +532,100 @@ class PlacementStabilityObserverTests(unittest.TestCase):
         observer.update(timestamp_s=2.0, evidence=PlacementEvidence.QUALIFIED)
         with self.assertRaisesRegex(ValueError, "monotonic"):
             observer.update(timestamp_s=1.5, evidence=PlacementEvidence.QUALIFIED)
+
+
+class ManipulatorClientCancelSafetyTests(unittest.TestCase):
+    """AST: cancelling must dispatch the /chassis/stop service (ISSUE-017).
+
+    _cancel_current_action previously only published a zero Twist, which stops
+    the chassis but leaves the gripper/lift mid-operation. It must also fire
+    STOP so all actuators halt once real STOP is implemented (ISSUE-009).
+    """
+
+    @staticmethod
+    def _client_tree():
+        node_path = (
+            Path(__file__).resolve().parents[1]
+            / "ros2_ws" / "src" / "manipulator_client" / "manipulator_client" / "node.py"
+        )
+        return ast.parse(node_path.read_text(encoding="utf-8"))
+
+    def test_cancel_dispatches_stop_service(self):
+        tree = self._client_tree()
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertIn("_request_stop", methods, "_request_stop must be defined")
+        cancel = methods["_cancel_current_action"]
+        called = {
+            node.func.attr
+            for node in ast.walk(cancel)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        self.assertIn(
+            "_request_stop", called,
+            "_cancel_current_action must call _request_stop",
+        )
+        request_stop = methods["_request_stop"]
+        attrs = {
+            node.attr for node in ast.walk(request_stop) if isinstance(node, ast.Attribute)
+        }
+        self.assertIn("stop", attrs, "_request_stop must use the stop client")
+
+
+class ManipulatorClientCancelBehavioralTests(unittest.TestCase):
+    """Behavioral: cancel fires a STOP request on the /chassis/stop client.
+
+    Requires rclpy; skipped on Windows and run on the Ubuntu acceptance host.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._skip_reason = None
+        try:
+            import rclpy  # noqa: F401
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"rclpy unavailable ({exc}); skipping"
+            return
+        try:
+            from manipulator_client.node import ManipulatorClientNode
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"manipulator_client unavailable ({exc}); skipping"
+            return
+        cls.ManipulatorClientNode = ManipulatorClientNode
+
+    def setUp(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+        from unittest.mock import MagicMock
+        from robogame_core.manipulator import ManipulatorState, MechanismOperation
+
+        node = self.ManipulatorClientNode.__new__(self.ManipulatorClientNode)
+        node.result_pub = MagicMock()
+        node.cmd_pub = MagicMock()
+        node.stop = MagicMock()
+        node.stop.service_is_ready.return_value = True
+        node.stop.call_async.return_value = MagicMock()
+        node.get_logger = MagicMock(return_value=MagicMock())
+        node.workflow_state = ManipulatorState.EXECUTING
+        node.operation = MechanismOperation.GRAB
+        node.command = "PICK_ORANGE"
+        node.target = None
+        node.service_future = None
+        node.retreat_future = None
+        node.stability_observer = None
+        node.service_wait_started_at = 0.0
+        node.verification_started_at = 0.0
+        node.retreat_started_at = 0.0
+        self.node = node
+
+    def test_cancel_calls_stop_service(self):
+        self.node._cancel_current_action()
+        self.node.stop.call_async.assert_called_once()
+        request = self.node.stop.call_async.call_args.args[0]
+        self.assertEqual(request.command, "STOP")
 
 
 if __name__ == "__main__":

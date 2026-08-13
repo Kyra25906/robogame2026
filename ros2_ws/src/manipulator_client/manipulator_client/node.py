@@ -62,6 +62,7 @@ class ManipulatorClientNode(Node):
         self.grab = self.create_client(ExecuteMechanism, "/gripper/grab")
         self.release = self.create_client(ExecuteMechanism, "/gripper/release")
         self.retreat = self.create_client(ExecuteMechanism, "/chassis/retreat")
+        self.stop = self.create_client(ExecuteMechanism, "/chassis/stop")
         self.lift = self.create_client(SetLiftHeight, "/lift/set_height")
         self.command: str | None = None
         self.target: CubeDetection | None = None
@@ -203,6 +204,7 @@ class ManipulatorClientNode(Node):
         self.retreat_started_at = 0.0
 
     def _cancel_current_action(self) -> None:
+        self._request_stop()
         if self.workflow_state is ManipulatorState.RETREATING:
             self._finish(
                 "CANCELLED: software workflow stopped; "
@@ -226,6 +228,28 @@ class ManipulatorClientNode(Node):
 
     def _publish_stop(self) -> None:
         self.cmd_pub.publish(Twist())
+
+    def _request_stop(self) -> None:
+        request = ExecuteMechanism.Request()
+        request.command = "STOP"
+        request.timeout_s = 3.0
+        if not self.stop.service_is_ready():
+            self.get_logger().warn("cancel: /chassis/stop service unavailable")
+            return
+        future = self.stop.call_async(request)
+        future.add_done_callback(self._on_stop_done)
+
+    def _on_stop_done(self, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"stop service failed during cancel: {exc}")
+            return
+        if response is None or not response.success:
+            self.get_logger().error(
+                "stop service reported failure during cancel: "
+                f"{'no response' if response is None else response.detail}"
+            )
 
     def _finish(self, result: str) -> None:
         self._publish_stop()
