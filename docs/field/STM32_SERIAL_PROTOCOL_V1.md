@@ -246,6 +246,11 @@ python3 tools/serial_v1_acceptance.py loopback --port /dev/ttyUSB0
 
 # 连接已实现 V1 的 STM32，验证真实 HELLO→ACK
 python3 tools/serial_v1_acceptance.py handshake --port /dev/ttyUSB0
+
+# 执行器断电阶段的完整安全验收：握手、心跳、STATUS/ODOM/IMU、失联看门狗
+python3 tools/serial_v1_acceptance.py safe-suite --port /dev/ttyUSB0 --duration 5
 ```
 
 两种模式的证据不能混用：`V1 LOOPBACK PASS` 只证明主机串口链路和完整协议帧回环正确；只有 `STM32 V1 HANDSHAKE PASS` 才证明 STM32 返回了序号匹配、结果为零且协议版本正确的 ACK。运行握手模式前必须移除 TX/RX 短接并连接 STM32。
+
+`safe-suite` 只发送 HELLO 与 HEARTBEAT，不发送 CMD_VEL、机构命令或软件急停。它要求心跳期间看门狗位能够清除，能收到合法 STATUS、ODOM、IMU，并在停止心跳后重新观察到 `watchdog_stop=1`。该结果仍不证明电机方向、真实里程计数值、IMU精度或机构动作正确；这些必须在后续分级实机验收中单独验证。

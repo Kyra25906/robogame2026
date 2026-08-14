@@ -22,15 +22,30 @@ from robogame_core.mock_mechanism import (
 from robogame_core.navigation import OdometryIntegrator
 from robogame_core.serial_protocol import (
     MSG_TYPE_ACK,
+    MSG_TYPE_HEARTBEAT,
     MSG_TYPE_HELLO,
     MSG_TYPE_IMU,
     MSG_TYPE_ODOM,
     MSG_TYPE_STATUS,
+    ProtocolError,
+    STATUS_EMERGENCY_STOP,
+    STATUS_GRIPPER_CLOSED,
+    STATUS_IMU_CALIBRATING,
+    STATUS_IMU_VALID,
+    STATUS_MECHANISM_FAULT,
+    STATUS_PHYSICAL_START,
+    STATUS_CUBE_PRESENT,
     StreamDecoder,
+    decode_ack,
+    decode_imu,
+    decode_odom,
+    decode_status,
     encode_frame,
+    encode_heartbeat,
     encode_hello,
     encode_velocity,
 )
+from robogame_core.stop_transport import dispatch_stop_frames
 from robogame_interfaces.msg import RobotStatus
 from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
 from sensor_msgs.msg import Imu
@@ -46,6 +61,8 @@ _HANDSHAKE_MAX_RETRIES = 3
 _HANDSHAKE_UNAVAILABLE = "UNAVAILABLE"
 _HANDSHAKE_HANDSHAKING = "HANDSHAKING"
 _HANDSHAKE_READY = "READY"
+_HEARTBEAT_INTERVAL_S = 0.05
+_SERIAL_RECONNECT_INTERVAL_S = 1.0
 
 
 class RobotBridge(Node):
@@ -82,10 +99,18 @@ class RobotBridge(Node):
         self.decoder = StreamDecoder()
         self.last_frame_rx: float | None = None
         self.last_decoded_status_rx: float | None = None
+        self.last_decoded_odom_rx: float | None = None
+        self.last_decoded_imu_rx: float | None = None
+        self._latest_status = None
+        self._latest_odom = None
+        self._latest_imu = None
         self.mock_mechanism_state = MockMechanismState()
         self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
         self._handshake_retries = 0
+        self._handshake_pending_sequence: int | None = None
+        self._last_heartbeat_tx = 0.0
+        self._last_reconnect_attempt = self.started_at
         self._communication_ok = self.mock_mode
         self._cmd_vel_block_warned = False
         self._last_boot_id: int | None = None
@@ -94,7 +119,25 @@ class RobotBridge(Node):
             self._open_serial()
         self.create_timer(0.02, self._tick)
 
-    def _open_serial(self) -> None:
+    def _reset_real_transport_state(self) -> None:
+        """Invalidate old session state without restoring any old command."""
+        self.velocity = Velocity2D(0.0, 0.0, 0.0)
+        self.decoder = StreamDecoder()
+        self.last_frame_rx = None
+        self.last_decoded_status_rx = None
+        self.last_decoded_odom_rx = None
+        self.last_decoded_imu_rx = None
+        self._latest_status = None
+        self._latest_odom = None
+        self._latest_imu = None
+        self._communication_ok = False
+        self._handshake_state = _HANDSHAKE_HANDSHAKING
+        self._handshake_last_hello = 0.0
+        self._handshake_retries = 0
+        self._handshake_pending_sequence = None
+        self._last_heartbeat_tx = 0.0
+
+    def _open_serial(self) -> bool:
         import serial
 
         port = str(self.get_parameter("serial_port").value)
@@ -106,8 +149,19 @@ class RobotBridge(Node):
             self.get_logger().error(
                 f"MCU serial unavailable at {port}: {exc}; staying fail-safe"
             )
-            return
+            return False
+        self._reset_real_transport_state()
         self.get_logger().info(f"opened MCU serial port {port} at {baud}")
+        return True
+
+    def _maybe_reconnect_serial(self, now: float) -> None:
+        if self.mock_mode or self.serial is not None:
+            return
+        if now - self._last_reconnect_attempt < _SERIAL_RECONNECT_INTERVAL_S:
+            return
+        self._last_reconnect_attempt = now
+        if self._open_serial():
+            self.get_logger().info("MCU serial reconnected; starting a new handshake")
 
     def _close_serial_after_error(self, operation: str, exc: Exception) -> None:
         self.get_logger().error(
@@ -118,6 +172,8 @@ class RobotBridge(Node):
         except Exception:
             pass
         self.serial = None
+        self._reset_real_transport_state()
+        self._last_reconnect_attempt = time.monotonic()
 
     def _safe_serial_write(self, frame: bytes) -> bool:
         if self.serial is None:
@@ -183,8 +239,42 @@ class RobotBridge(Node):
         ):
             self.sequence = (self.sequence + 1) & 0xFFFF
 
+    def _send_heartbeat(self, now: float) -> None:
+        """Keep the MCU watchdog alive without authorizing any motion."""
+        if self.mock_mode or self.serial is None:
+            return
+        if self._handshake_state != _HANDSHAKE_READY:
+            return
+        if now - self._last_heartbeat_tx < _HEARTBEAT_INTERVAL_S:
+            return
+        host_tick_ms = int(now * 1000.0) & 0xFFFFFFFF
+        frame = encode_frame(
+            MSG_TYPE_HEARTBEAT,
+            self.sequence,
+            encode_heartbeat(host_tick_ms),
+        )
+        if self._safe_serial_write(frame):
+            self.sequence = (self.sequence + 1) & 0xFFFF
+            self._last_heartbeat_tx = now
+
     def _mechanism(self, request, response):
         started = time.monotonic()
+        command = request.command.upper()
+        if command == "STOP" and not self.mock_mode:
+            self.velocity = Velocity2D(0.0, 0.0, 0.0)
+            result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
+            self.sequence = result.next_sequence
+            response.success = result.success
+            response.error_code = 0 if result.success else 3001
+            response.duration_s = float(time.monotonic() - started)
+            response.detail = (
+                "real STOP sent: zero velocity + emergency stop"
+                if result.success
+                else "real STOP incomplete: "
+                f"zero_velocity_sent={result.zero_velocity_sent} "
+                f"emergency_stop_sent={result.emergency_stop_sent}"
+            )
+            return response
         if not self.mock_mode:
             response.success = False
             response.error_code = 2001
@@ -192,7 +282,6 @@ class RobotBridge(Node):
             response.detail = "real mechanism payload is disabled until the MCU contract is signed"
             return response
         allowed = {"GRAB", "RELEASE", "STOP", "RETREAT"}
-        command = request.command.upper()
         if command not in allowed:
             response.success = False
             response.error_code = 1001
@@ -260,38 +349,56 @@ class RobotBridge(Node):
         After _HANDSHAKE_MAX_RETRIES failed attempts the state moves to
         UNAVAILABLE and the bridge stays in fail-safe mode.
         """
+        if self.serial is None:
+            return
         elapsed = now - self._handshake_last_hello
-        if elapsed >= _HANDSHAKE_HELLO_INTERVAL_S and self.serial is not None:
-            if self._safe_serial_write(encode_frame(MSG_TYPE_HELLO, self.sequence, encode_hello())):
-                self.sequence = (self.sequence + 1) & 0xFFFF
-            self._handshake_last_hello = now
-
-        if now - self._handshake_last_hello > _HANDSHAKE_TIMEOUT_S:
-            if self._handshake_retries >= _HANDSHAKE_MAX_RETRIES:
-                self.get_logger().error(
-                    f"handshake failed after {self._handshake_retries + 1} attempts"
+        if self._handshake_retries < _HANDSHAKE_MAX_RETRIES:
+            if self._handshake_retries == 0 or elapsed >= _HANDSHAKE_HELLO_INTERVAL_S:
+                hello_sequence = self.sequence
+                frame = encode_frame(
+                    MSG_TYPE_HELLO, hello_sequence, encode_hello()
                 )
-                self._handshake_state = _HANDSHAKE_UNAVAILABLE
-                return
-            self._handshake_retries += 1
-            self._handshake_last_hello = now
-            self.get_logger().warn(
-                f"handshake timeout, retry {self._handshake_retries}/{_HANDSHAKE_MAX_RETRIES}"
+                if self._safe_serial_write(frame):
+                    self._handshake_pending_sequence = hello_sequence
+                    self.sequence = (self.sequence + 1) & 0xFFFF
+                    self._handshake_retries += 1
+                    self._handshake_last_hello = now
+            return
+
+        if elapsed >= _HANDSHAKE_TIMEOUT_S:
+            self.get_logger().error(
+                f"handshake failed after {self._handshake_retries} attempts"
             )
+            self._handshake_state = _HANDSHAKE_UNAVAILABLE
 
     def _accept_frame_for_handshake(self, frame) -> None:
         """Check whether an incoming frame completes the handshake.
 
-        An ACK (0x13) or STATUS (0x12) frame is required before the bridge
-        enters READY and allows velocity commands.
+        Only a valid ACK for the most recently transmitted HELLO may move the
+        bridge to READY. Periodic STATUS telemetry does not prove that the MCU
+        accepted this control session.
         """
         if self._handshake_state != _HANDSHAKE_HANDSHAKING:
             return
-        if frame.message_type in (MSG_TYPE_ACK, 0x12):
-            self.get_logger().info(
-                f"handshake complete (received type=0x{frame.message_type:02X})"
+        accepted = False
+        if frame.message_type == MSG_TYPE_ACK:
+            try:
+                acknowledged, result, _version = decode_ack(frame.payload)
+            except ProtocolError as exc:
+                self.get_logger().warn(f"invalid handshake ACK rejected: {exc}")
+                return
+            accepted = (
+                self._handshake_pending_sequence is not None
+                and acknowledged == self._handshake_pending_sequence
+                and result == 0
             )
-            self._handshake_state = _HANDSHAKE_READY
+        if not accepted:
+            return
+        self.get_logger().info(
+            f"handshake complete (validated type=0x{frame.message_type:02X})"
+        )
+        self._handshake_state = _HANDSHAKE_READY
+        self._handshake_pending_sequence = None
 
     def _on_status_boot_id(self, boot_id: int) -> None:
         """Detect MCU reset via boot_id change and reset dependent state.
@@ -315,11 +422,11 @@ class RobotBridge(Node):
             self._handshake_state = _HANDSHAKE_HANDSHAKING
             self._handshake_last_hello = 0.0
             self._handshake_retries = 0
+            self._handshake_pending_sequence = None
 
-    # -- frame dispatch skeleton ------------------------------------------
-    # Payload decoders for 0x10 / 0x11 / 0x12 are not yet implemented.
-    # Routing may record diagnostics, but it must not refresh decoded-state
-    # freshness or boot_id until the complete payload has passed validation.
+    # -- frame dispatch ----------------------------------------------------
+    # ODOM, IMU and STATUS are decoded fail-closed: malformed payloads never
+    # refresh trusted-state freshness.
 
     def _dispatch_frame(self, frame, now: float) -> None:
         msg_type = frame.message_type
@@ -330,30 +437,49 @@ class RobotBridge(Node):
                 f"seq={frame.sequence}  len={len(frame.payload)}"
             )
         if msg_type == MSG_TYPE_STATUS:
-            # Fail closed: receiving a frame with the STATUS type is not the
-            # same as successfully decoding a complete RobotStatus payload.
-            # The future payload adapter owns last_decoded_status_rx and
-            # _on_status_boot_id() after length, field, and range validation.
-            pass
+            try:
+                status = decode_status(frame.payload)
+            except ProtocolError as exc:
+                self.get_logger().warn(f"invalid STATUS payload rejected: {exc}")
+                return
+            self._latest_status = status
+            self.last_decoded_status_rx = now
+            self._on_status_boot_id(status.boot_id)
         elif msg_type == MSG_TYPE_ODOM:
-            pass  # placeholder: decode encoder counts, vx/vy/wz, tick
+            try:
+                odom = decode_odom(frame.payload)
+            except ProtocolError as exc:
+                self.get_logger().warn(f"invalid ODOM payload rejected: {exc}")
+                return
+            self._latest_odom = odom
+            self.last_decoded_odom_rx = now
         elif msg_type == MSG_TYPE_IMU:
-            pass  # placeholder: decode angular velocity, accel, quaternion
+            try:
+                imu = decode_imu(frame.payload)
+            except ProtocolError as exc:
+                self.get_logger().warn(f"invalid IMU payload rejected: {exc}")
+                return
+            self._latest_imu = imu
+            self.last_decoded_imu_rx = now
 
     def _tick(self) -> None:
         now = time.monotonic()
         dt = now - self.last_tick
         self.last_tick = now
 
+        self._maybe_reconnect_serial(now)
+
         # ---------- handshake state machine ----------
         if self._handshake_state == _HANDSHAKE_HANDSHAKING:
             self._run_handshake(now)
 
+        self._send_heartbeat(now)
+
         data = self._safe_serial_read()
         if data:
             for _frame in self.decoder.feed(data):
-                self._accept_frame_for_handshake(_frame)
                 self._dispatch_frame(_frame, now)
+                self._accept_frame_for_handshake(_frame)
                 self.last_frame_rx = now
         communication_ok = robot_status_communication_ok(
             mock_mode=self.mock_mode,
@@ -372,7 +498,22 @@ class RobotBridge(Node):
             if self.velocity.vx or self.velocity.vy or self.velocity.wz:
                 self._send_zero_velocity()
             self.velocity = Velocity2D(0.0, 0.0, 0.0)
-        pose = self.integrator.update(self.velocity, dt, self.velocity.wz)
+        odom_fresh = receive_timestamp_is_fresh(
+            last_received_s=self.last_decoded_odom_rx,
+            now_s=now,
+            timeout_s=0.30,
+        )
+        if self.mock_mode:
+            measured_velocity = self.velocity
+        elif self._latest_odom is not None and odom_fresh:
+            measured_velocity = Velocity2D(
+                self._latest_odom.vx,
+                self._latest_odom.vy,
+                self._latest_odom.wz,
+            )
+        else:
+            measured_velocity = Velocity2D(0.0, 0.0, 0.0)
+        pose = self.integrator.update(measured_velocity, dt, measured_velocity.wz)
         stamp = self.get_clock().now().to_msg()
 
         odom = Odometry()
@@ -384,28 +525,59 @@ class RobotBridge(Node):
         qx, qy, qz, qw = yaw_to_quaternion(pose.yaw)
         odom.pose.pose.orientation.x, odom.pose.pose.orientation.y = qx, qy
         odom.pose.pose.orientation.z, odom.pose.pose.orientation.w = qz, qw
-        odom.twist.twist.linear.x = self.velocity.vx
-        odom.twist.twist.linear.y = self.velocity.vy
-        odom.twist.twist.angular.z = self.velocity.wz
+        odom.twist.twist.linear.x = measured_velocity.vx
+        odom.twist.twist.linear.y = measured_velocity.vy
+        odom.twist.twist.angular.z = measured_velocity.wz
         self.odom_pub.publish(odom)
 
         imu = Imu()
         imu.header.stamp = stamp
         imu.header.frame_id = "imu_link"
-        imu.angular_velocity.z = self.velocity.wz
+        imu_fresh = receive_timestamp_is_fresh(
+            last_received_s=self.last_decoded_imu_rx,
+            now_s=now,
+            timeout_s=0.30,
+        )
+        if self.mock_mode:
+            imu.angular_velocity.z = self.velocity.wz
+        elif self._latest_imu is not None and imu_fresh and self._latest_imu.valid:
+            imu.angular_velocity.z = self._latest_imu.gyro_z
+        else:
+            # sensor_msgs/Imu convention: covariance[0] = -1 means this
+            # measurement is unavailable and consumers must not use it.
+            imu.angular_velocity.z = 0.0
+            imu.angular_velocity_covariance[0] = -1.0
         self.imu_pub.publish(imu)
 
         status = RobotStatus()
         status.stamp = stamp
         status.communication_ok = communication_ok
-        status.emergency_stop = False
-        status.physical_start = self.mock_mode and (
-            now - self.started_at >= float(self.get_parameter("mock_start_after_s").value)
+        real_status = self._latest_status if not self.mock_mode else None
+        flags = real_status.flags if real_status is not None else 0
+        status.emergency_stop = bool(flags & STATUS_EMERGENCY_STOP)
+        status.physical_start = (
+            bool(flags & STATUS_PHYSICAL_START)
+            if real_status is not None
+            else self.mock_mode and (
+                now - self.started_at >= float(self.get_parameter("mock_start_after_s").value)
+            )
         )
-        status.gripper_closed = self.mock_mechanism_state.gripper_closed
-        status.cube_present = self.mock_mechanism_state.cube_present
+        status.gripper_closed = (
+            bool(flags & STATUS_GRIPPER_CLOSED)
+            if real_status is not None
+            else self.mock_mechanism_state.gripper_closed
+        )
+        status.cube_present = (
+            bool(flags & STATUS_CUBE_PRESENT)
+            if real_status is not None
+            else self.mock_mechanism_state.cube_present
+        )
         status.retreat_complete = self.mock_mechanism_state.retreat_complete
-        status.battery_voltage = 24.0
+        status.mechanism_fault = bool(flags & STATUS_MECHANISM_FAULT)
+        status.battery_voltage = (
+            real_status.battery_mv / 1000.0 if real_status is not None else 24.0
+        )
+        status.error_code = real_status.error_code if real_status is not None else 0
         # IMU calibration state (mock: 2s calibration; real: fail-safe until
         # 0x12 STATUS decoder provides actual values).
         mock_start_after = float(self.get_parameter("mock_start_after_s").value)
@@ -414,14 +586,25 @@ class RobotBridge(Node):
             status.imu_valid = not status.calibrating
             status.boot_id = 0
         else:
-            status.calibrating = True
-            status.imu_valid = False
-            status.boot_id = 0
-        status.detail = "mock hardware" if self.mock_mode else (
-            "MCU transport active; decoded RobotStatus unavailable"
-            if transport_fresh
-            else "MCU transport inactive; decoded RobotStatus unavailable"
-        )
+            status.calibrating = (
+                bool(flags & STATUS_IMU_CALIBRATING)
+                if real_status is not None
+                else True
+            )
+            status.imu_valid = (
+                bool(flags & STATUS_IMU_VALID)
+                if real_status is not None
+                else False
+            )
+            status.boot_id = real_status.boot_id if real_status is not None else 0
+        if self.mock_mode:
+            status.detail = "mock hardware"
+        elif real_status is not None:
+            status.detail = "decoded MCU V1 STATUS"
+        elif transport_fresh:
+            status.detail = "MCU transport active; decoded RobotStatus unavailable"
+        else:
+            status.detail = "MCU transport inactive; decoded RobotStatus unavailable"
         self.status_pub.publish(status)
 
 
