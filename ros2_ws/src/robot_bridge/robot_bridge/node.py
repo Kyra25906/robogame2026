@@ -22,6 +22,7 @@ from robogame_core.mock_mechanism import (
 from robogame_core.navigation import OdometryIntegrator
 from robogame_core.serial_protocol import (
     MSG_TYPE_ACK,
+    MSG_TYPE_HELLO,
     MSG_TYPE_IMU,
     MSG_TYPE_ODOM,
     MSG_TYPE_STATUS,
@@ -261,7 +262,7 @@ class RobotBridge(Node):
         """
         elapsed = now - self._handshake_last_hello
         if elapsed >= _HANDSHAKE_HELLO_INTERVAL_S and self.serial is not None:
-            if self._safe_serial_write(encode_frame(MSG_TYPE_ACK, self.sequence, encode_hello())):
+            if self._safe_serial_write(encode_frame(MSG_TYPE_HELLO, self.sequence, encode_hello())):
                 self.sequence = (self.sequence + 1) & 0xFFFF
             self._handshake_last_hello = now
 

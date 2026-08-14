@@ -12,7 +12,7 @@
 - `navigation.py`：角度归一化、限速、到点 P 控制和简化里程计积分。
 - `perception.py`：视觉候选结构、置信度、针孔估距和目标选择。
 - `mission.py`：任务状态机、有限重试、安全停止和橙—橙—紫顺序。
-- `serial_protocol.py`：串口帧、CRC16、速度载荷和字节流重新同步。
+- `serial_protocol.py`：串口帧、CRC16、V1各类载荷编解码和字节流重新同步。
 - `__init__.py`：Python 包标记。
 - `setup.py`、`package.xml`、`resource/robogame_core`：ROS2 安装信息。
 
@@ -62,4 +62,4 @@ python3 -m unittest tests.test_perception -v
 
 ## 6. 当前限制
 
-里程计积分和导航控制是冲刺期简化模型；视觉估距假设方块尺寸已知；串口协议目前只完整定义了通用帧和速度载荷，MCU 状态、机构命令和反馈载荷仍需与电控共同冻结。
+里程计积分和导航控制是冲刺期简化模型；视觉估距假设方块尺寸已知。串口V1载荷已冻结候选版并有固定测试向量，协议依据为 `docs/field/STM32_SERIAL_PROTOCOL_V1.md`；STM32端实现和真机验收尚未完成。

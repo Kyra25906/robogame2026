@@ -13,7 +13,7 @@
 3. 按你的任务域，读对应最新的 handoff：
    - 整车 / 硬件对接 → `field/RASPBERRY_PI_REAL_CAR_AGENT_HANDOFF_2026-08-12.md`
    - 视觉 → `vision/VISION_AGENT_HANDOFF_2026-08-12.md`
-   - 集成 / 部署 → `history/INTEGRATION_HANDOFF_2026-08-12.md`
+   - 集成 / 部署 → `history/INTEGRATION_HANDOFF_2026-08-13.md`
 4. 本页（README.md）—— 文档导航，按需查
 
 **完成后**：更新 [TODO_AND_ISSUES.md](TODO_AND_ISSUES.md) 的完成证据和新问题；如有跨会话交接，再写一份新的 handoff 到对应域目录。
@@ -62,6 +62,11 @@
 - [Windows到Ubuntu一键同步.md](guides/Windows到Ubuntu一键同步.md)：按 Git 提交号建立 Ubuntu 干净验收副本。
 - [GitHub两人代码协作说明.md](team/GitHub两人代码协作说明.md)：分支、提交和协作方法。
 
+### STM32 串口协议
+
+- [STM32_SERIAL_PROTOCOL_V1.md](field/STM32_SERIAL_PROTOCOL_V1.md)：当前 V1 消息编号、逐字节载荷、值域和固定十六进制向量。
+- [INTEGRATION_HANDOFF_2026-08-13.md](history/INTEGRATION_HANDOFF_2026-08-13.md)：当日硬件识别、树莓派串口回环、部署决策和未提交工作区交接。
+
 ## 历史记录
 
 以下文件保留当时决策和开发过程，不作为当前任务入口：
@@ -79,6 +84,9 @@
 - 主线 `integration/robogame-t26`，已合并 vision 分支，不再分叉。
 - 软件模拟闭环、取消、四种放置终态已经完成。
 - 258 项测试，0 失败（16 项需 rclpy 的行为测试在 Windows 上 skip，Ubuntu 上全量运行）。
+- V1 协议文档与上位机编解码已在当前未提交工作区实现，针对测试 19/19 通过；尚未完成本轮全量回归和 ARM64 验收。
+- 树莓派 `/dev/ttyUSB0` TX/RX 回环已收到 `b'hello'`，只证明 USB 转串口基础收发；真实 STM32 `HELLO→ACK` 仍未验证。
+- 树莓派现有干净部署为 `2d70649`；当前未提交改动不部署，待增加 V1 串口验证入口并全量回归后再建新目录。
 - 真车对接仍阻塞于：电控逐字节载荷表 + 机构动作合同 + 机械参数（见两张待确认清单）。
 - field 无硬件模式保持通信不可信、拒绝机构动作并门控速度命令。
 - 真实闭环不能用模拟 PASS 代替，必须等 MCU 载荷、相机安装和现场数据。
