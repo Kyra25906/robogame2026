@@ -1,7 +1,6 @@
 robot_bridge:
   ros__parameters:
     mock_mode: false
-    serial_port: /dev/ttyACM0
+    serial_port: /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00
     baud_rate: 115200
     command_timeout_s: 0.15
-
