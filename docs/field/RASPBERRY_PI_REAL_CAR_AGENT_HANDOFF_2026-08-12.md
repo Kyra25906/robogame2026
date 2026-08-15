@@ -4,6 +4,13 @@
 适用对象：接手“树莓派系统、固定commit部署、STM32接入及真车安全验证”的其他 Agent。  
 项目仓库：`https://github.com/Kyra25906/robogame2026.git`
 
+> **2026-08-14 更新（优先于下方历史状态）：** 当前树莓派有效部署已更新为
+> `2d9514d5b3ad1d2bab91a292e3c20bae730cacc9`，目录为
+> `/home/rg26/robogame_deploy_2d9514d`，旧 `2d70649` 仅作回退。
+> 真实 V1 已验证 HELLO/ACK、约51Hz STATUS和心跳看门狗；ODOM/IMU仍为0帧，
+> 非零速度与真实机构动作均未验收。详见 `docs/LEARNING_LOG.md` 的
+> “2026-08-14”章节和 `docs/TODO_AND_ISSUES.md` 的 ISSUE-019/020。
+
 ## 1. 本对话职责
 
 本对话只负责：
@@ -92,34 +99,41 @@
 integration/robogame-t26
 ```
 
-当前唯一有效部署commit：
+当前唯一有效部署commit（2026-08-14更新）：
 
 ```text
-2d70649ac3c30e0cd754dca1a0318fbc3042b396
+2d9514d5b3ad1d2bab91a292e3c20bae730cacc9
 ```
 
 树莓派部署目录：
 
 ```text
-/home/rg26/robogame_deploy_2d70649
+/home/rg26/robogame_deploy_2d9514d
 ```
 
 离线Git bundle：
 
 ```text
-/home/rg26/robogame_2d70649.bundle
+/home/rg26/robogame_2d9514d5b3ad.bundle
 ```
 
 部署使用detached HEAD，最终核验：
 
 ```text
 git rev-parse HEAD
-2d70649ac3c30e0cd754dca1a0318fbc3042b396
+2d9514d5b3ad1d2bab91a292e3c20bae730cacc9
 ```
 
 构建和测试后的`git status --short`无输出。
 
 ### 已废弃版本
+
+上一版可回退部署（不再作为当前版本）：
+
+```text
+/home/rg26/robogame_deploy_2d70649
+/home/rg26/robogame_2d70649.bundle
+```
 
 ```text
 5923d900e02be849849a4e96c8b44a5ac53fc60b

@@ -575,6 +575,47 @@ class ManipulatorClientCancelSafetyTests(unittest.TestCase):
         self.assertIn("stop", attrs, "_request_stop must use the stop client")
 
 
+class ManipulatorClientPerceptionStageTests(unittest.TestCase):
+    @staticmethod
+    def _client_tree():
+        node_path = (
+            Path(__file__).resolve().parents[1]
+            / "ros2_ws" / "src" / "manipulator_client" / "manipulator_client" / "node.py"
+        )
+        return ast.parse(node_path.read_text(encoding="utf-8"))
+
+    def test_stage_publisher_uses_perception_stage_topic(self):
+        tree = self._client_tree()
+        init = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        topics = {
+            argument.value
+            for call in ast.walk(init)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "create_publisher"
+            for argument in call.args
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+        }
+        self.assertIn("/perception/stage", topics)
+
+    def test_workflow_contains_all_three_stage_transitions(self):
+        tree = self._client_tree()
+        published_stages = {
+            call.args[0].value
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "_publish_perception_stage"
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and isinstance(call.args[0].value, str)
+        }
+        self.assertEqual(published_stages, {"SEARCH", "ACQUIRE", "VERIFY"})
+
+
 class ManipulatorClientCancelBehavioralTests(unittest.TestCase):
     """Behavioral: cancel fires a STOP request on the /chassis/stop client.
 

@@ -556,3 +556,99 @@ Keil 看到 ARM CoreSight SW-DP
 - 抓取、放置、撤退、稳定观察和取消的实现经过：见 `history/DEV_LOG_2026-08-04.md`；
 - 视觉参数、JSONL schema v2 和验收工具使用：见 `vision/VISION_MODULE.md`；
 - Windows 与 Ubuntu 同步：见 `guides/Windows到Ubuntu一键同步.md`。
+
+## 2026-08-14：总集成部署、真实V1链路与“通过”的证据边界
+
+### 今晚完成的版本工作
+
+- 完成上位机 V1 安全链路：严格 HELLO/ACK、STATUS/ODOM/IMU 解码、心跳、STOP、断线状态清理和每秒自动重连；
+- 增加 ROS STOP→伪串口集成测试，以及伪串口断开、同一路径重新出现、重新发送 HELLO 的集成测试；
+- 将 `feature/localization` 独有的 10 轮导航验收 CSV 吸收到总集成分支，并单独记录其证据边界；
+- 将实车串口从可能变化的 `/dev/ttyACM0` 固定为该 STM32 的 `/dev/serial/by-id/...` 身份路径；
+- 总集成分支推送到 `integration/robogame-t26`，今晚最终部署 commit 为 `2d9514d5b3ad1d2bab91a292e3c20bae730cacc9`。
+
+### 树莓派部署与软件验证
+
+树莓派使用新目录部署，未覆盖旧版本：
+
+```text
+/home/rg26/robogame_deploy_2d9514d
+```
+
+已确认：
+
+- bundle SHA-256 校验正确；
+- detached HEAD 固定到目标 commit；
+- ARM64 九包构建、配置校验和测试由现场执行并报告通过；
+- 配置验证输出 `CONFIG PASS: errors=0 warnings=0`；
+- 源码与 install 后的 `robot_field.yaml` 均使用同一个 STM32 `by-id` 路径；
+- VMware 隔离环境全量回归为 `294 tests OK`。
+
+### 真实树莓派↔STM32 V1证据
+
+树莓派识别到：
+
+```text
+/dev/ttyACM0
+/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00
+```
+
+用户 `rg26` 已加入 `dialout`。真实 `safe-suite` 结果：
+
+```text
+ack_ok=True
+status=102 (51.0Hz)
+odom=0 (0.0Hz)
+imu=0 (0.0Hz)
+watchdog_clear=True
+watchdog_set=True
+invalid_payloads=0
+```
+
+正式 `robot_bridge` 在清除残留进程后读取到真实 ROS 状态：
+
+```text
+communication_ok: true
+physical_start: false
+battery_voltage: 0.0
+error_code: 3001
+detail: decoded MCU V1 STATUS
+imu_valid: false
+boot_id: 1
+```
+
+这能证明握手、STATUS、心跳、看门狗、正式解码和 ROS 发布链路已通；不能证明速度执行、ODOM、IMU或机构动作已通。
+
+### 学到的知识一：模拟闭环不是实物闭环
+
+机械臂 mock smoke 只证明：
+
+```text
+任务状态机 → 模拟服务 → 模拟状态 → 抓放/撤退/稳定观察
+```
+
+它不证明真实夹爪、升降、限位或动作完成反馈。真实模式下机构服务目前仍主动返回错误码 2001。以后报告必须分开写“模拟通过”“真实串口通过”“真实动作通过”。
+
+### 学到的知识二：通信通过不是控制通过
+
+`HELLO`、`HEARTBEAT` 和 `STATUS` 通过，只能证明基础通信与安全看门狗。今晚没有向真实 STM32 发送非零 `/cmd_vel`，也没有观察四轮目标 RPM、PWM或实际运动，因此底盘速度链路仍未验收。
+
+### 学到的知识三：重复发布者会污染证据
+
+第一次在树莓派读取 `/robot/status` 时出现 `detail: mock hardware`、24V和 `imu_valid=true`，与真实 STM32 状态矛盾。检查发现有两个残留 `robot_bridge` 进程。清理后真实状态才显示 boot_id=1、battery=0、imu_valid=false。
+
+这说明 ROS 话题名相同不代表数据来源相同。验收前后都必须检查并清理残留进程，不能只看话题有数据就认定来自真实硬件。第一次机械臂 smoke 的瞬时 stale 失败也可能受这些残留发布者影响；清理后连续三轮均通过。
+
+### 学到的知识四：稳定设备身份优于枚举编号
+
+`/dev/ttyACM0` 是本次启动的枚举编号，重新插拔后可能变化；`/dev/serial/by-id/...` 由设备身份生成，更适合作为正式配置。两者当前指向同一个设备，但可靠性语义不同。
+
+### 今晚明确保留的缺口
+
+- 上位机仍缺 `/cmd_vel → robot_bridge → V1 CMD_VEL` 的 ROS→伪串口端到端测试；
+- 上位机仍缺 V1 ODOM/IMU → ROS话题 → localization 的端到端测试；
+- ODOM与IMU ROS协方差语义仍需收尾；
+- STM32虽然定义了 `RPI_SendOdom()` 和 `RPI_SendImu()`，主循环没有调用；
+- STM32工程没有发现真实 IMU 驱动；
+- 真实机械臂命令和状态协议尚未接入；
+- 今晚没有底盘或机构真实运动，也没有烧录 STM32。

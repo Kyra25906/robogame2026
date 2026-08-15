@@ -4,3 +4,11 @@ robot_bridge:
     serial_port: /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00
     baud_rate: 115200
     command_timeout_s: 0.15
+    # Provisional conservative variances; replace with field measurements.
+    odom_pose_xy_variance: 0.25
+    odom_pose_yaw_variance: 0.1219
+    odom_twist_linear_variance: 0.04
+    odom_twist_yaw_variance: 0.09
+    imu_yaw_rate_variance: 0.09
+    unavailable_variance: 1000000.0
+    max_mcu_sample_gap_ms: 250

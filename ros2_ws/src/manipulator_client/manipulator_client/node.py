@@ -56,6 +56,7 @@ class ManipulatorClientNode(Node):
             self.declare_parameter(name, default)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 20)
         self.result_pub = self.create_publisher(String, "/manipulator/result", 10)
+        self.stage_pub = self.create_publisher(String, "/perception/stage", 10)
         self.create_subscription(CubeDetectionArray, "/cubes", self._on_cubes, 10)
         self.create_subscription(String, "/manipulator/command", self._on_command, 10)
         self.create_subscription(RobotStatus, "/robot/status", self._on_robot_status, 10)
@@ -76,6 +77,7 @@ class ManipulatorClientNode(Node):
         self.service_wait_started_at = 0.0
         self.verification_started_at = 0.0
         self.retreat_started_at = 0.0
+        self._last_perception_stage: str | None = None
         try:
             self.grab_verification_policy = GrabVerificationPolicy(
                 str(self.get_parameter("grab_verification_policy").value)
@@ -202,6 +204,15 @@ class ManipulatorClientNode(Node):
         self.service_wait_started_at = self.started_at
         self.verification_started_at = 0.0
         self.retreat_started_at = 0.0
+        self._publish_perception_stage(
+            "SEARCH" if self.command.startswith("PICK_") else "VERIFY"
+        )
+
+    def _publish_perception_stage(self, stage: str) -> None:
+        if stage == self._last_perception_stage:
+            return
+        self.stage_pub.publish(String(data=stage))
+        self._last_perception_stage = stage
 
     def _cancel_current_action(self) -> None:
         self._request_stop()
@@ -436,6 +447,7 @@ class ManipulatorClientNode(Node):
                     self.service_future = None
                     self.workflow_state = ManipulatorState.VERIFYING
                     self.verification_started_at = now
+                    self._publish_perception_stage("VERIFY")
                     self._verify_grab(now)
                 elif self.operation is MechanismOperation.LIFT:
                     self.service_future = None
@@ -499,9 +511,11 @@ class ManipulatorClientNode(Node):
         if self.target is None or now - self.target_time > float(self.get_parameter("target_stale_s").value):
             self.workflow_state = ManipulatorState.WAITING_TARGET
             self.operation = MechanismOperation.NONE
+            self._publish_perception_stage("SEARCH")
             self._publish_stop()
             return
         self.workflow_state = ManipulatorState.ALIGNING
+        self._publish_perception_stage("ACQUIRE")
         alignment = calculate_alignment_command(
             distance_m=self.target.distance_m,
             lateral_m=self.target.lateral_m,

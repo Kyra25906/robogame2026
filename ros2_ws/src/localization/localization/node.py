@@ -48,6 +48,8 @@ class LocalizationNode(Node):
         self.latest_imu: Imu | None = None
         self.latest_imu_time: float | None = None
         self._imu_valid = False
+        self._imu_measurement_valid = False
+        self._last_boot_id: int | None = None
         self.imu_was_active = False
         self.prev_pose_x: float | None = None
         self.prev_pose_y: float | None = None
@@ -56,9 +58,28 @@ class LocalizationNode(Node):
     def _on_imu(self, msg: Imu) -> None:
         self.latest_imu = msg
         self.latest_imu_time = time.monotonic()
+        # sensor_msgs/Imu uses covariance[0] == -1 to mark this measurement
+        # unavailable. robot_bridge sets it when the MCU IMU sample is stale.
+        self._imu_measurement_valid = msg.angular_velocity_covariance[0] >= 0.0
 
     def _on_status(self, msg: RobotStatus) -> None:
         self._imu_valid = bool(msg.imu_valid)
+        if not msg.communication_ok:
+            return
+        boot_id = int(msg.boot_id)
+        if self._last_boot_id is not None and boot_id != self._last_boot_id:
+            self.get_logger().warn(
+                f"MCU boot_id changed {self._last_boot_id} -> {boot_id}; "
+                "accepting the next odometry sample as a new pose origin"
+            )
+            self.prev_pose_x = None
+            self.prev_pose_y = None
+            self.prev_pose_time = None
+            self.latest_imu = None
+            self.latest_imu_time = None
+            self._imu_measurement_valid = False
+            self.imu_was_active = False
+        self._last_boot_id = boot_id
 
     def _on_odom(self, msg: Odometry) -> None:
         fused = copy.deepcopy(msg)
@@ -81,7 +102,7 @@ class LocalizationNode(Node):
             imu_wz,
             imu_age,
             stale_after,
-            status_valid=self._imu_valid,
+            status_valid=self._imu_valid and self._imu_measurement_valid,
         )
         fused.twist.twist.angular.z = wz
 
@@ -90,9 +111,11 @@ class LocalizationNode(Node):
             self.imu_was_active = True
         elif not used_imu and self.imu_was_active:
             reason = "RobotStatus imu_valid=false"
-            if self._imu_valid:
+            if self._imu_valid and self._imu_measurement_valid:
                 age_text = "missing" if imu_age is None else f"{imu_age:.3f}s"
                 reason = f"IMU missing, stale, or non-finite (age={age_text})"
+            elif self._imu_valid:
+                reason = "latest IMU measurement unavailable"
             self.get_logger().warn(
                 f"{reason}; falling back to wheel odometry"
             )

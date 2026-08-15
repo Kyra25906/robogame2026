@@ -12,4 +12,5 @@ description="RoboGame bringup",license="MIT",
 entry_points={"console_scripts":[
     "manipulator_mock_smoke = robogame_bringup.manipulator_mock_smoke:main",
     "field_no_hardware_smoke = robogame_bringup.field_no_hardware_smoke:main",
+    "runtime_source_guard = robogame_bringup.runtime_source_guard:main",
 ]})

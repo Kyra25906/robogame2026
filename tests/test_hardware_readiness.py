@@ -400,7 +400,7 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
             "_tick must call _send_zero_velocity on timeout",
         )
 
-    def test_heartbeat_is_periodic_and_does_not_depend_on_status_trust(self):
+    def test_heartbeat_is_periodic_and_requires_status_trust(self):
         tree = self._robot_bridge_tree()
         methods = {
             node.name: node for node in ast.walk(tree)
@@ -417,7 +417,7 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
         }
         self.assertIn("_handshake_state", refs)
         self.assertIn("_last_heartbeat_tx", refs)
-        self.assertNotIn("_communication_ok", refs)
+        self.assertIn("_communication_ok", refs)
         self.assertIn("encode_heartbeat", called_names)
 
         tick_calls = {
@@ -894,6 +894,100 @@ class RobotBridgeTimeoutStopTests(unittest.TestCase):
         self.bridge._communication_ok = True
         self.bridge._send_zero_velocity()
         self.assertEqual(self.bridge.sequence, 0)
+
+    def test_status_timeout_sends_stop_and_invalidates_old_session(self):
+        from robogame_core.models import Velocity2D
+        from robogame_core.serial_protocol import (
+            MSG_TYPE_EMERGENCY_STOP,
+            MSG_TYPE_VELOCITY,
+            StreamDecoder,
+        )
+
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.bridge.mock_mode = False
+        self.bridge.velocity = Velocity2D(0.6, 0.0, 0.2)
+        self.bridge.decoder = StreamDecoder()
+        self.bridge.last_frame_rx = 1.0
+        self.bridge.last_decoded_status_rx = 1.0
+        self.bridge.last_decoded_odom_rx = 1.0
+        self.bridge.last_decoded_imu_rx = 1.0
+        self.bridge._latest_status = object()
+        self.bridge._latest_odom = object()
+        self.bridge._latest_imu = object()
+        self.bridge._communication_ok = False
+        self.bridge._handshake_state = self._HANDSHAKE_READY
+        self.bridge._handshake_last_hello = 1.0
+        self.bridge._handshake_retries = 1
+        self.bridge._handshake_pending_sequence = None
+        self.bridge._last_heartbeat_tx = 1.0
+
+        self.bridge._enter_status_timeout_failsafe()
+
+        frames = StreamDecoder().feed(b"".join(serial.writes))
+        self.assertEqual(
+            [frame.message_type for frame in frames],
+            [MSG_TYPE_VELOCITY, MSG_TYPE_EMERGENCY_STOP],
+        )
+        self.assertEqual(
+            (self.bridge.velocity.vx, self.bridge.velocity.vy, self.bridge.velocity.wz),
+            (0.0, 0.0, 0.0),
+        )
+        self.assertEqual(self.bridge._handshake_state, "HANDSHAKING")
+        self.assertFalse(self.bridge._communication_ok)
+
+    def test_heartbeat_stops_when_status_is_untrusted(self):
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.bridge.mock_mode = False
+        self.bridge._handshake_state = self._HANDSHAKE_READY
+        self.bridge._communication_ok = False
+        self.bridge._last_heartbeat_tx = 0.0
+
+        self.bridge._send_heartbeat(10.0)
+
+        self.assertEqual(serial.writes, [])
+
+    def test_shutdown_sends_stop_frames_before_closing_serial(self):
+        from robogame_core.models import Velocity2D
+        from robogame_core.serial_protocol import (
+            MSG_TYPE_EMERGENCY_STOP,
+            MSG_TYPE_VELOCITY,
+            StreamDecoder,
+        )
+
+        events = []
+
+        class OrderedSerial(_FakeSerial):
+            def write(self, data):
+                events.append(("write", data))
+                return super().write(data)
+
+            def close(self):
+                events.append(("close", None))
+                super().close()
+
+        serial = OrderedSerial()
+        self.bridge.serial = serial
+        self.bridge.mock_mode = False
+        self.bridge.velocity = Velocity2D(0.4, 0.0, -0.2)
+
+        self.bridge.shutdown_transport()
+
+        frames = StreamDecoder().feed(
+            b"".join(data for kind, data in events if kind == "write")
+        )
+        self.assertEqual(
+            [frame.message_type for frame in frames],
+            [MSG_TYPE_VELOCITY, MSG_TYPE_EMERGENCY_STOP],
+        )
+        self.assertEqual([kind for kind, _data in events], ["write", "write", "close"])
+        self.assertTrue(serial.closed)
+        self.assertIsNone(self.bridge.serial)
+        self.assertEqual(
+            (self.bridge.velocity.vx, self.bridge.velocity.vy, self.bridge.velocity.wz),
+            (0.0, 0.0, 0.0),
+        )
 
 
 if __name__ == "__main__":

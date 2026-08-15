@@ -6,8 +6,10 @@ from rclpy.node import Node
 from robogame_core.models import CubeColor
 from robogame_interfaces.msg import CubeDetection, CubeDetectionArray
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import String
 
 from .opencv_detector import CubeDetector, DetectorConfig
+from .stage import PerceptionStage, parse_perception_stage, stage_profile
 from .temporal_filter import TemporalDetectionFilter, TemporalFilterConfig
 
 
@@ -41,11 +43,31 @@ class CubePerceptionNode(Node):
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.bridge = CvBridge()
+        self.stage = PerceptionStage.SEARCH
         self.detector = CubeDetector(self._read_config())
+        self._apply_stage_profile(self.stage)
         self.temporal_filter = TemporalDetectionFilter(self._read_temporal_config())
         self.publisher = self.create_publisher(CubeDetectionArray, "/cubes", 10)
         self.create_subscription(Image, "/camera/image_raw", self._on_image, 10)
         self.create_subscription(CameraInfo, "/camera/camera_info", self._on_camera_info, 10)
+        self.create_subscription(String, "/perception/stage", self._on_stage, 10)
+
+    def _on_stage(self, msg: String) -> None:
+        try:
+            requested = parse_perception_stage(msg.data)
+        except ValueError as exc:
+            self.get_logger().warn(str(exc))
+            return
+        if requested is self.stage:
+            return
+        self.stage = requested
+        self._apply_stage_profile(self.stage)
+        self.temporal_filter = TemporalDetectionFilter(self._read_temporal_config())
+        self.get_logger().info(f"perception stage changed to {self.stage.value}")
+
+    def _apply_stage_profile(self, stage: PerceptionStage) -> None:
+        profile = stage_profile(stage)
+        self.detector.config.max_working_distance_m = profile.max_working_distance_m
 
     def _read_config(self) -> DetectorConfig:
         return DetectorConfig(

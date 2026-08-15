@@ -267,8 +267,11 @@ class LocalizationNodeStructureTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
         self.assertIn("status_valid", keywords)
-        self.assertIsInstance(keywords["status_valid"], ast.Attribute)
-        self.assertEqual(keywords["status_valid"].attr, "_imu_valid")
+        status_valid_source = ast.unparse(keywords["status_valid"])
+        self.assertEqual(
+            status_valid_source,
+            "self._imu_valid and self._imu_measurement_valid",
+        )
 
     def test_pose_publication_path_keeps_all_required_rejections(self):
         tree = self._node_tree()

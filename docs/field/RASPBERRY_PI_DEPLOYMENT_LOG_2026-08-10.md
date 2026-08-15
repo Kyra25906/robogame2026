@@ -168,6 +168,22 @@
 - 最终工作树：干净，`git status --short` 无输出。
 - 最终ROS 2源码包数量：9。
 - `pgrep -af 'robot_bridge|ros2 launch|mechanism_acceptance'` 未发现相关进程，输出 `NO HARDWARE-RELATED PROCESS`。
+
+## 2026-08-14 更新部署与真实STM32通信
+
+- 当前有效部署 commit：`2d9514d5b3ad1d2bab91a292e3c20bae730cacc9`；
+- 当前部署目录：`/home/rg26/robogame_deploy_2d9514d`；
+- 离线 bundle：`/home/rg26/robogame_2d9514d5b3ad.bundle`；
+- 旧 `/home/rg26/robogame_deploy_2d70649` 保留为回退，不覆盖；
+- ARM64九包构建、配置和测试由现场执行并报告通过；明确输出 `CONFIG PASS: errors=0 warnings=0`；
+- 源码与install后的field配置均固定使用
+  `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00`；
+- 用户 `rg26` 已加入 `dialout`，可正常打开STM32 VCP；
+- 真实safe-suite：ACK通过、STATUS约51Hz、看门狗clear/set通过、非法载荷0；ODOM和IMU均为0帧；
+- 正式 `robot_bridge` 解码真实STATUS：communication_ok=true、physical_start=false、
+  error_code=3001、imu_valid=false、boot_id=1；
+- 曾发现残留mock与real `robot_bridge` 同时发布 `/robot/status`；清理后完成真实状态复验，最终无残留进程；
+- 本日未烧录STM32、未发送真实非零速度、未进行底盘或机构动作。
 - 未连接STM32。
 - 未启动`robot_bridge`。
 - 未运行任何整车launch。

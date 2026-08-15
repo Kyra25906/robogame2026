@@ -117,6 +117,126 @@ class RobotBridgeStopIntegrationTests(unittest.TestCase):
             os.close(master_fd)
             os.close(slave_fd)
 
+    def test_cmd_vel_emits_enabled_velocity_after_handshake_and_fresh_status(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+
+        import pty
+        import rclpy
+        from geometry_msgs.msg import Twist
+        from rclpy.executors import SingleThreadedExecutor
+        from robot_bridge.node import RobotBridge
+        from robogame_core.serial_protocol import (
+            MSG_TYPE_ACK,
+            MSG_TYPE_HELLO,
+            MSG_TYPE_STATUS,
+            MSG_TYPE_VELOCITY,
+            STATUS_PHYSICAL_START,
+            StatusSample,
+            StreamDecoder,
+            encode_ack,
+            encode_frame,
+            encode_status,
+        )
+
+        master_fd, slave_fd = pty.openpty()
+        slave_name = os.ttyname(slave_fd)
+        os.set_blocking(master_fd, False)
+        bridge = None
+        client_node = None
+        executor = None
+        try:
+            rclpy.init(args=[
+                "--ros-args",
+                "-p", "mock_mode:=false",
+                "-p", f"serial_port:={slave_name}",
+            ])
+            bridge = RobotBridge()
+            client_node = rclpy.create_node("cmd_vel_integration_client")
+            publisher = client_node.create_publisher(Twist, "/cmd_vel", 10)
+            executor = SingleThreadedExecutor()
+            executor.add_node(bridge)
+            executor.add_node(client_node)
+
+            decoder = StreamDecoder()
+            hello = None
+            deadline = time.monotonic() + 2.0
+            while hello is None and time.monotonic() < deadline:
+                executor.spin_once(timeout_sec=0.05)
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except BlockingIOError:
+                    chunk = b""
+                for frame in decoder.feed(chunk):
+                    if frame.message_type == MSG_TYPE_HELLO:
+                        hello = frame
+                        break
+            self.assertIsNotNone(hello, "bridge did not send HELLO")
+
+            status = StatusSample(
+                mcu_tick_ms=100,
+                flags=STATUS_PHYSICAL_START,
+                error_code=0,
+                battery_mv=24000,
+                boot_id=1,
+            )
+            os.write(
+                master_fd,
+                encode_frame(MSG_TYPE_ACK, 1000, encode_ack(hello.sequence))
+                + encode_frame(MSG_TYPE_STATUS, 1001, encode_status(status)),
+            )
+            ready_deadline = time.monotonic() + 1.0
+            while (
+                (bridge._handshake_state != "READY" or not bridge._communication_ok)
+                and time.monotonic() < ready_deadline
+            ):
+                executor.spin_once(timeout_sec=0.02)
+            self.assertEqual(bridge._handshake_state, "READY")
+            self.assertTrue(bridge._communication_ok)
+
+            command = Twist()
+            command.linear.x = 0.25
+            command.linear.y = -0.10
+            command.angular.z = 0.50
+            publisher.publish(command)
+
+            velocity_frame = None
+            frame_deadline = time.monotonic() + 1.0
+            while velocity_frame is None and time.monotonic() < frame_deadline:
+                executor.spin_once(timeout_sec=0.02)
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except BlockingIOError:
+                    chunk = b""
+                for frame in decoder.feed(chunk):
+                    if frame.message_type == MSG_TYPE_VELOCITY:
+                        velocity_frame = frame
+                        break
+
+            self.assertIsNotNone(velocity_frame, "no V1 CMD_VEL frame received")
+            vx, vy, wz, enabled = struct.unpack("<fffB", velocity_frame.payload)
+            self.assertAlmostEqual(vx, 0.25, places=6)
+            self.assertAlmostEqual(vy, -0.10, places=6)
+            self.assertAlmostEqual(wz, 0.50, places=6)
+            self.assertEqual(enabled, 1)
+        finally:
+            if executor is not None:
+                if bridge is not None:
+                    executor.remove_node(bridge)
+                if client_node is not None:
+                    executor.remove_node(client_node)
+                executor.shutdown()
+            if bridge is not None:
+                if bridge.serial is not None:
+                    bridge.serial.close()
+                bridge.destroy_node()
+            if client_node is not None:
+                client_node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+            os.close(master_fd)
+            os.close(slave_fd)
+
     def test_serial_disconnect_reconnects_and_starts_fresh_handshake(self):
         if self._skip_reason:
             self.skipTest(self._skip_reason)

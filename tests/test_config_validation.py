@@ -16,7 +16,16 @@ def _node(**params):
 
 def valid_bundle():
     common = {
-        "robot_bridge": _node(command_timeout_s=0.15),
+        "robot_bridge": _node(
+            command_timeout_s=0.15,
+            odom_pose_xy_variance=0.25,
+            odom_pose_yaw_variance=0.1219,
+            odom_twist_linear_variance=0.04,
+            odom_twist_yaw_variance=0.09,
+            imu_yaw_rate_variance=0.09,
+            unavailable_variance=1000000.0,
+            max_mcu_sample_gap_ms=250,
+        ),
         "motion_controller": _node(
             kx=1.2, ky=1.2, kyaw=1.8,
             max_vx=0.6, max_vy=0.5, max_wz=1.2,
@@ -197,6 +206,28 @@ class ConfigValidationTests(unittest.TestCase):
         issues = validate(bundle)
         self.assertTrue(any(
             issue.level == "ERROR" and "imu_stale_s" in issue.path
+            for issue in issues
+        ))
+
+    def test_zero_covariance_is_rejected(self):
+        bundle = valid_bundle()
+        bundle[0]["robot_bridge"]["ros__parameters"][
+            "imu_yaw_rate_variance"
+        ] = 0.0
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "imu_yaw_rate_variance" in issue.path
+            for issue in issues
+        ))
+
+    def test_fractional_mcu_sample_gap_is_rejected(self):
+        bundle = valid_bundle()
+        bundle[0]["robot_bridge"]["ros__parameters"][
+            "max_mcu_sample_gap_ms"
+        ] = 250.5
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "max_mcu_sample_gap_ms" in issue.path
             for issue in issues
         ))
 

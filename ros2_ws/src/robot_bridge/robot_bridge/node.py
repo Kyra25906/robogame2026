@@ -13,6 +13,8 @@ from robogame_core.hardware_readiness import (
     robot_status_communication_ok,
 )
 from robogame_core.models import Pose2D, Velocity2D
+from robogame_core.mcu_time import validate_mcu_tick
+from robogame_core.mcu_time import validate_mcu_tick
 from robogame_core.manipulator import MechanismOperation
 from robogame_core.mock_mechanism import (
     MockMechanismState,
@@ -74,12 +76,37 @@ class RobotBridge(Node):
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("command_timeout_s", 0.15)
+        self.declare_parameter("odom_pose_xy_variance", 0.25)
+        self.declare_parameter("odom_pose_yaw_variance", 0.1219)
+        self.declare_parameter("odom_twist_linear_variance", 0.04)
+        self.declare_parameter("odom_twist_yaw_variance", 0.09)
+        self.declare_parameter("imu_yaw_rate_variance", 0.09)
+        self.declare_parameter("unavailable_variance", 1_000_000.0)
+        self.declare_parameter("max_mcu_sample_gap_ms", 250)
         self.declare_parameter("mock_start_after_s", 2.0)
         self.declare_parameter("mock_grab_success", True)
         self.declare_parameter("mock_release_success", True)
         self.declare_parameter("mock_lift_success", True)
         self.mock_mode = bool(self.get_parameter("mock_mode").value)
         self.command_timeout = float(self.get_parameter("command_timeout_s").value)
+        covariance_names = (
+            "odom_pose_xy_variance",
+            "odom_pose_yaw_variance",
+            "odom_twist_linear_variance",
+            "odom_twist_yaw_variance",
+            "imu_yaw_rate_variance",
+            "unavailable_variance",
+        )
+        self.covariance = {
+            name: float(self.get_parameter(name).value) for name in covariance_names
+        }
+        if any(not math.isfinite(value) or value <= 0.0 for value in self.covariance.values()):
+            raise ValueError("all covariance parameters must be positive and finite")
+        self.max_mcu_sample_gap_ms = int(
+            self.get_parameter("max_mcu_sample_gap_ms").value
+        )
+        if self.max_mcu_sample_gap_ms <= 0:
+            raise ValueError("max_mcu_sample_gap_ms must be positive")
         self.status_pub = self.create_publisher(RobotStatus, "/robot/status", 10)
         self.odom_pub = self.create_publisher(Odometry, "/wheel_odom", 20)
         self.imu_pub = self.create_publisher(Imu, "/imu/data", 20)
@@ -104,6 +131,7 @@ class RobotBridge(Node):
         self._latest_status = None
         self._latest_odom = None
         self._latest_imu = None
+        self._last_mcu_tick_ms = {"odom": None, "imu": None}
         self.mock_mechanism_state = MockMechanismState()
         self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
@@ -130,6 +158,7 @@ class RobotBridge(Node):
         self._latest_status = None
         self._latest_odom = None
         self._latest_imu = None
+        self._last_mcu_tick_ms = {"odom": None, "imu": None}
         self._communication_ok = False
         self._handshake_state = _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
@@ -245,6 +274,8 @@ class RobotBridge(Node):
             return
         if self._handshake_state != _HANDSHAKE_READY:
             return
+        if not self._communication_ok:
+            return
         if now - self._last_heartbeat_tx < _HEARTBEAT_INTERVAL_S:
             return
         host_tick_ms = int(now * 1000.0) & 0xFFFFFFFF
@@ -256,6 +287,36 @@ class RobotBridge(Node):
         if self._safe_serial_write(frame):
             self.sequence = (self.sequence + 1) & 0xFFFF
             self._last_heartbeat_tx = now
+
+    def _enter_status_timeout_failsafe(self) -> None:
+        """Stop the old control session when decoded MCU status goes stale."""
+        self.get_logger().error(
+            "MCU STATUS timed out; sending STOP, stopping heartbeat, and "
+            "requiring a fresh handshake"
+        )
+        self.velocity = Velocity2D(0.0, 0.0, 0.0)
+        if self.serial is not None:
+            result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
+            self.sequence = result.next_sequence
+            if not result.success:
+                self.get_logger().error(
+                    "STATUS-timeout STOP incomplete; MCU watchdog must stop motion"
+                )
+        self._reset_real_transport_state()
+
+    def shutdown_transport(self) -> None:
+        """Actively stop the MCU before closing a real serial session."""
+        self.velocity = Velocity2D(0.0, 0.0, 0.0)
+        if not self.mock_mode and self.serial is not None:
+            result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
+            self.sequence = result.next_sequence
+            if not result.success:
+                self.get_logger().error(
+                    "shutdown STOP incomplete; MCU watchdog must stop motion"
+                )
+        if self.serial is not None:
+            self.serial.close()
+            self.serial = None
 
     def _mechanism(self, request, response):
         started = time.monotonic()
@@ -418,6 +479,12 @@ class RobotBridge(Node):
         )
         self._last_boot_id = boot_id
         self.integrator = OdometryIntegrator(Pose2D(0.0, 0.0, 0.0))
+        self.velocity = Velocity2D(0.0, 0.0, 0.0)
+        self._latest_odom = None
+        self.last_decoded_odom_rx = None
+        self._latest_imu = None
+        self.last_decoded_imu_rx = None
+        self._last_mcu_tick_ms = {"odom": None, "imu": None}
         if not self.mock_mode:
             self._handshake_state = _HANDSHAKE_HANDSHAKING
             self._handshake_last_hello = 0.0
@@ -451,6 +518,8 @@ class RobotBridge(Node):
             except ProtocolError as exc:
                 self.get_logger().warn(f"invalid ODOM payload rejected: {exc}")
                 return
+            if not self._accept_mcu_tick("odom", odom.mcu_tick_ms):
+                return
             self._latest_odom = odom
             self.last_decoded_odom_rx = now
         elif msg_type == MSG_TYPE_IMU:
@@ -459,8 +528,26 @@ class RobotBridge(Node):
             except ProtocolError as exc:
                 self.get_logger().warn(f"invalid IMU payload rejected: {exc}")
                 return
+            if not self._accept_mcu_tick("imu", imu.mcu_tick_ms):
+                return
             self._latest_imu = imu
             self.last_decoded_imu_rx = now
+
+    def _accept_mcu_tick(self, stream: str, current_tick_ms: int) -> bool:
+        previous = self._last_mcu_tick_ms[stream]
+        result = validate_mcu_tick(
+            previous,
+            current_tick_ms,
+            max_gap_ms=self.max_mcu_sample_gap_ms,
+        )
+        if result.accepted or result.resync:
+            self._last_mcu_tick_ms[stream] = current_tick_ms
+        if not result.accepted:
+            self.get_logger().warn(
+                f"rejected {stream.upper()} mcu_tick_ms={current_tick_ms}: "
+                f"{result.reason} delta_ms={result.delta_ms}"
+            )
+        return result.accepted
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -472,8 +559,6 @@ class RobotBridge(Node):
         # ---------- handshake state machine ----------
         if self._handshake_state == _HANDSHAKE_HANDSHAKING:
             self._run_handshake(now)
-
-        self._send_heartbeat(now)
 
         data = self._safe_serial_read()
         if data:
@@ -488,7 +573,13 @@ class RobotBridge(Node):
             now_s=now,
             timeout_s=0.30,
         )
+        communication_was_ok = self._communication_ok
         self._communication_ok = communication_ok
+        if not self.mock_mode and communication_was_ok and not communication_ok:
+            self._enter_status_timeout_failsafe()
+            communication_ok = False
+
+        self._send_heartbeat(now)
         transport_fresh = self.mock_mode or receive_timestamp_is_fresh(
             last_received_s=self.last_frame_rx,
             now_s=now,
@@ -507,9 +598,9 @@ class RobotBridge(Node):
             measured_velocity = self.velocity
         elif self._latest_odom is not None and odom_fresh:
             measured_velocity = Velocity2D(
-                self._latest_odom.vx,
-                self._latest_odom.vy,
-                self._latest_odom.wz,
+                self._latest_odom.vx_mps,
+                self._latest_odom.vy_mps,
+                self._latest_odom.wz_radps,
             )
         else:
             measured_velocity = Velocity2D(0.0, 0.0, 0.0)
@@ -525,9 +616,25 @@ class RobotBridge(Node):
         qx, qy, qz, qw = yaw_to_quaternion(pose.yaw)
         odom.pose.pose.orientation.x, odom.pose.pose.orientation.y = qx, qy
         odom.pose.pose.orientation.z, odom.pose.pose.orientation.w = qz, qw
+        odom.pose.covariance[0] = self.covariance["odom_pose_xy_variance"]
+        odom.pose.covariance[7] = self.covariance["odom_pose_xy_variance"]
+        odom.pose.covariance[14] = self.covariance["unavailable_variance"]
+        odom.pose.covariance[21] = self.covariance["unavailable_variance"]
+        odom.pose.covariance[28] = self.covariance["unavailable_variance"]
+        odom.pose.covariance[35] = self.covariance["odom_pose_yaw_variance"]
         odom.twist.twist.linear.x = measured_velocity.vx
         odom.twist.twist.linear.y = measured_velocity.vy
         odom.twist.twist.angular.z = measured_velocity.wz
+        odom.twist.covariance[0] = self.covariance["odom_twist_linear_variance"]
+        odom.twist.covariance[7] = self.covariance["odom_twist_linear_variance"]
+        odom.twist.covariance[14] = self.covariance["unavailable_variance"]
+        odom.twist.covariance[21] = self.covariance["unavailable_variance"]
+        odom.twist.covariance[28] = self.covariance["unavailable_variance"]
+        odom.twist.covariance[35] = self.covariance["odom_twist_yaw_variance"]
+        if not self.mock_mode and not odom_fresh:
+            odom.twist.covariance[0] = self.covariance["unavailable_variance"]
+            odom.twist.covariance[7] = self.covariance["unavailable_variance"]
+            odom.twist.covariance[35] = self.covariance["unavailable_variance"]
         self.odom_pub.publish(odom)
 
         imu = Imu()
@@ -540,8 +647,14 @@ class RobotBridge(Node):
         )
         if self.mock_mode:
             imu.angular_velocity.z = self.velocity.wz
+            imu.angular_velocity_covariance[0] = self.covariance["unavailable_variance"]
+            imu.angular_velocity_covariance[4] = self.covariance["unavailable_variance"]
+            imu.angular_velocity_covariance[8] = self.covariance["imu_yaw_rate_variance"]
         elif self._latest_imu is not None and imu_fresh and self._latest_imu.valid:
-            imu.angular_velocity.z = self._latest_imu.gyro_z
+            imu.angular_velocity.z = self._latest_imu.gyro_z_radps
+            imu.angular_velocity_covariance[0] = self.covariance["unavailable_variance"]
+            imu.angular_velocity_covariance[4] = self.covariance["unavailable_variance"]
+            imu.angular_velocity_covariance[8] = self.covariance["imu_yaw_rate_variance"]
         else:
             # sensor_msgs/Imu convention: covariance[0] = -1 means this
             # measurement is unavailable and consumers must not use it.
@@ -616,8 +729,7 @@ def main(args=None) -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        if node.serial is not None:
-            node.serial.close()
+        node.shutdown_transport()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

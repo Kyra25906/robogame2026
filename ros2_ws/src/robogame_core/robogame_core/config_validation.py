@@ -54,7 +54,12 @@ def validate_config_bundle(
     localization = _params(common, "localization")
 
     positive_groups = {
-        "robot.yaml:robot_bridge": (bridge, ["command_timeout_s"]),
+        "robot.yaml:robot_bridge": (bridge, [
+            "command_timeout_s", "odom_pose_xy_variance",
+            "odom_pose_yaw_variance", "odom_twist_linear_variance",
+            "odom_twist_yaw_variance", "imu_yaw_rate_variance",
+            "unavailable_variance", "max_mcu_sample_gap_ms",
+        ]),
         "robot.yaml:motion_controller": (motion, [
             "kx", "ky", "kyaw", "max_vx", "max_vy", "max_wz",
             "position_tolerance", "yaw_tolerance", "slow_radius",
@@ -83,6 +88,13 @@ def validate_config_bundle(
             value = params.get(name)
             if not _finite_number(value) or value <= 0:
                 error(f"{prefix}.{name}", "must be a positive finite number")
+
+    sample_gap = bridge.get("max_mcu_sample_gap_ms")
+    if not isinstance(sample_gap, int) or isinstance(sample_gap, bool) or sample_gap <= 0:
+        error(
+            "robot.yaml:robot_bridge.max_mcu_sample_gap_ms",
+            "must be a positive integer number of milliseconds",
+        )
 
     gap = manipulator.get("placement_max_unavailable_gap_s")
     if not _finite_number(gap) or gap < 0:
