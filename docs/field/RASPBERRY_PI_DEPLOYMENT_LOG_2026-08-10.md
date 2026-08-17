@@ -202,3 +202,116 @@
 ### 下一验收点（更新）
 
 本轮仅完成树莓派ARM64无硬件部署验收。下一阶段仍需单独制定首次STM32连接、串口只读观察、STOP/急停/失联安全验证顺序；在双方确认安全清单前，不连接STM32、不启动`robot_bridge`、不运行整车launch，也不给执行器接通动力。
+
+## 2026-08-15：`d98b9d3`部署与无动力STM32安全联调
+
+> 本节为最新现场状态，取代上方“未连接STM32/未调用STOP”等历史状态；旧记录保留用于追溯当时阶段。
+
+### 部署身份
+
+- 完整commit：`d98b9d3253c72c87922feeab6118dab07c957c15`；
+- bundle：`/home/rg26/robogame_d98b9d3253c7.bundle`；
+- 独立部署目录：`/home/rg26/robogame_deploy_d98b9d3253c7`；
+- 检出方式：detached HEAD；
+- `git rev-parse HEAD` 与目标SHA完全一致；
+- `git status --short` 无输出。
+
+### ARM64软件验收
+
+- `rosdep check --from-paths src --ignore-src -r`：`All system dependencies have been satisfied`；
+- `colcon build --symlink-install`：`Summary: 9 packages finished [1min 40s]`；
+- 配置检查通过；
+- 九个ROS 2包均可发现；
+- 树莓派全量测试：`Ran 333 tests in 13.033s`、`OK`；
+- 无硬件相关进程审计通过：`NO HARDWARE-RELATED PROCESS`；
+- 正式结论：`SOFTWARE DEPLOYMENT PASS`。
+
+### USB故障定位与稳定身份
+
+初次连接时，`robot_bridge` 报目标路径不存在。只读诊断发现 `lsusb` 只有VIA Hub，系统无 `/dev/ttyACM*`、无 `/dev/serial/by-id/`，因此排除 `dialout` 权限和ROS配置，定位为USB设备未枚举。更换数据线后确认：
+
+```text
+Bus 001 Device 003: ID 0483:5740 STMicroelectronics Virtual COM Port
+/dev/ttyACM0
+/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00
+```
+
+内核日志显示 `cdc_acm ... ttyACM0: USB ACM device`，序列号为 `307A39653433`。用户 `rg26` 已属于 `dialout`，稳定路径与正式配置完全一致。
+
+### 真实V1状态与遥测
+
+仅启动独立 `robot_bridge`，未启动整车launch。真实STATUS样本：
+
+```text
+communication_ok: true
+emergency_stop: false
+physical_start: false
+battery_voltage: 0.0
+error_code: 0
+detail: decoded MCU V1 STATUS
+calibrating: false
+imu_valid: false
+boot_id: 1
+```
+
+- STATUS约50Hz；
+- ODOM话题约50Hz，车辆静止样本位置与速度为零；
+- IMU话题约50Hz，但 `imu_valid=false`，角速度协方差首项为 `-1.0`，明确表示不可用；
+- 话题存在不等于传感器已验收：真实编码器变化和有效IMU仍未验证。
+
+### 拔线重连与STOP闭环
+
+在执行器无动力条件下，保持桥接运行并拔掉STM32 USB；桥接进入失败安全状态。重新插入后：
+
+- `0483:5740` 和同一 `by-id` 路径恢复；
+- `/robot_bridge` 进程未退出；
+- 自动重新握手；
+- `communication_ok=true` 与约50Hz STATUS恢复。
+
+随后调用真实 `/chassis/stop`：
+
+```text
+success=True
+error_code=0
+detail='real STOP sent: zero velocity + emergency stop'
+```
+
+STM32在下一状态中回传：
+
+```text
+emergency_stop: true
+error_code: 9001
+communication_ok: true
+```
+
+这证明STOP帧写出与STM32急停回传闭环均成立。STOP后通信仍约50Hz。最后按 `Ctrl+C` 安全退出桥接，确认 `NO ROBOT BRIDGE PROCESS`，STM32稳定设备路径仍在线。
+
+### 电控源码审查补充
+
+收到 `Four_Motor_PID_Test` STM32F427完整工程并进行只读审查，未编译、未烧录、未修改现场STM32。代码确认：
+
+- `9001` 为软件急停正式错误码；
+- 软件急停锁存，通信恢复不自动清除；
+- 本地PB2白色USER KEY长按约1.5秒触发重新授权请求，只有安全检查通过才清除可恢复故障并置 `physical_start`；
+- 树莓派控制看门狗150ms，超时清速度并置错误码4001；
+- 独立IWDG约0.5秒；
+- 遥控器在线时优先人工接管；
+- 新HELLO清除旧速度；
+- 当前树莓派 `vx/vy/wz` 自动限幅均为 `0.0f`，因此固件明确拒绝所有非零自动运动命令。
+
+### 本轮正式结论与边界
+
+- `ROSDEP PASS`
+- `ARM64 BUILD PASS`
+- `333/333 SOFTWARE TEST PASS`
+- `USB IDENTITY PASS`
+- `V1 STATUS PASS`
+- `DISCONNECT/RECONNECT PASS`
+- `SOFTWARE STOP CLOSED-LOOP PASS`
+- `NO-ACTUATOR-POWER PASS`
+- `NONZERO CMD_VEL NOT RUN`
+- `REAL-CAR MOTION NOT RUN`
+- `MECHANISM NOT RUN`
+- `IMU NOT VALID`
+
+压缩包源码与现场行为一致，但尚无板上固件构建哈希，不能据此证明Flash与源码逐字节相同。下一步必须先冻结非零自动限幅和固件身份，再烧录并从安全门起重新验收；当前不得绕过零限幅直接发送非零 `/cmd_vel`。

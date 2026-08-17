@@ -35,3 +35,7 @@ _learning_review_*/
 _vision_doc_render/
 tmp/
 _review_requirements_extract.txt
+
+_dialogue_doc_work/
+_inspect_four_motor/
+四轮同步PID模块/

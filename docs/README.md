@@ -8,7 +8,7 @@
 
 如果你是接手开发的 agent，按这个顺序读：
 
-1. **[AGENT.md](AGENT.md)** —— 协作约定：先读，了解怎么和用户配合、每轮流程与边界
+1. **[AGENT.md](AGENT.md)** —— 协作约定：先读，了解怎么和用户配合、每轮流程与边界（配合 [ENGINEERING_DISCIPLINE.md](ENGINEERING_DISCIPLINE.md) 一起读，先带上工程底线意识）
 2. **[TODO_AND_ISSUES.md](TODO_AND_ISSUES.md)** —— 当前进度、阻塞项、下一步（必读，也是你完成后要更新的地方）
 3. 按你的任务域，读对应最新的 handoff：
    - 整车 / 硬件对接 → `field/RASPBERRY_PI_REAL_CAR_AGENT_HANDOFF_2026-08-12.md`
@@ -27,6 +27,7 @@
 | 确认当前进度、阻塞项和下一步 | [TODO_AND_ISSUES.md](TODO_AND_ISSUES.md) | 每次开发结束更新完成证据和新问题 |
 | 查看 8 月 13—18 日安排 | [PLAN_2026-08-13_TO_18.md](PLAN_2026-08-13_TO_18.md) | 每天只执行当前阶段，未通过不得跳级 |
 | 复习开发中学到的知识 | [LEARNING_LOG.md](LEARNING_LOG.md) | 面向编程基础较少的同学持续追加 |
+| 对照工程底线自检 | [ENGINEERING_DISCIPLINE.md](ENGINEERING_DISCIPLINE.md) | 收工时按完成标准（DoD）自检，区分「已验证 / 未验证」 |
 
 ## 按工作类型查找
 

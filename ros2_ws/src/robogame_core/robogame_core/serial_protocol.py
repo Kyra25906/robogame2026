@@ -15,8 +15,8 @@ HEARTBEAT_PAYLOAD = struct.Struct("<I")
 ODOM_PAYLOAD = struct.Struct("<Ifff")
 IMU_PAYLOAD = struct.Struct("<IfB")
 STATUS_PAYLOAD = struct.Struct("<IHHHH")
-MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBiH")
-MECHANISM_STATUS_PAYLOAD = struct.Struct("<HBBHH")
+MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBBiI")
+MECHANISM_STATUS_PAYLOAD = struct.Struct("<HBBHI")
 ACK_PAYLOAD = struct.Struct("<HBB")
 
 MSG_TYPE_VELOCITY = 0x01
@@ -46,9 +46,9 @@ STATUS_KNOWN_MASK = (1 << 10) - 1
 class MechanismOperation(IntEnum):
     GRAB = 1
     RELEASE = 2
-    LIFT = 3
-    RETREAT = 4
+    LIFT_ABS = 3
     STOP = 5
+    HOME = 6
 
 
 class MechanismState(IntEnum):
@@ -57,6 +57,7 @@ class MechanismState(IntEnum):
     SUCCEEDED = 3
     FAILED = 4
     CANCELLED = 5
+    REJECTED = 6
 
 
 class ProtocolError(ValueError):
@@ -103,6 +104,7 @@ class MechanismCommand:
     operation: MechanismOperation
     parameter: int
     timeout_ms: int
+    flags: int = 0
 
 
 @dataclass(frozen=True)
@@ -229,22 +231,27 @@ def decode_status(payload: bytes) -> StatusSample:
 
 
 def encode_mechanism_command(command: MechanismCommand) -> bytes:
+    if command.flags != 0:
+        raise ValueError("mechanism command flags must be zero in protocol V1")
     return MECHANISM_COMMAND_PAYLOAD.pack(
         _uint(command.command_id, 16, "command_id"),
         int(MechanismOperation(command.operation)),
+        _uint(command.flags, 8, "flags"),
         _int32(command.parameter, "parameter"),
-        _uint(command.timeout_ms, 16, "timeout_ms"),
+        _uint(command.timeout_ms, 32, "timeout_ms"),
     )
 
 
 def decode_mechanism_command(payload: bytes) -> MechanismCommand:
     _require_size(payload, MECHANISM_COMMAND_PAYLOAD, "MECHANISM_COMMAND")
-    command_id, operation, parameter, timeout_ms = MECHANISM_COMMAND_PAYLOAD.unpack(payload)
+    command_id, operation, flags, parameter, timeout_ms = MECHANISM_COMMAND_PAYLOAD.unpack(payload)
     try:
         operation_value = MechanismOperation(operation)
     except ValueError as exc:
         raise ProtocolError(f"unknown mechanism operation {operation}") from exc
-    return MechanismCommand(command_id, operation_value, parameter, timeout_ms)
+    if flags != 0:
+        raise ProtocolError("mechanism command flags must be zero in protocol V1")
+    return MechanismCommand(command_id, operation_value, parameter, timeout_ms, flags)
 
 
 def encode_mechanism_status(status: MechanismStatus) -> bytes:
@@ -253,7 +260,7 @@ def encode_mechanism_status(status: MechanismStatus) -> bytes:
         int(MechanismOperation(status.operation)),
         int(MechanismState(status.state)),
         _uint(status.error_code, 16, "error_code"),
-        _uint(status.duration_ms, 16, "duration_ms"),
+        _uint(status.duration_ms, 32, "duration_ms"),
     )
 
 

@@ -1,101 +1,122 @@
-# robot_bridge 使用说明
+# robot_bridge：树莓派串口与机械臂控制说明
 
-## 1. 这个包负责什么
+## 1. 功能边界
 
-它是上位机 ROS2 与下位机电控之间的“翻译员”。上层发 `/cmd_vel` 和机构请求；它应转换为串口数据。电控返回轮速、IMU、机构和故障数据后，它应转换为 ROS2 消息。
+`robot_bridge` 负责在 ROS2 与 STM32 串口协议 V1 之间转换命令和状态。当前树莓派侧已经实现机械命令状态机，但这不代表真实机械臂已经可动；在 STM32 支持 `0x20/0x21` 前，只能使用 PTY 模拟验收。
 
-当前模拟模式可完整演示软件流程；真实硬件接收部分仍是明确的待开发接口。
+机械命令链路：
 
-## 2. 文件分工
+```text
+ROS2服务 → 安全检查 → 0x20命令 → ACK → 0x21状态 → ROS2结果
+```
 
-- `robot_bridge/node.py`：打开串口、接收速度、发布模拟里程计/IMU/状态、提供模拟机构服务。
-- `robogame_core/serial_protocol.py`：帧头、版本、序号、长度、CRC16、速度载荷和流解码。
-- `setup.py`：登记程序名 `robot_bridge`，声明 Python `pyserial`。
-- `package.xml`：声明 ROS2 消息依赖。
-- `robogame_bringup/config/robot.yaml`：模拟模式参数。
-- `robogame_bringup/config/hardware.yaml`：真实串口覆盖参数。
+只有匹配命令的 `SUCCEEDED` 且 `error_code=0` 才返回成功。
 
-## 3. 模拟模式启动和测试
+## 2. ROS2接口
+
+| 服务 | 类型 | 命令 |
+|---|---|---|
+| `/gripper/grab` | `ExecuteMechanism` | `GRAB` |
+| `/gripper/release` | `ExecuteMechanism` | `RELEASE` |
+| `/mechanism/home` | `ExecuteMechanism` | `HOME` |
+| `/mechanism/stop` | `ExecuteMechanism` | `STOP` |
+| `/lift/set_height` | `SetLiftHeight` | 绝对高度，单位米 |
+| `/chassis/stop` | `ExecuteMechanism` | 全局底盘急停，不等同于机构STOP |
+
+订阅 `/cmd_vel`，发布 `/wheel_odom`、`/imu/data` 和 `/robot/status`。
+
+## 3. 机械传输参数
+
+`hardware.yaml` 默认值：
+
+| 参数 | 默认值 | 含义 |
+|---|---:|---|
+| `mechanism_ack_timeout_s` | `0.1` | 每次发送后等待帧ACK的时间 |
+| `mechanism_status_timeout_s` | `0.3` | ACK或中间状态后等待下一状态的时间 |
+| `mechanism_max_attempts` | `3` | 同一命令最多发送次数，包含首次发送 |
+
+重试时串口帧 `sequence` 更新，但业务 `command_id` 保持不变。超时参数必须是有限正数，最大尝试次数必须为正整数，否则节点拒绝启动。
+
+服务请求中的 `timeout_s` 是整条业务命令的上层期限，不应小于单次协议等待时间。LIFT请求会把米转换为整数毫米。
+
+## 4. Ubuntu启动
 
 ```bash
+cd ~/robogame2026-integration/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
 ros2 run robot_bridge robot_bridge --ros-args \
-  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml
+  --params-file src/robogame_bringup/config/hardware.yaml
 ```
 
-发送速度：
+确认串口权限：
 
 ```bash
-ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist \
-  "{linear: {x: 0.1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
+ls -l /dev/serial/by-id/
+groups
 ```
 
-按 `Ctrl+C` 停止发送，观察：
+用户通常需要属于 `dialout` 组。修改用户组后需要注销并重新登录。
 
-```bash
-ros2 topic echo /wheel_odom --once
-ros2 topic echo /imu/data --once
-ros2 topic echo /robot/status
-```
-
-调用模拟夹爪：
+## 5. 服务调用示例
 
 ```bash
 ros2 service call /gripper/grab robogame_interfaces/srv/ExecuteMechanism \
   "{command: GRAB, timeout_s: 3.0}"
-```
 
-调用模拟升降：
+ros2 service call /gripper/release robogame_interfaces/srv/ExecuteMechanism \
+  "{command: RELEASE, timeout_s: 3.0}"
 
-```bash
+ros2 service call /mechanism/home robogame_interfaces/srv/ExecuteMechanism \
+  "{command: HOME, timeout_s: 5.0}"
+
+ros2 service call /mechanism/stop robogame_interfaces/srv/ExecuteMechanism \
+  "{command: STOP, timeout_s: 1.0}"
+
 ros2 service call /lift/set_height robogame_interfaces/srv/SetLiftHeight \
-  "{height_m: 0.1, timeout_s: 3.0}"
+  "{height_m: 0.123, timeout_s: 5.0}"
 ```
 
-## 4. 接口
+## 6. 动作安全门
 
-- 订阅 `/cmd_vel`。
-- 发布 `/wheel_odom`、`/imu/data`、`/robot/status`。
-- 提供 `/gripper/grab`、`/gripper/release`、`/lift/set_height`、`/chassis/stop`。
-- 参数：`mock_mode`、`serial_port`、`baud_rate`、`command_timeout_s`、`mock_start_after_s`。
+真实模式发送机械命令前必须同时满足：
 
-## 5. 真实串口入口
+- 串口已打开；
+- HELLO/ACK握手完成；
+- 最新STATUS有效且通信未超时；
+- 没有急停；
+- 没有机构故障；
+- 物理启动授权有效；
+- 没有另一条普通机械命令正在运行。
+
+`/mechanism/stop` 可以取消活动命令并建立自己的STOP状态机。串口断开、MCU重启、急停或机构故障都会取消活动命令。
+
+## 7. 错误码
+
+| 错误码 | 含义 |
+|---:|---|
+| `0` | 成功 |
+| `4` | 参数或超时非法 |
+| `5` | 没有物理启动授权 |
+| `6` | 已有机械命令正在运行 |
+| `7` | 示例ACK拒绝码；实际非零ACK码原样返回 |
+| `8` | 活动命令被机构STOP取消 |
+| `9` | 不支持的真实机械命令 |
+| `42` | 示例MCU执行错误；实际MCU终态错误码原样返回 |
+| `2002` | 整条机械命令超过业务期限 |
+| `9001` | 急停或全局STOP中断命令 |
+| `9003` | 串口不可用、写失败或协议响应超时 |
+| `9004` | MCU `boot_id`变化，旧会话命令作废 |
+| `9006` | 机构故障或非法状态转换 |
+
+## 8. 树莓派侧验收
+
+不连接真实STM32时，在Ubuntu隔离环境运行：
 
 ```bash
-ros2 run robot_bridge robot_bridge --ros-args \
-  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml \
-  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/hardware.yaml
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install_mechanism_test/setup.bash
+python3 -m unittest tests.test_robot_bridge_mechanism_integration -v
 ```
 
-Ubuntu 串口权限可能需要：
-
-```bash
-sudo usermod -aG dialout $USER
-```
-
-执行后注销并重新登录。
-
-## 6. 当前真实模式的关键限制
-
-- 已能把 `vx、vy、wz` 编成 `0x01` 速度帧并写入串口。
-- 能按帧格式和 CRC 从字节流提取回传帧，但没有解析任何 MCU 状态载荷。
-- 真实夹爪、释放和升降服务会主动返回错误 `2001`，避免在协议未冻结时误动作。
-- 当前 `/wheel_odom` 是用“上位机发出的命令速度”积分出来的，不是真实编码器反馈。
-- `command_timeout_s` 目前只把程序内部速度置零，没有在定时器中主动向 MCU 补发零速度帧，因此不能代替电控端 100～200 ms 硬件超时停车。
-
-在这些项目完成前，不能把 `hardware.launch.py` 当成可上场版本。
-
-## 7. 必须向电控确认
-
-- 串口设备名、波特率、字节序、发送频率和 USB 重连行为。
-- `vx、vy、wz` 的单位、正方向和底盘限幅。
-- 消息类型编号、序号、CRC 范围、心跳和应答机制。
-- 轮速、IMU、实体启动、急停、电池、夹爪、升降和故障载荷格式。
-- 通信断开后必须由下位机独立停车，不能依赖 Ubuntu 正常运行。
-- 每条机构命令的完成反馈、错误码、超时和幂等行为。
-
-## 8. 自动测试
-
-```bash
-cd ~/robogame
-python3 -m unittest tests.test_serial_protocol -v
-```
+PTY套件覆盖正常操作、ACK/状态超时、重试、错误终态、急停、MCU重启、命令互斥、STOP抢占以及串口断线重连。真实机械臂联调必须等STM32实现并经过单独授权。

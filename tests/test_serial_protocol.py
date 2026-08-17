@@ -154,10 +154,10 @@ class SerialProtocolTests(unittest.TestCase):
             24150,
             7,
         )
-        command = MechanismCommand(42, MechanismOperation.LIFT, 315, 18000)
+        command = MechanismCommand(42, MechanismOperation.LIFT_ABS, 315, 18000)
         result = MechanismStatus(
             42,
-            MechanismOperation.LIFT,
+            MechanismOperation.LIFT_ABS,
             MechanismState.SUCCEEDED,
             0,
             2710,
@@ -181,7 +181,7 @@ class SerialProtocolTests(unittest.TestCase):
             len(encode_mechanism_command(
                 MechanismCommand(0, MechanismOperation.STOP, 0, 0)
             )),
-            9,
+            12,
         )
         self.assertEqual(
             len(encode_mechanism_status(
@@ -189,7 +189,7 @@ class SerialProtocolTests(unittest.TestCase):
                     0, MechanismOperation.STOP, MechanismState.ACCEPTED, 0, 0
                 )
             )),
-            8,
+            10,
         )
         self.assertEqual(len(encode_ack(0)), 4)
 
@@ -201,7 +201,9 @@ class SerialProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "reserved flag bits"):
             decode_status(struct.pack("<IHHHH", 0, 1 << 15, 0, 24000, 1))
         with self.assertRaisesRegex(ProtocolError, "unknown mechanism operation"):
-            decode_mechanism_command(struct.pack("<HBiH", 1, 99, 0, 100))
+            decode_mechanism_command(struct.pack("<HBBiI", 1, 99, 0, 0, 100))
+        with self.assertRaisesRegex(ProtocolError, "flags must be zero"):
+            decode_mechanism_command(struct.pack("<HBBiI", 1, 1, 1, 0, 100))
         with self.assertRaisesRegex(ProtocolError, "ACK protocol version"):
             decode_ack(struct.pack("<HBB", 1, 0, VERSION + 1))
 
@@ -222,6 +224,14 @@ class SerialProtocolTests(unittest.TestCase):
                 4,
                 encode_status(StatusSample(1250, STATUS_IMU_VALID, 0, 24150, 7)),
                 "AA55011204000C00E204000008000000565E0700377C",
+            ),
+            (
+                0x20,
+                0x0065,
+                encode_mechanism_command(
+                    MechanismCommand(2, MechanismOperation.LIFT_ABS, 120, 4000)
+                ),
+                "AA55012065000C000200030078000000A00F0000901C",
             ),
         )
         for message_type, sequence, payload, expected_hex in vectors:
