@@ -52,7 +52,7 @@
 结论：巡线 = 上位机决策与控制，下位机只做八路灰度采集上送。归属细节见 `docs/team/两人算法最终分工.md`「巡线分工」。
 
 - [ ] `P1` 第二位算法同学：与电控确认八路巡线模块是否装车、接口电平、ADC 通道（当前 `HAL_ADC_MODULE_ENABLED` 被注释禁用，见 STM32 工程 `stm32f4xx_hal_conf.h`）。
-- [ ] `P1` 第二位算法同学：实现 `robogame_core/line_follow.py` 纯算法模块（八路原始值 → 横向偏差 + 纠偏输出 + `ON_LINE/LEFT/RIGHT/LOST` 状态机）与 `tests/test_line_follow.py` 合成数据单元测试，参考 `navigation.py` 风格。
+- [x] `P1` 第二位算法同学：实现 `robogame_core/line_follow.py` 纯算法模块（八路原始值 → 横向偏差 + 纠偏输出 + `ON_LINE/LEFT/RIGHT/LOST` 状态机）与 `tests/test_line_follow.py` 合成数据单元测试，参考 `navigation.py` 风格。证据：分支 `feature/line_follow` 提交 `6b36e28`，31 项测试全部通过，文档见 `docs/line_follow/README.md` 和 `docs/line_follow/CALIBRATION_AND_HARDWARE.md`。
 - [ ] `P1` 算法一：把巡线作为「路段类型」接入 `motion_control` / `mission_manager` 路线选择（路段链、模式切换、与路点/视觉对准仲裁）。
 - [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。
 - [ ] `P2` 真车贴线联调：低速贴线、出线恢复、交叉口行为验收。
