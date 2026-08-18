@@ -29,7 +29,10 @@ motion_controller:
     max_awz: 2.00
     max_control_dt_s: 0.10
     goal_timeout_s: 15.0
-    pose_stale_s: 0.25
+    # 2026-08-18 真车联调：固件 odom 偶发跳变（500ms/1.6s）导致 /pose 偶发
+    # 断流。pose_stale_s 放宽到 1.5s 容忍断流（临时缓解）；电控修好 odom
+    # 跳变后应调回 0.25。
+    pose_stale_s: 1.5
     status_stale_s: 0.30
     min_x: -0.2
     max_x: 7.4
