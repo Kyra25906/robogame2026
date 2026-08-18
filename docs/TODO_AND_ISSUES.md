@@ -57,6 +57,41 @@
 
 8 月 13—18 日每日安排见 `PLAN_2026-08-13_TO_18.md`，现场资料集中在 `field/`。
 
+## 2026-08-17 第三轮复审修复清单（方案已出，代码未动）
+
+依据：第三轮复审报告（344 项测试基线）。详细修复方案（根因/行号/验证/依赖）见 `docs/RoboGame2026_第三轮复审修复方案_2026-08-17.md`。以下为可执行清单，代码改动待确认后逐项实施。
+
+> **执行顺序、二审录像与完赛清单见 `docs/team/算法一执行队列_2026-08-18.md`**（阶段 A–H，含评分项对齐与待拍板决策）。
+> 2026-08-18 修正两处过时假设：视觉工作分辨率 1280×720→**640×480**（焦距 2550→**1275**）；标签为 **AprilTag Tag36h11** 而非 ArUco。
+
+### P0：field 模式必然失败（6 项）
+
+- [ ] `P0` 启动竞态：`mission.py:80-81` 在 SELF_CHECK 就对 `communication_ok=False` 直接 fail，而 `robot_bridge` 上电 `_communication_ok=False`（`node.py:199/224`），首条 STATUS 必带 False → 立即 FAILED。方案：新增 `WAIT_FOR_COMMUNICATION` 前置状态（或 SELF_CHECK 容忍未就绪）+ 启动等待超时参数，运行时心跳丢失语义不变。
+- [ ] `P0` 无相机节点：`hardware.launch.py` 无 usb_cam/v4l2_camera，`/camera/image_raw` 无人发布 → PICK_* 停在 WAITING_TARGET 直到 12s 超时。方案：独立 `camera.launch.py`（**640×480 @ 30fps MJPG，usb_cam**）+ CameraInfo；驱动安装为现场依赖。
+- [ ] `P0` cube_perception 漏传 field 配置 + 焦距值过时：`hardware.launch.py:32` 只传 `common`，实机用 `robot.yaml` 的 700.0。方案：改为 `parameters=[common, field]`，且 `fallback_focal_px` 应为 **1275.0 而非 2550.0**。
+  - 依据：08-15 性能测试（`docs/field/单相机模拟双相机性能测试_2026-08-15.md`）证明树莓派 4B 在 1280×720 仅 ~13fps、CPU 270%，工作分辨率定 **640×480**；焦距按分辨率线性缩放 `2550×(640/1280)=1275`。**内参无需重标**（fx≈2526.98，RMS 0.82px 依然有效），这是纯数学换算。
+  - 连带：`min_area_px`（400）/`min_side_px`（12）为像素量纲，分辨率减半后方块面积变 1/4，需现场重调。
+- [ ] `P0` 真实模式不支持 RETREAT：`manipulator_client/node.py:344-351` 必经 `/chassis/retreat`，真实分支（`robot_bridge/node.py:524-535`）只映射 GRAB/RELEASE/HOME，返回 error_code=9。方案（推荐 A）：field 模式 PLACE 在 RELEASE+验证通过后成功返回，撤退上移 mission 级 `RETREAT → /motion/goal` 导航（状态机与 dispatch 已存在），mock 模式保留原流程。
+- [ ] `P0` retreat_complete 恒 False：`robot_bridge/node.py:961` 无条件读 mock 状态，`complete_mock_retreat` 只在 mock 分支调用。方案：与上项绑定；真实模式禁止 mock 证据泄漏，retreat 完成证据改由运动链提供。
+- [ ] `P0` 稳定性判定必然失败：`placement_evidence_policy: unavailable` + `placement_max_unavailable_gap_s: 0.0` → 观察器必然 INCONCLUSIVE（`manipulator.py:120-148`），而 `INCONCLUSIVE` 不在 `MissionResult`（`models.py:12-20`）→ 被归为 MECHANISM_ERROR。方案：`MissionResult` 增加 `INCONCLUSIVE`，mission_manager 不判死，进入 mission 级 VERIFY_BUILD；保持 unavailable 诚实策略，视觉证据中期接入。
+
+### P1：规则明确要求、零实现（5 项）
+
+- [ ] `P1` 巡线（规则 3.1.8）：`robogame_core/line_follow.py`（八路灰度→横向偏差+纠偏+ON_LINE/LEFT/RIGHT/LOST）+ `tests/test_line_follow.py`；接入路段链（motion_control/mission_manager）；与电控冻结 V1 巡线遥测字节布局（先确认装车/ADC 通道）。
+- [ ] `P1` 视觉标签识别（规则 3.1.8）：**已确认为 AprilTag Tag36h11，id 1–6**（证据：`docs/field/视觉标签样例_图3.10.png`；样式无需再现场确认，位置仍需实测）。用 `cv2.aruco` 的 `DICT_APRILTAG_36h11` 或 `apriltag` 库，PnP 解算（15×15cm 已知尺寸 + 已标定内参），接入 localization 做绝对位姿矫正（消里程计漂移）。检测器与融合逻辑**离线可做**（合成图单测）；依赖 P0-2 相机与标签坐标映射表。
+  - ⚠️ 几何冲突待决策：标签在墙上 40cm 需平视，方块在地面/高台需俯视，同一相机难兼顾 → 见执行队列「待拍板决策 1」。
+- [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：上坡航段建模、IMU pitch 视距/重心补偿、打滑检测、上下坡限速。依赖真实 IMU（当前 imu_valid=false）。
+- [ ] `P1` 倒塌检测（规则 3.2.2 S4）：VERIFY_BUILD 当前纯计时（`mission_manager/node.py:91-95`）；中期由视觉 VERIFY 阶段提供连续 3s 建筑未倒塌证据。依赖相机安装（ISSUE-002）。
+- [ ] `P1` 实测航点：`robot.yaml:84-87` 占位 waypoint → 现场实测回填 `robot_field.yaml`，补上坡航段。
+
+### P2：稳健性（5 项）
+
+- [ ] `P2` 边界收紧：`robot.yaml:32-35` 覆盖全场 → 本方半场，越线异常处理（规则 3.2.1 S4）。
+- [ ] `P2` /cmd_vel 仲裁：motion_control/manipulator_client/mission_manager 三个发布者无仲裁 → 统一出口或职责时段明确。
+- [ ] `P2` 任务循环：COMPLETE 永久停止（`mission.py:82-83/137-140`）→ 支持多轮（最高 3 座、上不封顶）。
+- [ ] `P2` 层高上限：`place_heights_m: [0.10,0.20,0.30]` + clamp → 与规则/机械确认层数上限。
+- [ ] `P2` 清理 `robot.yaml:11-12` 重复 `max_mcu_sample_gap_ms` 键，及 `robot_bridge/node.py` 重复 `validate_mcu_tick` 导入。
+
 ## 已完成的远程准备阶段记录
 
 ### 第一天：机构接入安全边界与配置审计
