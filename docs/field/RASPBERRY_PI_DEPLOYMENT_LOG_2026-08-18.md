@@ -102,3 +102,14 @@
 
 > 确认：error_code 偶发 4001（看门狗）；CMD_VEL 80 条 5 条停车；HELLO=2 正常（排除握手）。
 > 请电控：①修固件 odom 跳变（根治）②放宽看门狗 150→250ms（治标，已同意）③暴露 rpi_watchdog_stop 到 Watch（诊断）④确认轮径/编码器参数（10 倍偏差）。
+
+### 7.6 DDS 投递问题（待 2026-08-19 验证，已记录）
+
+**现象**：`ros2 topic pub` 发 goal，motion_control 订阅存在（`/motion/goal` Subscription count: 1）但**消息不投递**（debug 日志无新增）——`--once` 和 `--rate` 都试过，均未到回调。
+
+**待验证顺序（2026-08-19）**：
+1. **方案 A（零成本优先）**：Python 直接发 goal（绕开 ros2 CLI）——排除「ros2 topic pub CLI 的 DDS 问题」。若 Python 能到 → 真实运行时（mission_manager 常驻节点发）不受影响，只是测试工具问题。
+2. **方案 B（根治）**：若 Python 也到不了 → FastDDS 投递 bug → 换 CycloneDDS（`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`，装 `ros-jazzy-rmw-cyclonedds-cpp`），三个节点带环境变量重启 + 重测。
+3. **关键参考**：真实比赛 goal 由 mission_manager（常驻节点）发，不是 ros2 CLI——**需验证 mission_manager 发 goal 能否到 motion_control**（更接近比赛场景）。
+
+**影响评估**：若只是 CLI 问题（方案 A 解决），真实运行不受影响；若常驻节点也投递失败（方案 B 场景），则 DDS 是比赛隐患，必须换 RMW。
