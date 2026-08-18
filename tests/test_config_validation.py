@@ -114,10 +114,16 @@ class ConfigValidationTests(unittest.TestCase):
                 / "ros2_ws/src/cube_perception/config/vision_demo_roi.json"
             ).read_text(encoding="utf-8")
         )
-        vision_gf100 = json.loads(
+        vision_gf100_1280 = json.loads(
             (
                 PROJECT_ROOT
                 / "ros2_ws/src/cube_perception/config/vision_gf100_1280x720_bench.json"
+            ).read_text(encoding="utf-8")
+        )
+        vision_gf100_640 = json.loads(
+            (
+                PROJECT_ROOT
+                / "ros2_ws/src/cube_perception/config/vision_gf100_640x480_bench.json"
             ).read_text(encoding="utf-8")
         )
         robot_text = (
@@ -139,11 +145,39 @@ class ConfigValidationTests(unittest.TestCase):
             flags=re.MULTILINE,
         )
 
+        # 工作分辨率 640x480（08-15 性能测试）；焦距线性缩放 2550x(640/1280)=1275。
+        # 1280x720 bench 保留为标定源；640x480 bench 与 field 层一致。
         self.assertEqual(vision_default["focal_px"], 700.0)
         self.assertEqual(vision_demo["focal_px"], vision_default["focal_px"])
         self.assertEqual(common_focal_matches, [str(vision_default["focal_px"])])
-        self.assertEqual(vision_gf100["focal_px"], 2550.0)
-        self.assertEqual(field_focal_matches, [str(vision_gf100["focal_px"])])
+        self.assertEqual(vision_gf100_1280["focal_px"], 2550.0)
+        self.assertEqual(vision_gf100_640["focal_px"], 1275.0)
+        self.assertEqual(field_focal_matches, [str(vision_gf100_640["focal_px"])])
+
+    def test_field_layer_vision_focal_overrides_common(self):
+        # A3 / P0-3 回归：field 层的视觉焦距必须覆盖 common 层兜底值（700.0），
+        # 否则实机用 700.0 会把 0.87m 算成 0.24m。hardware.launch.py 已改为
+        # cube_perception parameters=[common, field]。
+        field_text = (
+            PROJECT_ROOT
+            / "ros2_ws/src/robogame_bringup/config/robot_field.yaml"
+        ).read_text(encoding="utf-8")
+        field_focal_matches = re.findall(
+            r"^\s+fallback_focal_px:\s*([0-9]+(?:\.[0-9]+)?)\s*$",
+            field_text,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual(field_focal_matches, ["1275.0"])
+
+        launch_text = (
+            PROJECT_ROOT
+            / "ros2_ws/src/robogame_bringup/launch/hardware.launch.py"
+        ).read_text(encoding="utf-8")
+        # cube_perception 必须同时拿到 common 与 field 两个参数层。
+        self.assertIn(
+            'executable="cube_perception", parameters=[common, field]',
+            launch_text,
+        )
 
     def test_valid_bundle_has_no_issues(self):
         self.assertEqual(validate(valid_bundle()), [])

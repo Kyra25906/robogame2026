@@ -18,6 +18,9 @@ class MissionResult(str, Enum):
     MECHANISM_ERROR = "MECHANISM_ERROR"
     LOCALIZATION_ERROR = "LOCALIZATION_ERROR"
     SAFETY_STOP = "SAFETY_STOP"
+    # A4 / P0-6: 稳定证据不足时的诚实结果——不判死，由 mission 级
+    # VERIFY_BUILD 计时兜底；不伪造 STABLE（ISSUE-012 诚实策略）。
+    INCONCLUSIVE = "INCONCLUSIVE"
 
 
 def control_safety_result(

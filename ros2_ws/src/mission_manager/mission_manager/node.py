@@ -5,8 +5,12 @@ import time
 import rclpy
 from geometry_msgs.msg import Pose2D, Twist
 from rclpy.node import Node
-from robogame_core.mission import MissionConfig, MissionMachine, MissionState
-from robogame_core.models import MissionResult
+from robogame_core.mission import (
+    MissionConfig,
+    MissionMachine,
+    MissionState,
+    classify_action_result,
+)
 from robogame_interfaces.msg import CargoState, MissionState as MissionStateMsg, RobotStatus
 from std_msgs.msg import String
 
@@ -45,12 +49,14 @@ class MissionManagerNode(Node):
         self.status = msg
 
     def _on_action_result(self, msg: String) -> None:
-        if msg.data in {"SUCCESS", "STABLE"}:
+        succeeded, failure_result, detail = classify_action_result(msg.data)
+        if succeeded:
+            # A4/P0-6: INCONCLUSIVE 也走成功推进——进入 mission 级 VERIFY_BUILD
+            # 计时兜底，而不是被当作 MECHANISM_ERROR 判死。
             self.machine.tick(action_succeeded=True)
         else:
-            prefix = msg.data.split(":", 1)[0]
-            result = MissionResult.__members__.get(prefix, MissionResult.MECHANISM_ERROR)
-            self.machine.tick(action_failed=True, failure_result=result, failure_detail=msg.data)
+            self.machine.tick(action_failed=True, failure_result=failure_result,
+                              failure_detail=detail)
         self.last_dispatched = None
 
     def _waypoint(self, name: str) -> Pose2D:

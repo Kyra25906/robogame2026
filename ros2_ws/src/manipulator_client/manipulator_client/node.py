@@ -111,6 +111,7 @@ class ManipulatorClientNode(Node):
             runtime_mode=str(self.get_parameter("runtime_mode").value),
             placement_evidence_policy=self.placement_evidence_policy,
         )
+        self.runtime_mode = str(self.get_parameter("runtime_mode").value)
         # Construct once to validate the two configurable durations at startup.
         PlacementStabilityObserver(
             observation_started_s=0.0,
@@ -309,6 +310,14 @@ class ManipulatorClientNode(Node):
             timeout_s=float(self.get_parameter("place_verification_timeout_s").value),
         )
         if decision is VerificationDecision.PASS:
+            if self.runtime_mode == "field":
+                # A4 / P0-4: field 模式在 RELEASE + 放置验证通过后即成功返回。
+                # 不再调用机构式 RETREAT（真实固件不支持，error_code=9）；
+                # 撤退上移 mission 级走 /motion/goal 导航（mission 状态机
+                # RETREAT → VERIFY_BUILD 已存在）。mock 模式保留机构式流程。
+                self.placed_layers += 1
+                self._finish("SUCCESS")
+                return
             self.get_logger().info(
                 "place verification passed; requesting clearance retreat"
             )

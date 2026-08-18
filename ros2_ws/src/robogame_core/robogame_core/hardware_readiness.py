@@ -96,3 +96,44 @@ def robot_status_communication_ok(
         now_s=now_s,
         timeout_s=timeout_s,
     )
+
+
+def mock_communication_ok(
+    *, boot_started_s: float, now_s: float, ready_after_s: float
+) -> bool:
+    """Faithful mock boot sequence: communication_ok turns true only after the
+    simulated power-on window, mirroring the real HELLO->ACK handshake plus the
+    first decoded 0x12 STATUS frame.
+
+    A ``ready_after_s`` of 0.0 preserves the legacy lenient mock behaviour
+    (immediately healthy) so existing tests and mock_demo keep working.
+    """
+    if not math.isfinite(boot_started_s) or not math.isfinite(now_s):
+        raise ValueError("boot_started_s and now_s must be finite")
+    if not math.isfinite(ready_after_s) or ready_after_s < 0.0:
+        raise ValueError("ready_after_s must be finite and non-negative")
+    if now_s < boot_started_s:
+        raise ValueError("now_s cannot precede boot_started_s")
+    elapsed = now_s - boot_started_s
+    return elapsed >= ready_after_s or math.isclose(elapsed, ready_after_s)
+
+
+def mock_velocity_limits_ready(
+    *, limits_ready: bool, vx: float, vy: float, wz: float
+) -> bool:
+    """Faithful mock velocity-limit gate: reject non-zero commands when the
+    simulated MCU limits are not armed, mirroring the real firmware
+    (``rpi_protocol.c`` rejects enable=1 commands while ``rpi_limits_ready``
+    is false; over-limit commands latch a protocol fault).
+
+    Zero-speed commands are always accepted (mirrors the real ``enable=0``
+    stop path). Returns True when the command may pass.
+
+    A ``limits_ready=True`` preserves the legacy lenient mock behaviour.
+    """
+    if not all(math.isfinite(v) for v in (vx, vy, wz)):
+        raise ValueError("vx, vy, wz must be finite")
+    if limits_ready:
+        return True
+    # 限幅未就绪：非零速度拒绝；零速（停车）永远允许。
+    return vx == 0.0 and vy == 0.0 and wz == 0.0

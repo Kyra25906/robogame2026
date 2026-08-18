@@ -19,6 +19,38 @@ def pose_is_finite(pose: Pose2D) -> bool:
     return all(math.isfinite(value) for value in (pose.x, pose.y, pose.yaw))
 
 
+def pose_inside_bounds(
+    pose: Pose2D, *, min_x: float, max_x: float, min_y: float, max_y: float
+) -> bool:
+    """Return whether a pose lies inside the configured field bounds."""
+    return (
+        min_x <= pose.x <= max_x
+        and min_y <= pose.y <= max_y
+        and all(math.isfinite(v) for v in (pose.x, pose.y))
+    )
+
+
+def pose_in_own_half(
+    pose: Pose2D,
+    *,
+    own_half_x_max: float,
+    min_x: float,
+    min_y: float,
+    max_y: float,
+) -> bool:
+    """C6（P2-1）: 目标是否在本方半场。
+
+    规则 3.2.1 S4：越线要执行异常处理、情节恶劣可罚下。本方半场 =
+    x <= own_half_x_max（假设对方半场在 +x 侧），同时不越场地整体边界。
+    越界返回 False，调用方应拒绝目标并报告（异常处理）。
+    """
+    return (
+        pose.x <= own_half_x_max
+        and pose_inside_bounds(pose, min_x=min_x, max_x=own_half_x_max,
+                               min_y=min_y, max_y=max_y)
+    )
+
+
 def move_toward(current: float, target: float, max_delta: float) -> float:
     """Move one scalar toward a target without changing faster than max_delta."""
     if max_delta < 0.0:

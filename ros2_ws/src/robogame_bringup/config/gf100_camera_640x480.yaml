@@ -1,0 +1,31 @@
+# GF100 相机静态内参 @ 640x480（image_proc / camera_info_manager 标定文件格式）。
+#
+# 依据（执行队列 A3，2026-08-18）：工作分辨率 640x480，焦距按分辨率线性缩放
+# 2550 x (640/1280) = 1275.0。内参无需重标定（fx≈2526.98 @1280x720 依然有效，
+# 这是纯数学换算）。cx/cy 用 640x480 几何中心（现场标定后回填真实值）。
+#
+# cube_perception 的 _on_camera_info 读 k[0]（>0 时）覆盖 fallback_focal_px，
+# 因此这里的 fx 必须与 robot_field.yaml 的 fallback_focal_px 保持一致（1275.0）。
+#
+# 注意：这是"待现场复验"的占位内参（B3/B4），不是已标定值——相机物理安装
+# 冻结（高度/俯仰/遮挡，ISSUE-002）后必须现场重标定并回填本文件。
+image_width: 640
+image_height: 480
+camera_name: gf100
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [1275.0, 0.0, 320.0, 0.0, 1275.0, 240.0, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1275.0, 0.0, 320.0, 0.0, 0.0, 1275.0, 240.0, 0.0, 0.0, 0.0, 1.0, 0.0]

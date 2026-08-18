@@ -33,6 +33,26 @@ class MissionConfig:
     build_stability_s: float = 3.0
 
 
+def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
+    """Classify an action-result string into a machine tick.
+
+    Returns ``(succeeded, failure_result, detail)``:
+
+    - ``SUCCESS`` / ``STABLE`` / ``INCONCLUSIVE`` -> succeeded; INCONCLUSIVE
+      intentionally does NOT fail the mission: it enters the mission-level
+      VERIFY_BUILD timer instead of being treated as MECHANISM_ERROR (A4/P0-6).
+    - anything else -> failed, with the longest matching ``MissionResult``
+      member (``INCONCLUSIVE`` is matched before the generic fallback).
+    """
+    prefix = data.split(":", 1)[0].strip()
+    if prefix in {"SUCCESS", "STABLE", MissionResult.INCONCLUSIVE.value}:
+        return True, None, data
+    result = MissionResult.__members__.get(prefix)
+    if result is None:
+        result = MissionResult.MECHANISM_ERROR
+    return False, result, data
+
+
 @dataclass
 class MissionMachine:
     config: MissionConfig = field(default_factory=MissionConfig)
@@ -42,7 +62,6 @@ class MissionMachine:
     result: MissionResult = MissionResult.RUNNING
     detail: str = ""
     entered_at: float = field(default_factory=time.monotonic)
-
     def _enter(self, state: MissionState, now: float) -> None:
         self.state = state
         self.entered_at = now

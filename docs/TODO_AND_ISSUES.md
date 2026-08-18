@@ -35,6 +35,8 @@
 ### 等待电控或机械确认
 
 - [x] `P0` ODOM、IMU、STATUS及机构消息的V1逐字节协议由团队共同制定，见 `docs/field/STM32_SERIAL_PROTOCOL_V1.md`；含固定十六进制测试向量，上位机编解码测试已覆盖。真实STM32抓包仍需在固件实现后验收。
+- [x] `P0` 底盘限幅（2026-08-18 电控确认今天可改）：`chassis.h` 三宏改非零（建议 0.3/0.3/1.0），`robot.yaml` 限速已同步 0.3/0.3/1.0（必须 ≤ 固件限幅，超限触发协议故障锁存非削顶）；使能条件清单见 `docs/field/CHASSIS_ENABLE_CHAIN_2026-08-18.md`（6 条：PB2/HELLO/看门狗/无故障/遥控离线/限幅非零）。
+- [ ] `P0` 机械臂 RPi 控制通道（2026-08-18 电控确认是**新实现**非「开门」）：仓库无 arm.c（在电控本地 `D:/Codex-work/Four_Motor_PID_Test`）；算法组已给 0x20 payload 定义草案 `docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md`（建议 ARM_SET(6)+归一化角度）；**待电控回 5 个确认问题**（arm.c 接口/编号/仲裁/授权/爪子）后实现。
 - [ ] `P0` 冻结 `GRAB/LIFT/RELEASE/STOP` 的消息类型、载荷、完成条件、错误码与硬件取消方式。
 - [ ] `P0` 明确 RETREAT 由 MCU、运动控制还是任务管理负责。
 
@@ -56,6 +58,25 @@
 - [ ] `P2` 真车贴线联调：低速贴线、出线恢复、交叉口行为验收。
 
 8 月 13—18 日每日安排见 `PLAN_2026-08-13_TO_18.md`，现场资料集中在 `field/`。
+
+## 2026-08-18 执行队列阶段 A 完成记录
+
+依据：`docs/team/算法一执行队列_2026-08-18.md`（阶段 A–H）。每项完成后全量回归（Windows 基线 358→371 全过，0 失败）。
+
+### A0 忠实假固件（测试基建）
+
+- [x] `A0.1` 忠实假固件：新增 `mock_communication_ok()`（`hardware_readiness.py`，上电窗口判定）+ `robot_bridge` 参数 `mock_comm_ok_after_s`（默认 0.0=旧宽容行为，兼容基线）/`mock_boot_id`；mock 分支走忠实时序，窗口内握手 HANDSHAKING（cmd_vel 被拒）窗口后转 READY；`status.boot_id` 来自参数。证据：`tests/test_mock_boot_sequence.py` 13 项（9 纯函数 + 4 AST 结构断言），全量 371 OK，SHA 待提交。**真正杀 P0-1 在 A2**（`WAIT_FOR_COMMUNICATION` + 超时），A0.1 是其行为测试的基建。
+- [x] `A0.2` launch 图完整性测试：新建 `tools/launch_graph.py`（纯 AST 静态分析，零 ROS 依赖）+ `tests/test_launch_graph.py` 11 项。断言 mock_demo/single_cube/field_no_hardware_smoke/manipulator_mock_smoke 图完整；`hardware.launch.py` 缺相机话题**显式登记** `{/camera/image_raw, /camera/camera_info}`（P0-2），修复后测试红→强制更新登记。全量 382 OK。**真正修 P0-2 在 B1**（`camera.launch.py` + `hardware.launch.py` include）。
+- [x] `A0.7` 假固件限幅拒绝：`hardware_readiness.py` 新增 `mock_velocity_limits_ready()`（限幅未就绪拒绝非零、零速永远允许，对应真实 `enable=1` 拒绝）；`robot_bridge` 新参数 `mock_velocity_limits_ready`（默认 True 兼容）+ mock 分支限幅门控。测试 8 项（纯函数 5 + AST 3），`test_mock_boot_sequence.py` 共 21 项，全量 468 OK，Ubuntu 468 OK + 构建 0。与电控确认对齐：超限幅触发协议故障锁存，`robot.yaml` 限速已同步 0.3/0.3/1.0。
+- [x] `A3` 视觉分辨率与焦距统一（P0-3）：工作分辨率 640×480，焦距线性缩放 **1275.0**（2550×640/1280）；`robot_field.yaml` 2550→1275；`hardware.launch.py` cube_perception 改 `parameters=[common, field]`（原漏传 field 实机用 700.0）；新建 `vision_gf100_640x480_bench.json`；测试更新焦距一致性 + 新增「field 层视觉参数覆盖生效」回归。全量 383 OK。`min_area_px`/`min_side_px` 待 B4 现场重调。
+- [x] `A4` P0-4/5/6 合并改动（建筑搭建失败路径）：field 模式 PLACE 在 RELEASE+验证通过后直接成功返回（不再调机构式 RETREAT，撤退上移 mission 级 `/motion/goal`）；`robot_bridge` retreat_complete 真实模式恒 False（mock 证据不泄漏）；`MissionResult` 增 `INCONCLUSIVE` + 纯函数 `classify_action_result()`（mission.py）集中分类，mission_manager 对 INCONCLUSIVE 不判死进入 VERIFY_BUILD。证据：`tests/test_mission_classify.py` 13 项，全量 396 OK。
+- [x] `A5` P2-5 清理：删除 `robot.yaml` robot_bridge 段重复 `max_mcu_sample_gap_ms`；`validate_mcu_tick` 重复导入核实仅一处无需改。新增 `tests/test_config_cleanliness.py`（按节点段扫描全部 bringup yaml 无重复键 + 导入唯一性）。全量 399 OK。
+- [x] `A6` 全量回归收尾：Windows 399 OK；Ubuntu 24.04 + ROS Jazzy 全量 399 OK + `CONFIG PASS`（errors=0, warnings=1 已知漂移）+ `colcon build` 9 包成功（21.7s）。A0–A5 改动全量同步 Ubuntu。阶段 A 完成。
+- [x] `B1` 相机驱动 launch：新建 `camera.launch.py`（usb_cam 640×480@30fps MJPG + 静态 CameraInfo 焦距 1275.0）+ `gf100_camera_640x480.yaml`；`hardware.launch.py` include 挂入。扩展 `tools/launch_graph.py`（递归 include + 外部包话题契约 + 节点级 remap），**P0-2 缺口闭合**（`KNOWN_HARDWARE_GAPS` 置空）。全量 400 OK，Ubuntu launch 图 12/12 + 构建 0。B2/B3/B4 为现场依赖。
+- [x] `C1` 路段链模型（路径层底座）：新建 `robogame_core/route_segment.py`（SegmentKind / RouteSegment / RouteChain：段推进、限速、降级、复位），与 GoToPoseController 兼容。`tests/test_route_segment.py` 16 项，全量 416 OK，Ubuntu 16/16 + 构建 0。C2/C3/C4 将各实现段类型控制逻辑接入。
+- [x] `C2` AprilTag 识别 + PnP：新建 `robogame_core/apriltag_pose.py`（detect_tags / estimate_tag_pose / build_observation 异常拒绝 / detect_and_pose）。合成图单测 14 项（缩放/透视/模糊/遮挡/位姿/拒绝），全量 430 OK，Ubuntu 430 OK + 构建 0。⚠️ 仓库样例 tag_01~06.png 检测不到标准 AprilTag（疑数字牌）——检测器按 AprilTag 实现，现场确认样式后可换模板识别，PnP 不变。localization 绝对矫正接入为后续项。
+- [x] `C3` 斜坡/高台：新建 `robogame_core/ramp_control.py`（RampProfile / RampController / SlipDecision：坡道限速、打滑检测期望 vs 实测、卡住停车、下坡防冲）。`tests/test_ramp_control.py` 16 项合成数据，全量 446 OK，Ubuntu 446 OK + 构建 0。与 C1 RouteChain 限速同源。IMU pitch 视距补偿为现场依赖后续项。
+- [x] `C6` P2 稳健性（P2-1 + P2-2）：`navigation.py` 新增 `pose_in_own_half()`（本方半场 + 边界 + 有限值，规则 3.2.1 S4 越线拒绝）；新建 `robogame_core/cmd_vel_arbiter.py`（/cmd_vel 多来源仲裁：急停>授权者>其他忽略>过期零速，来源白名单）。`tests/test_cmd_vel_arbiter.py` 14 项，全量 460 OK，Ubuntu 460 OK + 构建 0。P2-4 层高上限待机械确认。
 
 ## 2026-08-17 第三轮复审修复清单（方案已出，代码未动）
 
@@ -81,7 +102,7 @@
 - [ ] `P1` 视觉标签识别（规则 3.1.8）：**已确认为 AprilTag Tag36h11，id 1–6**（证据：`docs/field/视觉标签样例_图3.10.png`；样式无需再现场确认，位置仍需实测）。用 `cv2.aruco` 的 `DICT_APRILTAG_36h11` 或 `apriltag` 库，PnP 解算（15×15cm 已知尺寸 + 已标定内参），接入 localization 做绝对位姿矫正（消里程计漂移）。检测器与融合逻辑**离线可做**（合成图单测）；依赖 P0-2 相机与标签坐标映射表。
   - ⚠️ 几何冲突待决策：标签在墙上 40cm 需平视，方块在地面/高台需俯视，同一相机难兼顾 → 见执行队列「待拍板决策 1」。
 - [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：上坡航段建模、IMU pitch 视距/重心补偿、打滑检测、上下坡限速。依赖真实 IMU（当前 imu_valid=false）。
-- [ ] `P1` 倒塌检测（规则 3.2.2 S4）：VERIFY_BUILD 当前纯计时（`mission_manager/node.py:91-95`）；中期由视觉 VERIFY 阶段提供连续 3s 建筑未倒塌证据。依赖相机安装（ISSUE-002）。
+- [x] `P1` 倒塌检测（规则 3.2.2 S4）：计时兜底已并入 A4 完成（`MissionResult.INCONCLUSIVE` 不判死 + mission 级 VERIFY_BUILD 3s 计时，`classify_action_result`）。**视觉证据部分对得分不必要**（3s 稳定由裁判判定、不判死已兜住），真正价值在 G3.7（塔倒→重搭决策），并入 G 阶段；可行性依赖「撤退后能否看到塔」实测（Claude 建议 1.6）。
 - [ ] `P1` 实测航点：`robot.yaml:84-87` 占位 waypoint → 现场实测回填 `robot_field.yaml`，补上坡航段。
 
 ### P2：稳健性（5 项）

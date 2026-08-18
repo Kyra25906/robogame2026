@@ -9,16 +9,18 @@ robot_bridge:
     imu_yaw_rate_variance: 0.09
     unavailable_variance: 1000000.0
     max_mcu_sample_gap_ms: 250
-    max_mcu_sample_gap_ms: 250
 
 motion_controller:
   ros__parameters:
     kx: 1.2
     ky: 1.2
     kyaw: 1.8
-    max_vx: 0.60
-    max_vy: 0.50
-    max_wz: 1.20
+    # 2026-08-18 电控确认：固件限幅建议 0.3/0.3/1.0，命令超限幅会触发
+    # 协议故障锁存（非削顶），必须 PB2 重新授权。因此 motion_control 限速
+    # 必须 ≤ 固件限幅，且 fake 模式同值（A0.7 假固件限幅拒绝同源）。
+    max_vx: 0.30
+    max_vy: 0.30
+    max_wz: 1.00
     position_tolerance: 0.05
     yaw_tolerance: 0.0872665
     slow_radius: 0.35

@@ -12,6 +12,8 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from robogame_core.hardware_readiness import (
+    mock_communication_ok,
+    mock_velocity_limits_ready,
     receive_timestamp_is_fresh,
     robot_status_communication_ok,
 )
@@ -99,11 +101,26 @@ class RobotBridge(Node):
         self.declare_parameter("unavailable_variance", 1_000_000.0)
         self.declare_parameter("max_mcu_sample_gap_ms", 250)
         self.declare_parameter("mock_start_after_s", 2.0)
+        self.declare_parameter("mock_comm_ok_after_s", 0.0)
+        self.declare_parameter("mock_boot_id", 0)
+        self.declare_parameter("mock_velocity_limits_ready", True)
         self.declare_parameter("mock_grab_success", True)
         self.declare_parameter("mock_release_success", True)
         self.declare_parameter("mock_lift_success", True)
         self.mock_mode = bool(self.get_parameter("mock_mode").value)
         self.command_timeout = float(self.get_parameter("command_timeout_s").value)
+        self.mock_comm_ok_after_s = float(
+            self.get_parameter("mock_comm_ok_after_s").value
+        )
+        self.mock_boot_id = int(self.get_parameter("mock_boot_id").value)
+        self.mock_velocity_limits_ready = bool(
+            self.get_parameter("mock_velocity_limits_ready").value
+        )
+        if (
+            not math.isfinite(self.mock_comm_ok_after_s)
+            or self.mock_comm_ok_after_s < 0.0
+        ):
+            raise ValueError("mock_comm_ok_after_s must be finite and non-negative")
         self.mechanism_ack_timeout_s = float(
             self.get_parameter("mechanism_ack_timeout_s").value
         )
@@ -190,13 +207,21 @@ class RobotBridge(Node):
         self._latest_imu = None
         self._last_mcu_tick_ms = {"odom": None, "imu": None}
         self.mock_mechanism_state = MockMechanismState()
-        self._handshake_state = _HANDSHAKE_READY if self.mock_mode else _HANDSHAKE_HANDSHAKING
+        # Faithful mock: with a positive boot window the fake firmware starts
+        # "handshaking" and only becomes READY once the window elapses, exactly
+        # like the real STM32 (HELLO->ACK + first decoded STATUS). A window of
+        # 0.0 preserves the legacy lenient mock (immediately READY).
+        self._handshake_state = (
+            _HANDSHAKE_READY
+            if self.mock_mode and self.mock_comm_ok_after_s <= 0.0
+            else _HANDSHAKE_HANDSHAKING
+        )
         self._handshake_last_hello = 0.0
         self._handshake_retries = 0
         self._handshake_pending_sequence: int | None = None
         self._last_heartbeat_tx = 0.0
         self._last_reconnect_attempt = self.started_at
-        self._communication_ok = self.mock_mode
+        self._communication_ok = self.mock_mode and self.mock_comm_ok_after_s <= 0.0
         self._cmd_vel_block_warned = False
         self._last_boot_id: int | None = None
         self._frame_types_seen: set[int] = set()
@@ -313,6 +338,22 @@ class RobotBridge(Node):
                 )
                 self._cmd_vel_block_warned = True
             return
+        if self.mock_mode and not mock_velocity_limits_ready(
+            limits_ready=self.mock_velocity_limits_ready,
+            vx=msg.linear.x,
+            vy=msg.linear.y,
+            wz=msg.angular.z,
+        ):
+            # A0.7: 忠实假固件——限幅未就绪时拒绝非零速度（对应真实固件
+            # rpi_protocol.c 的 enable=1 拒绝 / ISSUE-021）。零速（停车）永远允许。
+            if msg.linear.x or msg.linear.y or msg.angular.z:
+                if not self._cmd_vel_block_warned:
+                    self.get_logger().warn(
+                        "cmd_vel blocked: mock velocity limits not ready "
+                        "(non-zero command rejected)"
+                    )
+                    self._cmd_vel_block_warned = True
+                return
         self._cmd_vel_block_warned = False
         self.velocity = Velocity2D(msg.linear.x, msg.linear.y, msg.angular.z)
         self.last_command = time.monotonic()
@@ -839,13 +880,24 @@ class RobotBridge(Node):
                 self._dispatch_frame(_frame, now)
                 self._accept_frame_for_handshake(_frame)
                 self.last_frame_rx = now
-        communication_ok = robot_status_communication_ok(
-            mock_mode=self.mock_mode,
-            serial_open=self.serial is not None,
-            last_decoded_status_s=self.last_decoded_status_rx,
-            now_s=now,
-            timeout_s=0.30,
-        )
+        if self.mock_mode:
+            # Faithful mock: communication_ok follows the simulated boot
+            # sequence (False frames first when mock_comm_ok_after_s > 0).
+            communication_ok = mock_communication_ok(
+                boot_started_s=self.started_at,
+                now_s=now,
+                ready_after_s=self.mock_comm_ok_after_s,
+            )
+            if communication_ok and self._handshake_state != _HANDSHAKE_READY:
+                self._handshake_state = _HANDSHAKE_READY
+        else:
+            communication_ok = robot_status_communication_ok(
+                mock_mode=False,
+                serial_open=self.serial is not None,
+                last_decoded_status_s=self.last_decoded_status_rx,
+                now_s=now,
+                timeout_s=0.30,
+            )
         communication_was_ok = self._communication_ok
         self._communication_ok = communication_ok
         if not self.mock_mode and communication_was_ok and not communication_ok:
@@ -958,7 +1010,12 @@ class RobotBridge(Node):
             if real_status is not None
             else self.mock_mechanism_state.cube_present
         )
-        status.retreat_complete = self.mock_mechanism_state.retreat_complete
+        # A4 / P0-5: 真实模式禁止无条件读 mock 的 retreat_complete（ISSUE-012/
+        # 019 mock 证据不得泄漏进 field 路径）。真实模式该字段语义改由运动链
+        # 提供；当前运动链尚无此信号，故恒 False，绝不来自 mock 状态。
+        status.retreat_complete = (
+            self.mock_mechanism_state.retreat_complete if self.mock_mode else False
+        )
         status.mechanism_fault = bool(flags & STATUS_MECHANISM_FAULT)
         status.battery_voltage = (
             real_status.battery_mv / 1000.0 if real_status is not None else 24.0
@@ -970,7 +1027,7 @@ class RobotBridge(Node):
         if self.mock_mode:
             status.calibrating = (now - self.started_at) < mock_start_after
             status.imu_valid = not status.calibrating
-            status.boot_id = 0
+            status.boot_id = self.mock_boot_id
         else:
             status.calibrating = (
                 bool(flags & STATUS_IMU_CALIBRATING)
