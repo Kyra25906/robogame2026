@@ -400,7 +400,10 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
             "_tick must call _send_zero_velocity on timeout",
         )
 
-    def test_heartbeat_is_periodic_and_requires_status_trust(self):
+    def test_heartbeat_is_periodic_and_independent_of_status_trust(self):
+        # 2026-08-18 修复：心跳必须与 communication_ok 解耦（否则 odom 跳变
+        # 时心跳断、看门狗误触发）。断言心跳引用握手/串口/限频，但**不**引用
+        # communication_ok。
         tree = self._robot_bridge_tree()
         methods = {
             node.name: node for node in ast.walk(tree)
@@ -417,7 +420,7 @@ class RobotBridgeDispatchSafetyTests(unittest.TestCase):
         }
         self.assertIn("_handshake_state", refs)
         self.assertIn("_last_heartbeat_tx", refs)
-        self.assertIn("_communication_ok", refs)
+        self.assertNotIn("_communication_ok", refs)
         self.assertIn("encode_heartbeat", called_names)
 
         tick_calls = {
@@ -936,17 +939,26 @@ class RobotBridgeTimeoutStopTests(unittest.TestCase):
         self.assertEqual(self.bridge._handshake_state, "HANDSHAKING")
         self.assertFalse(self.bridge._communication_ok)
 
-    def test_heartbeat_stops_when_status_is_untrusted(self):
+    def test_heartbeat_continues_when_status_is_untrusted(self):
+        # 2026-08-18 真车联调修复：心跳是「上位机活着」的保活通道，必须与
+        # STATUS 新鲜度（communication_ok）解耦——否则 odom 跳变导致
+        # communication_ok 抖动时心跳跟着断，固件 150ms 看门狗误触发
+        # （error_code 偶发 4001），车「走几步就停」。
+        # 心跳只依赖握手完成 + 串口在，不管 communication_ok。
+        from robogame_core.serial_protocol import MSG_TYPE_HEARTBEAT, StreamDecoder
+
         serial = _FakeSerial()
         self.bridge.serial = serial
         self.bridge.mock_mode = False
         self.bridge._handshake_state = self._HANDSHAKE_READY
-        self.bridge._communication_ok = False
+        self.bridge._communication_ok = False  # STATUS 不可信，但心跳必须继续
         self.bridge._last_heartbeat_tx = 0.0
 
         self.bridge._send_heartbeat(10.0)
 
-        self.assertEqual(serial.writes, [])
+        frames = StreamDecoder().feed(b"".join(serial.writes))
+        self.assertEqual(len(frames), 1, "heartbeat must be sent even when status is untrusted")
+        self.assertEqual(frames[0].message_type, MSG_TYPE_HEARTBEAT)
 
     def test_shutdown_sends_stop_frames_before_closing_serial(self):
         from robogame_core.models import Velocity2D

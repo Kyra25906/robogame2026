@@ -381,12 +381,17 @@ class RobotBridge(Node):
             self.sequence = (self.sequence + 1) & 0xFFFF
 
     def _send_heartbeat(self, now: float) -> None:
-        """Keep the MCU watchdog alive without authorizing any motion."""
+        """Keep the MCU watchdog alive without authorizing any motion.
+
+        心跳是「上位机还活着」的保活通道，与 STATUS 新鲜度（communication_ok）
+        解耦：只要握手完成且串口在，就稳定 50Hz 发送。曾因依赖
+        communication_ok 导致 odom 跳变时心跳跟着断、固件看门狗误触发
+        （2026-08-18 真车联调：error_code 偶发 4001）。communication_ok
+        只应门控 CMD_VEL（运动命令），不应门控心跳。
+        """
         if self.mock_mode or self.serial is None:
             return
         if self._handshake_state != _HANDSHAKE_READY:
-            return
-        if not self._communication_ok:
             return
         if now - self._last_heartbeat_tx < _HEARTBEAT_INTERVAL_S:
             return
