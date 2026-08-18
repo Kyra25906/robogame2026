@@ -1,6 +1,10 @@
 robot_bridge:
   ros__parameters:
-    command_timeout_s: 0.15
+    # 2026-08-18 真车联调：command_timeout 0.15 太紧——motion_control 发
+    # /cmd_vel 偶发延迟（树莓派 4B 负载高）就触发 robot_bridge 插零速
+    # （_send_zero_velocity），造成走走停停（电控观测：CMD_VEL 80 条里
+    # 5 条停车）。放宽到 0.5s 容忍偶发延迟。
+    command_timeout_s: 0.5
     # Provisional conservative variances; replace with field measurements.
     odom_pose_xy_variance: 0.25
     odom_pose_yaw_variance: 0.1219
