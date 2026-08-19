@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="820" viewBox="0 0 1080 820">
+  <style>
+    text { font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #172033; }
+    .title { font-size: 28px; font-weight: 700; }
+    .label { font-size: 20px; font-weight: 600; }
+    .small { font-size: 16px; }
+    .note { font-size: 15px; fill: #526070; }
+    .dim { font-size: 17px; fill: #334155; }
+  </style>
+
+  <rect width="1080" height="820" fill="#f7f9fc"/>
+  <text x="540" y="42" text-anchor="middle" class="title">RoboGame 2026 场地布局简化俯视图</text>
+  <text x="540" y="70" text-anchor="middle" class="note">按全场 7.2 m × 4.8 m 比例绘制；内部位置为规则示意关系，实测后替换</text>
+
+  <!-- 7.2:4.8 field, 810x540 -->
+  <rect x="135" y="120" width="810" height="540" rx="2" fill="#111827"/>
+  <rect x="180" y="165" width="720" height="450" fill="#aeb4ba" stroke="#ffffff" stroke-width="2"/>
+  <line x1="540" y1="165" x2="540" y2="615" stroke="#f8fafc" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="550" y="190" class="small" fill="#ffffff">场地中心线</text>
+
+  <!-- Blue half schematic -->
+  <rect x="180" y="525" width="68" height="68" fill="#2d45c7" stroke="#facc15" stroke-width="3"/>
+  <text x="214" y="555" text-anchor="middle" class="label" fill="#ffffff">启动区</text>
+  <text x="214" y="580" text-anchor="middle" class="small" fill="#ffffff">0.6×0.6</text>
+
+  <rect x="180" y="265" width="68" height="240" fill="#3657d6" stroke="#facc15" stroke-width="3"/>
+  <text x="214" y="375" text-anchor="middle" class="label" fill="#ffffff" transform="rotate(-90 214 375)">搭建区 2.4×0.6</text>
+
+  <rect x="350" y="310" width="203" height="191" fill="#8b5a2b" opacity="0.85" stroke="#facc15" stroke-width="3"/>
+  <text x="451" y="395" text-anchor="middle" class="label" fill="#ffffff">中央高台</text>
+  <text x="451" y="423" text-anchor="middle" class="small" fill="#ffffff">1.8×1.7，高0.2</text>
+  <polygon points="350,501 553,501 530,573 373,573" fill="#b78555" stroke="#facc15" stroke-width="3"/>
+  <text x="451" y="545" text-anchor="middle" class="label">斜坡 1.8×0.8</text>
+
+  <rect x="370" y="275" width="180" height="30" fill="#f28c28" stroke="#9a4c00" stroke-width="2"/>
+  <text x="460" y="296" text-anchor="middle" class="small">墙体材料区</text>
+  <rect x="570" y="565" width="248" height="45" fill="#7950b3" stroke="#4c2882" stroke-width="2"/>
+  <text x="694" y="594" text-anchor="middle" class="small" fill="#ffffff">屋顶材料区</text>
+
+  <!-- line topology -->
+  <g fill="none" stroke="#111111" stroke-width="7" stroke-linecap="square">
+    <path d="M214 559 L214 505 L330 505 L760 505"/>
+    <path d="M270 505 L270 385 L248 385"/>
+    <path d="M460 505 L460 450"/>
+    <path d="M760 505 L760 588"/>
+  </g>
+  <text x="620" y="494" class="small">黑线主路（5 cm）</text>
+
+  <!-- Tag mounting examples. Encoded IDs must be read on site. -->
+  <g>
+    <circle cx="180" cy="505" r="22" fill="#ef4444"/><text x="180" y="512" text-anchor="middle" class="small" fill="#fff">Tag</text>
+    <circle cx="270" cy="385" r="22" fill="#ef4444"/><text x="270" y="392" text-anchor="middle" class="small" fill="#fff">Tag</text>
+    <circle cx="350" cy="450" r="22" fill="#ef4444"/><text x="350" y="457" text-anchor="middle" class="small" fill="#fff">Tag</text>
+    <circle cx="460" cy="310" r="22" fill="#ef4444"/><text x="460" y="317" text-anchor="middle" class="small" fill="#fff">Tag</text>
+    <circle cx="900" cy="505" r="22" fill="#ef4444"/><text x="900" y="512" text-anchor="middle" class="small" fill="#fff">Tag</text>
+    <circle cx="760" cy="615" r="22" fill="#ef4444"/><text x="760" y="622" text-anchor="middle" class="small" fill="#fff">Tag</text>
+  </g>
+
+  <!-- dimensions and axes -->
+  <line x1="135" y1="690" x2="945" y2="690" stroke="#334155" stroke-width="2"/>
+  <line x1="135" y1="682" x2="135" y2="698" stroke="#334155" stroke-width="2"/>
+  <line x1="945" y1="682" x2="945" y2="698" stroke="#334155" stroke-width="2"/>
+  <text x="540" y="716" text-anchor="middle" class="dim">全场长边 7.2 m</text>
+  <line x1="105" y1="120" x2="105" y2="660" stroke="#334155" stroke-width="2"/>
+  <line x1="97" y1="120" x2="113" y2="120" stroke="#334155" stroke-width="2"/>
+  <line x1="97" y1="660" x2="113" y2="660" stroke="#334155" stroke-width="2"/>
+  <text x="72" y="390" text-anchor="middle" class="dim" transform="rotate(-90 72 390)">全场短边 4.8 m</text>
+
+  <circle cx="135" cy="660" r="6" fill="#e11d48"/>
+  <path d="M135 660 L220 660" stroke="#e11d48" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M135 660 L135 585" stroke="#2563eb" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <text x="225" y="666" class="small" fill="#e11d48">+x</text>
+  <text x="120" y="578" class="small" fill="#2563eb">+y</text>
+  <text x="145" y="682" class="small">原点 O</text>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#e11d48"/></marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/></marker>
+  </defs>
+
+  <text x="135" y="760" class="note">说明：蓝色为我方启动/搭建区域；橙色、紫色为材料区域；棕色为高台/斜坡；黑线为巡线拓扑。</text>
+  <text x="135" y="786" class="note">Tag 圆点仅示意“黑线/延长线与竖直挡板交汇”；真实编码 ID、坐标和朝向必须现场读取与测量。</text>
+</svg>
