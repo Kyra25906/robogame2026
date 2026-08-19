@@ -60,7 +60,8 @@
 |---|---|---|
 | 标签 1–6 中心正下方地面点的位置和正面朝向 | `field_layout.yaml` → `visual_tags.anchors.1..6` 的 `x / y / yaw`；同步填 `field_map.py` → `tags` 字典 | `x`=沿短边方向离原点(m，0..4.8)；`y`=沿长边方向离原点(m，0..7.2)；`yaw`=正面法线指向（弧度，0=+x） |
 | 各区域角点位置（启动区/搭建区/高台/材料区） | `field_map.py` → `default_field_map()` 里各 `Rect(x, y)`，并把 `position_confidence` 改成 `measured` | `x,y`=区域左下角坐标(m)；`width`=短边方向尺寸、`height`=长边方向尺寸，是规则值不要动 |
-| 黑线起点/拐角/路口/终点 | `field_layout.yaml` → `survey.line_waypoints`（L01…），编号按行驶顺序 | 每个点 `x,y` + 类型 + 通向哪里 |
+| 黑线起点/拐角/路口/终点 | `field_layout.yaml` → `survey.line_nodes`（N01…，节点无顺序） | 每个节点 `x,y` + 类型（start/junction/turn/end）|
+| 黑线段（节点间） | `field_layout.yaml` → `survey.line_edges`（E01…，`from`/`to` 连两个节点） | 每条边 = 哪两个节点之间有黑线 + 通向哪个任务区 |
 | 停车点（启动/抓取/搭建/撤退/坡前坡后） | `field_layout.yaml` → `survey.stops`（W01…） | 每个点 `x,y` + 车头朝向 `yaw` + 为什么停这里 |
 | 坡道起止线 | `field_layout.yaml` → `survey.ramp_edges`（R01…） | 每个点 `x,y` + 说明 |
 | 黑/白灰度值 | 巡线节点参数（不在本文件） | 每路"黑线均值/地面均值"取中间值作阈值 |
