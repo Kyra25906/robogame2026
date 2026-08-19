@@ -55,7 +55,7 @@ def valid_bundle():
             place_heights_m=[0.1, 0.2, 0.3],
         ),
         "mission_manager": _node(
-            state_timeout_s=20.0, build_stability_s=3.0,
+            state_timeout_s=20.0, build_stability_s=3.0, startup_wait_timeout_s=15.0,
             orange_waypoint=[1.0, 0.5, 0.0],
             purple_waypoint=[1.5, 1.0, 0.0],
             build_waypoint=[0.5, 1.5, 1.57],

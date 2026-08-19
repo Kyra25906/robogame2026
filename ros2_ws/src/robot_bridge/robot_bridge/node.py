@@ -81,6 +81,23 @@ _HEARTBEAT_INTERVAL_S = 0.05
 _SERIAL_RECONNECT_INTERVAL_S = 1.0
 
 
+# A0.4 mock/real 契约：`_mechanism`（ExecuteMechanism 统一入口）两侧支持的
+# 机构命令集合差异必须等于本声明。`tests/test_contract_mock_real.py` 从代码
+# 字面量提取两侧集合（real 的 operations dict / mock 的 allowed set），断言
+# 对称差恰好等于本声明的键；任一侧新增命令而不同步本声明，测试即红。
+# 差异即 P0-4 的既定设计，不得悄悄漂移：
+REAL_MOCK_MECHANISM_COMMAND_DIFFERENCES: dict[str, str] = {
+    # 仅真实模式支持：固件 0x20 映射 HOME；mock 未实现（上位机当前不调用 HOME，
+    # 若将来 mock 流程需要 HOME，应补 mock 实现并把本条目从声明中移除）。
+    "HOME": "real-only: firmware 0x20 maps HOME; mock _mechanism rejects it",
+    # 仅 mock 模式支持：真实固件无 RETREAT（P0-4/A4：field 模式 PLACE 在
+    # RELEASE+验证通过后直接成功返回，不再调机构式 RETREAT，撤退上移 mission
+    # 级 /motion/goal）；mock 保留机构式流程供 demo/回归。
+    "RETREAT": "mock-only: real firmware has no RETREAT (P0-4/A4 moved retreat "
+    "to mission-level /motion/goal)",
+}
+
+
 class RobotBridge(Node):
     """Safe bridge. Mock mode is complete; real status decoding is an explicit integration point."""
 

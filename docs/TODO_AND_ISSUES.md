@@ -10,7 +10,7 @@
 - 一次只选择一个小任务进入开发，避免同时修改过多模块；
 - 生成视频、JSONL 和 HTML 默认位于 `results/`，不提交 Git，重要数据需要另行备份。
 
-最后更新：2026-08-17
+最后更新：2026-08-19
 
 ## 当前状态摘要
 
@@ -51,11 +51,23 @@
 
 结论：巡线 = 上位机决策与控制，下位机只做八路灰度采集上送。归属细节见 `docs/team/两人算法最终分工.md`「巡线分工」。
 
-- [ ] `P1` 第二位算法同学：与电控确认八路巡线模块是否装车、接口电平、ADC 通道（当前 `HAL_ADC_MODULE_ENABLED` 被注释禁用，见 STM32 工程 `stm32f4xx_hal_conf.h`）。
+- [x] `P1` 第二位算法同学：与电控确认八路巡线模块硬件状态。⚠️ 2026-08-19 核对：工程已改为 **UART7 串口模块方案**（非 ADC 直读），旧结论「`HAL_ADC_MODULE_ENABLED` 被注释禁用 → 需配 ADC 通道」已被取代；仍待电控确认：模块是否装车、供电/接口电平、实际回传频率。
 - [x] `P1` 第二位算法同学：实现 `robogame_core/line_follow.py` 纯算法模块（八路原始值 → 横向偏差 + 纠偏输出 + `ON_LINE/LEFT/RIGHT/LOST` 状态机）与 `tests/test_line_follow.py` 合成数据单元测试，参考 `navigation.py` 风格。证据：分支 `feature/line_follow` 提交 `6b36e28`，31 项测试全部通过，文档见 `docs/line_follow/README.md` 和 `docs/line_follow/CALIBRATION_AND_HARDWARE.md`。
 - [ ] `P1` 算法一：把巡线作为「路段类型」接入 `motion_control` / `mission_manager` 路线选择（路段链、模式切换、与路点/视觉对准仲裁）。
 - [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。
 - [ ] `P2` 真车贴线联调：低速贴线、出线恢复、交叉口行为验收。
+
+### 巡线链路核对记录（2026-08-19 只读检查）
+
+- 下位机（STM32，`Four_Motor_PID_Test (3)/`，⚠️ 该目录未跟踪 Git）：
+  - `line_sensor.c/h`：UART7（PE8=TX / PE7=RX，115200）驱动，发 `$0,1,1#` 使能模块，解析 `$D,x1:0..#`（数字）/`$A,x1:4096..#`（12bit 模拟）帧，输出 `line_digital[8]`/`line_analog[8]`/`line_online`/`line_frame_count`；
+  - 已接入 `main.c`（Init、主循环 `LineSensor_Update()`、UART 回调）与 `stm32f4xx_it.c` UART7 中断；`line_sensor.h` 明说「仅 Keil Watch 观察，不接入任何控制」——**只采集、不上送**；
+  - `rpi_protocol.c` 无巡线消息类型（现有 0x01/02/03/10/11/12/13/20/21/22），`STM32_SERIAL_PROTOCOL_V1.md` 无巡线遥测定义。
+- 树莓派（上位机）：
+  - ✅ `robogame_core/line_follow.py` + `tests/test_line_follow.py`（2026-08-19 实跑 31 项全过），commit `55e2ba9`；文档 `docs/line_follow/README.md`、`CALIBRATION_AND_HARDWARE.md`；
+  - ❌ `robot_bridge` 无巡线帧解码、无 `/line_sensor` 话题；`motion_control`/`mission_manager` 零处 `LINE_FOLLOW/line_follow` 引用（`route_segment.py` 仅有 `SegmentKind.LINE_FOLLOW` 枚举，控制逻辑未接）——**数据链路断：算法模块无输入、无输出**。
+- 场地布局结论：纯贴线走（偏差+PD）只需每路标定常数，不需要场地布局；一旦涉及选路/交叉口/出线恢复/停车，必须有布局+定位（`GENERAL_FIELD_MAP_2026.md`「定位与控制分工」第 2 条：灰度管横向、里程计管进度、路段防走错支路）。
+- 剩余工作（依赖顺序）：① 冻结 V1 巡线遥测帧（类型号+payload，草案建议参照 0x10 风格：`mcu_tick_ms` u32 + 8 路值 + `line_online`）→ ② 固件 `RPI_SendLineTelemetry()` 周期上送 → ③ `robot_bridge` 解码 + `/line_sensor` 话题 → ④ `motion_control` 巡线路段类型接入 → ⑤ 真车贴线联调。
 
 8 月 13—18 日每日安排见 `PLAN_2026-08-13_TO_18.md`，现场资料集中在 `field/`。
 
@@ -65,12 +77,17 @@
 
 ### A0 忠实假固件（测试基建）
 
-- [x] `A0.1` 忠实假固件：新增 `mock_communication_ok()`（`hardware_readiness.py`，上电窗口判定）+ `robot_bridge` 参数 `mock_comm_ok_after_s`（默认 0.0=旧宽容行为，兼容基线）/`mock_boot_id`；mock 分支走忠实时序，窗口内握手 HANDSHAKING（cmd_vel 被拒）窗口后转 READY；`status.boot_id` 来自参数。证据：`tests/test_mock_boot_sequence.py` 13 项（9 纯函数 + 4 AST 结构断言），全量 371 OK，SHA 待提交。**真正杀 P0-1 在 A2**（`WAIT_FOR_COMMUNICATION` + 超时），A0.1 是其行为测试的基建。
+- [x] `A0.1` 忠实假固件：新增 `mock_communication_ok()`（`hardware_readiness.py`，上电窗口判定）+ `robot_bridge` 参数 `mock_comm_ok_after_s`（默认 0.0=旧宽容行为，兼容基线）/`mock_boot_id`；mock 分支走忠实时序，窗口内握手 HANDSHAKING（cmd_vel 被拒）窗口后转 READY；`status.boot_id` 来自参数。证据：`tests/test_mock_boot_sequence.py` 13 项（9 纯函数 + 4 AST 结构断言），全量 371 OK，SHA 待提交。**真正杀 P0-1 在 A2**（`WAIT_FOR_COMMUNICATION` + 超时），A0.1 是其行为测试的基建——**A2 已于 2026-08-19 完成**（见下）。
 - [x] `A0.2` launch 图完整性测试：新建 `tools/launch_graph.py`（纯 AST 静态分析，零 ROS 依赖）+ `tests/test_launch_graph.py` 11 项。断言 mock_demo/single_cube/field_no_hardware_smoke/manipulator_mock_smoke 图完整；`hardware.launch.py` 缺相机话题**显式登记** `{/camera/image_raw, /camera/camera_info}`（P0-2），修复后测试红→强制更新登记。全量 382 OK。**真正修 P0-2 在 B1**（`camera.launch.py` + `hardware.launch.py` include）。
+- [x] `A0.3` launch 参数层完整性（通用版杀 P0-3，2026-08-19）：`tools/launch_graph.py` 新增 `parameter_layer_issues`（规则：核心节点必须带 common；env yaml 有该节点段落则必须带对应层 mock/field/single；核心节点不允许无参数；参数变量名必须是本 launch 定义的层）。数据由 launch 源码 + env yaml 驱动，不硬编码节点清单。证据：`tests/test_launch_params.py` 15 项（真实三 launch 零问题 + A3 显式回归 + 解析器 4 + 负例 6：模拟 P0-3 漏 field / 漏 common / 无参数 / 未定义层名 / 豁免 / 不误报），全量 547 OK。
+- [x] `A0.4` mock/real 契约（杀 P0-4，2026-08-19）：`robot_bridge/node.py` 新增模块级声明 `REAL_MOCK_MECHANISM_COMMAND_DIFFERENCES`（HOME 仅 real：固件 0x20 映射、mock 未实现；RETREAT 仅 mock：真实固件无 RETREAT，P0-4/A4 撤退上移 mission 级 `/motion/goal`）；`tests/test_contract_mock_real.py` 从 `_mechanism` 字面量提取两侧命令集合（real=operations dict+STOP 特判，mock=allowed set），断言对称差恰好等于声明（纯函数 `contract_issues`：集合漂移/声明缺失/单侧性破坏/理由为空都会红）+ 负例 4 项。证据：9 项 + 全量 556 OK。
+- [x] `A0.5` 通用结构性断言（杀 P0-5，2026-08-19）：字段清单从 `MockMechanismState` dataclass 提取（新增字段自动纳入），检查 `robot_bridge/node.py` 全部 `self.mock_mechanism_state.<field>` 读取点必须位于 mock 门控分支——识别显式 `self.mock_mode` 三元/if 块与隐式 `real_status is not None`（real_status 须由 `... if not self.mock_mode else None` 派生，非派生不认）的 else 分支。证据：`tests/test_mock_leak_general.py` 9 项（真实零违规 + 负例 7：无条件读/真实分支/非派生门控检出，mock 分支不误报）+ 全量 565 OK。
 - [x] `A0.7` 假固件限幅拒绝：`hardware_readiness.py` 新增 `mock_velocity_limits_ready()`（限幅未就绪拒绝非零、零速永远允许，对应真实 `enable=1` 拒绝）；`robot_bridge` 新参数 `mock_velocity_limits_ready`（默认 True 兼容）+ mock 分支限幅门控。测试 8 项（纯函数 5 + AST 3），`test_mock_boot_sequence.py` 共 21 项，全量 468 OK，Ubuntu 468 OK + 构建 0。与电控确认对齐：超限幅触发协议故障锁存，`robot.yaml` 限速已同步 0.3/0.3/1.0。
+- [x] `A2` P0-1 启动竞态（真正杀 P0-1，上车前硬前置）：`mission.py` 新增 `MissionState.WAIT_FOR_COMMUNICATION` 前置状态并作为初始状态 + `MissionConfig.startup_wait_timeout_s`（默认 15s，覆盖握手 3s×3 + 余量）；tick 内启动等待期 `communication_ok=False` 不评估、不 fail，**超时才** `fail(COMMUNICATION_ERROR)`，通信就绪同拍转入 SELF_CHECK（机制就绪即前进）；离开启动等待后心跳丢失立即判失败（运行时语义不变）。`mission_manager` 声明并透传参数 + 显式处理新状态分支；`robot.yaml`/`single_cube.yaml` 增参数，`config_validation.py` 加入正数校验。证据：`tests/test_startup_comm_wait.py` 17 项（11 行为：False×N→True 正常前进/持续 False 超时才 fail/边界/急停优先/心跳丢失语义；6 AST 结构防回归），`test_mission.py` 超时重试测试适配新初始状态，全量 527 OK（2026-08-19 实测）。
 - [x] `A3` 视觉分辨率与焦距统一（P0-3）：工作分辨率 640×480，焦距线性缩放 **1275.0**（2550×640/1280）；`robot_field.yaml` 2550→1275；`hardware.launch.py` cube_perception 改 `parameters=[common, field]`（原漏传 field 实机用 700.0）；新建 `vision_gf100_640x480_bench.json`；测试更新焦距一致性 + 新增「field 层视觉参数覆盖生效」回归。全量 383 OK。`min_area_px`/`min_side_px` 待 B4 现场重调。
 - [x] `A4` P0-4/5/6 合并改动（建筑搭建失败路径）：field 模式 PLACE 在 RELEASE+验证通过后直接成功返回（不再调机构式 RETREAT，撤退上移 mission 级 `/motion/goal`）；`robot_bridge` retreat_complete 真实模式恒 False（mock 证据不泄漏）；`MissionResult` 增 `INCONCLUSIVE` + 纯函数 `classify_action_result()`（mission.py）集中分类，mission_manager 对 INCONCLUSIVE 不判死进入 VERIFY_BUILD。证据：`tests/test_mission_classify.py` 13 项，全量 396 OK。
 - [x] `A5` P2-5 清理：删除 `robot.yaml` robot_bridge 段重复 `max_mcu_sample_gap_ms`；`validate_mcu_tick` 重复导入核实仅一处无需改。新增 `tests/test_config_cleanliness.py`（按节点段扫描全部 bringup yaml 无重复键 + 导入唯一性）。全量 399 OK。
+- [x] `A0.9` 规则条款覆盖矩阵（2026-08-19）：产出 `docs/RULE_COVERAGE.md`——二审评分项（8 项 100 分）+ 规则 3.1/3.2/4.2（算法相关）逐条映射到代码/配置/测试/状态（✅已实现/🔶已设计未实现/❌未覆盖/➖非算法职责），显式未覆盖清单不留空白；登记组委会 2026-08-19 两条确认（可抓对方方块→G4.1；搭建区比平地高 10cm→3.1.4/W04）。使用方式：每轮复审先过矩阵再走读代码。
 - [x] `A6` 全量回归收尾：Windows 399 OK；Ubuntu 24.04 + ROS Jazzy 全量 399 OK + `CONFIG PASS`（errors=0, warnings=1 已知漂移）+ `colcon build` 9 包成功（21.7s）。A0–A5 改动全量同步 Ubuntu。阶段 A 完成。
 - [x] `B1` 相机驱动 launch：新建 `camera.launch.py`（usb_cam 640×480@30fps MJPG + 静态 CameraInfo 焦距 1275.0）+ `gf100_camera_640x480.yaml`；`hardware.launch.py` include 挂入。扩展 `tools/launch_graph.py`（递归 include + 外部包话题契约 + 节点级 remap），**P0-2 缺口闭合**（`KNOWN_HARDWARE_GAPS` 置空）。全量 400 OK，Ubuntu launch 图 12/12 + 构建 0。B2/B3/B4 为现场依赖。
 - [x] `C1` 路段链模型（路径层底座）：新建 `robogame_core/route_segment.py`（SegmentKind / RouteSegment / RouteChain：段推进、限速、降级、复位），与 GoToPoseController 兼容。`tests/test_route_segment.py` 16 项，全量 416 OK，Ubuntu 16/16 + 构建 0。C2/C3/C4 将各实现段类型控制逻辑接入。
@@ -87,7 +104,7 @@
 
 ### P0：field 模式必然失败（6 项）
 
-- [ ] `P0` 启动竞态：`mission.py:80-81` 在 SELF_CHECK 就对 `communication_ok=False` 直接 fail，而 `robot_bridge` 上电 `_communication_ok=False`（`node.py:199/224`），首条 STATUS 必带 False → 立即 FAILED。方案：新增 `WAIT_FOR_COMMUNICATION` 前置状态（或 SELF_CHECK 容忍未就绪）+ 启动等待超时参数，运行时心跳丢失语义不变。
+- [x] `P0` 启动竞态：`mission.py:80-81` 在 SELF_CHECK 就对 `communication_ok=False` 直接 fail，而 `robot_bridge` 上电 `_communication_ok=False`（`node.py:199/224`），首条 STATUS 必带 False → 立即 FAILED。方案：新增 `WAIT_FOR_COMMUNICATION` 前置状态（或 SELF_CHECK 容忍未就绪）+ 启动等待超时参数，运行时心跳丢失语义不变。**✅ 2026-08-19 已修（A2，见阶段 A 完成记录）**。
 - [ ] `P0` 无相机节点：`hardware.launch.py` 无 usb_cam/v4l2_camera，`/camera/image_raw` 无人发布 → PICK_* 停在 WAITING_TARGET 直到 12s 超时。方案：独立 `camera.launch.py`（**640×480 @ 30fps MJPG，usb_cam**）+ CameraInfo；驱动安装为现场依赖。
 - [ ] `P0` cube_perception 漏传 field 配置 + 焦距值过时：`hardware.launch.py:32` 只传 `common`，实机用 `robot.yaml` 的 700.0。方案：改为 `parameters=[common, field]`，且 `fallback_focal_px` 应为 **1275.0 而非 2550.0**。
   - 依据：08-15 性能测试（`docs/field/单相机模拟双相机性能测试_2026-08-15.md`）证明树莓派 4B 在 1280×720 仅 ~13fps、CPU 270%，工作分辨率定 **640×480**；焦距按分辨率线性缩放 `2550×(640/1280)=1275`。**内参无需重标**（fx≈2526.98，RMS 0.82px 依然有效），这是纯数学换算。

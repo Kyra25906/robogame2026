@@ -1,10 +1,15 @@
-"""A0.2 launch 图完整性静态分析（零 ROS 依赖，纯 AST）。
+"""A0.2 launch 图完整性静态分析 + A0.3 launch 参数层完整性分析（零 ROS 依赖，纯 AST）。
 
 背景（执行队列 2026-08-18 A0 节）：P0-2「hardware.launch.py 无相机节点」
 只存在于人工走读结论里，没有任何测试会红。本工具把 launch 图变成可断言的
 事实：解析 launch 文件得到节点列表，经 setup.py entry_points 把 executable
 映射到源码模块，再解析节点源码的 create_subscription / create_publisher，
 最终判定「每个被订阅的话题是否有发布者」。
+
+A0.3（2026-08-19）在同一文件内补充参数层分析：断言每个节点都拿到它需要
+的全部配置层（common 永远要，环境层 mock/field/single 按对应 yaml 是否有
+该节点段落决定）。A3 已对 cube_perception 做单点断言，本分析是通用版——
+P0-3 类问题（某节点漏传 field 层）在任意节点上都会以测试红暴露。
 
 用法（测试入口）：
     python -c "from tools.launch_graph import analyze_all_launches; ..."
@@ -15,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -385,3 +391,189 @@ def analyze_all_launches(
     for launch_path in sorted(launch_dir.glob("*.launch.py")):
         result[launch_path.name] = missing_publishers(launch_path, src_root)
     return result
+
+
+# ---------------------------------------------------------------------------
+# A0.3 launch 参数层完整性（杀 P0-3 的通用版本）
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ParameterLayerIssue:
+    """一个节点缺少它需要的配置层。"""
+
+    launch: str  # launch 文件名
+    node: str  # "package/executable"
+    message: str
+
+
+# 生产 launch（运行真实任务图）才做严格参数层校验；smoke launch 是测试脚手架，
+# 全部用内联参数/LaunchConfiguration，刻意不走 common 层，跳过。
+PRODUCTION_LAUNCHES: tuple[str, ...] = (
+    "hardware.launch.py",
+    "mock_demo.launch.py",
+    "single_cube.launch.py",
+)
+
+# 需要配置层约束的核心 ROS 节点（robogame_bringup 的 guard/smoke 脚本除外）。
+CORE_CONFIG_NODES: frozenset[str] = frozenset({
+    "robot_bridge", "localization", "motion_control",
+    "cube_perception", "manipulator_client", "mission_manager",
+})
+
+# 无参数、也不需要 common 的节点（假检测器只发 mock 话题，无配置）。
+PARAMETER_FREE_NODES: frozenset[tuple[str, str]] = frozenset({
+    ("cube_perception", "mock_perception"),
+})
+
+
+def _yaml_top_level_keys(path: Path) -> set[str]:
+    """极简 YAML 顶层键扫描（本仓库 env yaml 全部是「顶层节点名:」结构）。
+
+    只认第 0 列、形如 ``name:`` 的行；注释与缩进行跳过。避免引入 yaml 依赖。
+    """
+    keys: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if line[0].isspace():
+            continue  # 缩进行不是顶层键
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+        if match:
+            keys.add(match.group(1))
+    return keys
+
+
+def _layer_variables(launch_path: Path, src_root: Path) -> dict[str, Path]:
+    """解析 launch 文件里的配置层变量 -> yaml 文件。
+
+    识别 ``common = os.path.join(share, "config", "robot.yaml")`` 这类赋值
+    （及 ``name = "path/x.yaml"`` 的简单常量形式），把变量名映射到解析后的
+    yaml 路径。返回 {层名: Path}。
+    """
+    tree = ast.parse(launch_path.read_text(encoding="utf-8"))
+    result: dict[str, Path] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        value = node.value
+        parts: list[str] = []
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "join"
+        ):
+            for arg in value.args:
+                part = _constant_string(arg)
+                if part is not None:
+                    parts.append(part)
+        elif isinstance(value, ast.Constant) and isinstance(value.value, str):
+            parts = [value.value]
+        if not parts:
+            continue
+        joined = os.path.join(*parts)
+        if not joined.endswith(".yaml"):
+            continue
+        candidate = _resolve_launch_path(joined, launch_path.parent, src_root)
+        if candidate is not None and candidate.is_file():
+            result[target.id] = candidate
+    return result
+
+
+def _node_parameter_info(
+    launch_path: Path,
+) -> list[tuple[str, str, set[str], bool, list[str]]]:
+    """解析 launch 文件顶层 Node(...) 的参数引用。
+
+    返回 [(package, executable, 命名的配置层名集合, 是否含内联 dict,
+          参数列表里出现的全部变量名（含未定义/拼错候选）)]。
+    """
+    tree = ast.parse(launch_path.read_text(encoding="utf-8"))
+    info: list[tuple[str, str, set[str], bool, list[str]]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Node"
+        ):
+            continue
+        package = executable = None
+        layers: set[str] = set()
+        has_inline = False
+        param_names: list[str] = []
+        for keyword in node.keywords:
+            if keyword.arg == "package":
+                package = _constant_string(keyword.value)
+            elif keyword.arg == "executable":
+                executable = _constant_string(keyword.value)
+            elif keyword.arg == "parameters":
+                if isinstance(keyword.value, ast.List):
+                    for item in keyword.value.elts:
+                        if isinstance(item, ast.Name):
+                            layers.add(item.id)
+                            param_names.append(item.id)
+                        elif isinstance(item, ast.Dict):
+                            has_inline = True
+                        elif isinstance(item, ast.Call):
+                            # ParameterValue(...) 属内联参数表达式。
+                            has_inline = True
+        if package is not None and executable is not None:
+            info.append((package, executable, layers, has_inline, param_names))
+    return info
+
+
+def parameter_layer_issues(
+    launch_path: Path, src_root: Path
+) -> list[ParameterLayerIssue]:
+    """断言生产 launch 里每个节点都拿到它需要的全部配置层（A0.3 / 杀 P0-3）。
+
+    规则（全部由 launch 源码 + env yaml 事实驱动，不硬编码节点清单）：
+    A. 核心节点必须带 ``common`` 基座层（内联自包含的节点除外）；
+    B. 某层变量（mock/field/single）对应的 yaml 里有该节点段落时，该节点
+       必须带这一层——P0-3（cube_perception 漏传 field）即此类；
+    C. 核心节点不允许完全没有参数（除非登记在 PARAMETER_FREE_NODES）；
+    D. parameters 里引用的变量名必须是本 launch 定义的配置层变量（防拼写错误）。
+
+    smoke launch 跳过（测试脚手架，刻意内联）。
+    """
+    if launch_path.name not in PRODUCTION_LAUNCHES:
+        return []
+    layers = _layer_variables(launch_path, src_root)
+    defined = set(layers)
+    issues: list[ParameterLayerIssue] = []
+    for package, executable, layer_names, has_inline, param_names in (
+        _node_parameter_info(launch_path)
+    ):
+        node = f"{package}/{executable}"
+        if (package, executable) in PARAMETER_FREE_NODES:
+            continue
+        if package not in CORE_CONFIG_NODES:
+            continue
+        if not layer_names and not has_inline:
+            issues.append(ParameterLayerIssue(
+                launch_path.name, node, "no parameters at all (missing common layer)"
+            ))
+            continue
+        if "common" not in layer_names and not has_inline:
+            issues.append(ParameterLayerIssue(
+                launch_path.name, node, "missing common layer"
+            ))
+        for name in param_names:
+            if name not in defined:
+                issues.append(ParameterLayerIssue(
+                    launch_path.name,
+                    node,
+                    f"references undefined parameter layer {name!r}",
+                ))
+        for layer, yaml_path in sorted(layers.items()):
+            if layer in layer_names:
+                continue
+            if package in _yaml_top_level_keys(yaml_path):
+                issues.append(ParameterLayerIssue(
+                    launch_path.name,
+                    node,
+                    f"missing {layer} layer (env yaml has a section for this node)",
+                ))
+    return issues

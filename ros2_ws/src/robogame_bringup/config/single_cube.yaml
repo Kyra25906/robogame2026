@@ -5,4 +5,5 @@ mission_manager:
     max_retries: 2
     state_timeout_s: 20.0
     build_stability_s: 3.0
+    startup_wait_timeout_s: 15.0
 

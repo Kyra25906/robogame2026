@@ -8,6 +8,9 @@ from .models import Cargo, CubeColor, MissionResult
 
 
 class MissionState(str, Enum):
+    # A2 / P0-1: 上电启动前置状态——真实固件握手完成前 communication_ok=False
+    # 是正常时序，此状态下只等待、不评估、不 fail（见 MissionMachine.tick）。
+    WAIT_FOR_COMMUNICATION = "WAIT_FOR_COMMUNICATION"
     SELF_CHECK = "SELF_CHECK"
     WAIT_FOR_PHYSICAL_START = "WAIT_FOR_PHYSICAL_START"
     GO_TO_ORANGE = "GO_TO_ORANGE"
@@ -31,6 +34,9 @@ class MissionConfig:
     max_retries: int = 2
     state_timeout_s: float = 20.0
     build_stability_s: float = 3.0
+    # A2 / P0-1: 上电等待通信就绪的上限（覆盖握手 3s×3 + 余量），
+    # 超时才 fail(COMMUNICATION_ERROR)；等待期内不评估、不 fail。
+    startup_wait_timeout_s: float = 15.0
 
 
 def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
@@ -57,7 +63,7 @@ def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
 class MissionMachine:
     config: MissionConfig = field(default_factory=MissionConfig)
     cargo: Cargo = field(default_factory=Cargo)
-    state: MissionState = MissionState.SELF_CHECK
+    state: MissionState = MissionState.WAIT_FOR_COMMUNICATION
     retries: int = 0
     result: MissionResult = MissionResult.RUNNING
     detail: str = ""
@@ -96,7 +102,22 @@ class MissionMachine:
             self.result = MissionResult.SAFETY_STOP
             self.detail = "emergency stop active"
             return self.state
-        if not communication_ok:
+        if self.state is MissionState.WAIT_FOR_COMMUNICATION:
+            # A2 / P0-1: 上电握手期间 communication_ok=False 是正常时序。
+            # 在 startup_wait_timeout_s 内持续等待、不评估、不 fail；
+            # 超时才 fail(COMMUNICATION_ERROR)。通信就绪则转入 SELF_CHECK，
+            # 并在同一 tick 内继续按 SELF_CHECK 语义处理（mechanism 就绪即前进）。
+            if not communication_ok:
+                if now - self.entered_at > self.config.startup_wait_timeout_s:
+                    return self.fail(
+                        MissionResult.COMMUNICATION_ERROR,
+                        "communication not ready within startup window",
+                        now,
+                    )
+                return self.state
+            self._enter(MissionState.SELF_CHECK, now)
+        elif not communication_ok:
+            # 运行时语义不变：离开启动等待后，心跳丢失仍立即按失败处理。
             return self.fail(MissionResult.COMMUNICATION_ERROR, "hardware heartbeat lost", now)
         if self.state in {MissionState.COMPLETE, MissionState.FAILED, MissionState.SAFE_STOP}:
             return self.state

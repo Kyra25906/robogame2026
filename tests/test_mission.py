@@ -42,6 +42,9 @@ class MissionTests(unittest.TestCase):
 
     def test_timeout_has_finite_retries(self):
         machine = MissionMachine(MissionConfig(max_retries=2, state_timeout_s=1.0))
+        # A2: 初始状态是 WAIT_FOR_COMMUNICATION，通信就绪后第一拍推进到
+        # SELF_CHECK（entered_at 重置为当前时刻），之后再手动拨慢时钟测超时重试。
+        machine.tick(now=1.0)
         machine.entered_at = 0.0
         machine.tick(now=2.0)
         self.assertEqual(machine.retries, 1)

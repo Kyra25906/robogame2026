@@ -71,7 +71,7 @@ MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBBiI")
 - 按结论扩展 `serial_protocol.py`：`MechanismOperation` 加 `ARM_SET`、`parameter` 编码/解码 + 单测
 - `robot_bridge` 真实分支加 `ARM_SET` 映射（当前只映射 GRAB/RELEASE/HOME，`node.py:524-535`）
 - `manipulator_client` 增加臂动作流程（复用 `MANIPULATOR_ACTION_EXTENSION.md` 的扩展步骤）
-- fake 模式同步支持（A0.4 mock/real 契约：两侧命令集合必须一致或显式声明差异）
+- fake 模式同步支持（A0.4 mock/real 契约——**✅ 2026-08-19 已落地**：`robot_bridge/node.py` 模块级声明 `REAL_MOCK_MECHANISM_COMMAND_DIFFERENCES` + `tests/test_contract_mock_real.py` 断言两侧命令集合对称差恰好等于声明；未来加 ARM_SET 时两侧必须同步或更新声明）
 - **纯开环补偿策略**（甲2 维持「只能重试」）：
   - 视觉对准最后一步收敛（`calculate_alignment_command` + cube_perception）——不依赖臂的重复精度
   - 抓取失败重试 + 记账回滚（G3.1）

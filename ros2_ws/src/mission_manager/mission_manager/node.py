@@ -21,6 +21,7 @@ class MissionManagerNode(Node):
         defaults = {
             "orange_target": 1, "purple_target": 0, "max_retries": 2,
             "state_timeout_s": 20.0, "build_stability_s": 3.0,
+            "startup_wait_timeout_s": 15.0,
             "orange_waypoint": [1.0, 0.5, 0.0], "purple_waypoint": [1.5, 1.0, 0.0],
             "build_waypoint": [0.5, 1.5, 1.57], "retreat_waypoint": [0.5, 1.2, 1.57],
         }
@@ -32,6 +33,7 @@ class MissionManagerNode(Node):
             max_retries=int(self.get_parameter("max_retries").value),
             state_timeout_s=float(self.get_parameter("state_timeout_s").value),
             build_stability_s=float(self.get_parameter("build_stability_s").value),
+            startup_wait_timeout_s=float(self.get_parameter("startup_wait_timeout_s").value),
         ))
         self.status: RobotStatus | None = None
         self.last_dispatched: MissionState | None = None
@@ -86,7 +88,13 @@ class MissionManagerNode(Node):
         now = time.monotonic()
         if self.status is None:
             return
-        if self.machine.state is MissionState.SELF_CHECK:
+        if self.machine.state is MissionState.WAIT_FOR_COMMUNICATION:
+            # A2 / P0-1: 上电握手期 communication_ok=False 正常——等待不判死；
+            # 通信就绪后同一 tick 内可继续走 SELF_CHECK（mechanism 就绪即前进）。
+            self.machine.tick(now=now, communication_ok=self.status.communication_ok,
+                              emergency_stop=self.status.emergency_stop,
+                              action_succeeded=not self.status.mechanism_fault)
+        elif self.machine.state is MissionState.SELF_CHECK:
             self.machine.tick(now=now, communication_ok=self.status.communication_ok,
                               emergency_stop=self.status.emergency_stop,
                               action_succeeded=not self.status.mechanism_fault)

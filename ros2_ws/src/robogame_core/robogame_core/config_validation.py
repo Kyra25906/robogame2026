@@ -77,7 +77,7 @@ def validate_config_bundle(
             "confirm_frames", "match_distance_px", "min_side_px",
         ]),
         "robot.yaml:mission_manager": (mission, [
-            "state_timeout_s", "build_stability_s",
+            "state_timeout_s", "build_stability_s", "startup_wait_timeout_s",
         ]),
         "robot.yaml:localization": (localization, [
             "imu_stale_s", "max_speed_mps", "divergence_threshold",

@@ -5,6 +5,10 @@ robot_bridge:
     # （_send_zero_velocity），造成走走停停（电控观测：CMD_VEL 80 条里
     # 5 条停车）。放宽到 0.5s 容忍偶发延迟。
     command_timeout_s: 0.5
+    # 2026-08-19 电控分析请求：把发出的 CMD_VEL 带时间戳打日志，区分
+    # 来源（cmd_vel / timeout_zero / status_failsafe / shutdown /
+    # chassis_stop），与电控侧 rpi_cmdvel_* 计数器对表。验证完成后改回 false。
+    cmd_vel_tx_log: true
     # Provisional conservative variances; replace with field measurements.
     odom_pose_xy_variance: 0.25
     odom_pose_yaw_variance: 0.1219
@@ -12,7 +16,11 @@ robot_bridge:
     odom_twist_yaw_variance: 0.09
     imu_yaw_rate_variance: 0.09
     unavailable_variance: 1000000.0
-    max_mcu_sample_gap_ms: 250
+    # 2026-08-19 (G5.6) A/B 验证：固件 USB TX 队列满时静默丢 ODOM 帧
+    # （500ms~1.6s，见 docs/field/ODOM_DROP_ROOT_CAUSE_2026-08-19.md）。
+    # 250→1000 让偶发 500ms 丢帧不再触发 LOCALIZATION_ERROR 停车（缓解）；
+    # 电控根治固件丢帧后应调回 250。
+    max_mcu_sample_gap_ms: 1000
 
 motion_controller:
   ros__parameters:
@@ -90,6 +98,7 @@ mission_manager:
     max_retries: 2
     state_timeout_s: 20.0
     build_stability_s: 3.0
+    startup_wait_timeout_s: 15.0
     orange_waypoint: [1.0, 0.5, 0.0]
     purple_waypoint: [1.5, 1.0, 0.0]
     build_waypoint: [0.5, 1.5, 1.5708]
