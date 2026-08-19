@@ -1,0 +1,92 @@
+# ============================================================
+# RoboGame 2026 场地图配置 —— 现场测量回填表
+# ============================================================
+# 【坐标系】（全文件统一，和 field_map.py / GENERAL_FIELD_MAP_2026.md 一致）
+#   原点：场地外沿西南角（选一个固定的物理角，贴胶带标记）
+#   +x  ：沿 4.8 m 短边
+#   +y  ：沿 7.2 m 长边，指向对方半场
+#   角度：弧度，逆时针为正；0 = 朝 +x 方向（90° = 朝 +y）
+#   注意：x 是短边方向（全场最大 4.8），y 是长边方向（全场最大 7.2）。
+# 【队伍】我方是红方，半场在西南角（启动区左下角 = (0.4, 0.4)）。
+#   对方（蓝方）坐标 = (4.8 - x, 7.2 - y, yaw + pi)，角度归一化。
+# 【单位】长度一律米；角度一律弧度（度数 × 3.14 ÷ 180）
+# 【可信度标记】
+#   rule      = 规则文字写死的值，不要改
+#   estimated = 按规则推算的首版值，够规划用，不够厘米级定位
+#   measured  = 你现场量出来的值，最终以它为准
+# ============================================================
+
+field:
+  length_m: 7.2                  # [rule] 场地长边（沿 +y），不要改
+  width_m: 4.8                   # [rule] 场地短边（沿 +x），不要改
+  border_m: 0.4                  # [rule] 黑色边界宽/高，不要改
+  line_width_m: 0.05             # [rule] 黑线宽，不要改
+  line_width_tolerance: 0.05     # [rule] 规则允许 ±5% 误差
+  symmetry: central              # [rule] 全场中心对称
+  start_zone_m: [0.6, 0.6]       # [rule] 启动区尺寸（正方形，每半场一个），不要改
+  build_zone_m: [2.4, 0.6]       # [rule] 搭建区 x方向(短边)2.4 x y方向(长边)0.6（每半场一个），不要改
+  central_platform_m: [1.8, 1.7, 0.2]  # [rule] 中央高台 x方向(短边)1.8 x y方向(长边)1.7 x 高0.2（每半场一个，全场两个）
+  ramp_m: [1.8, 0.8]             # [rule] 斜坡 x方向(短边)1.8 x y方向(长边)0.8（每半场一个；现场确认的方向）
+  ramp_angle_deg: 14.0           # [rule] 斜坡角度（规则写"约 14°"）
+  wall_material_zone_m: [1.8, 0.3]    # [rule] 墙体材料区尺寸 x方向(短边)1.8 x y方向(长边)0.3（红蓝各一，红 (2.6,4.7)、蓝 (0.4,2.2)，见 field_map.py）
+  roof_material_zone_m: [2.2, 0.4]    # [rule] 屋顶材料区（全场一个）规则文字 2.2x0.4；实际方向 x=0.4/y=2.2（现场确认，见 field_map.py）
+
+visual_tags:
+  family: apriltag_36h11         # 【待现场确认】看标签实物是黑白方格码还是数字牌；
+                                 #   若是数字牌，AprilTag 检测器不能直接用
+  size_m: 0.15                   # [rule] 标签边长，不要改
+  top_edge_height_m: 0.4         # [rule] 标签上沿离地高，不要改
+  center_height_m: 0.325         # [rule] 中心高 = 0.4 - 0.15/2，不用测
+  count_per_half: 6              # 现场确认：全场 12 个 = 每半场 6 个（编号 1-6，各半场一套）
+  mounting: vertical_black_barrier_faces  # 现场确认：贴在黑色竖直挡板朝通道一面
+  facing: robot_traffic_area              # 现场确认：标签正面朝向机器人通道
+  coordinates: measured          # 填完下方 anchors 后保持 measured；未填时改成 unknown
+  anchors:
+    # x/y = 标签中心正下方地面点（你现场实测）；yaw = 正面朝向（弧度，逆时针为正）
+    # yaw 对照：0=朝+x(短边) / 1.5708=朝+y(长边) / 3.1416=朝-x / 4.7124=朝-y
+    # 朝向确认：1:+x  2:-y  3:+x  4:-y  5:-x  6:+y
+    1: {x: 0.4, y: 1.6, yaw: 0.0}        # 1号：朝 +x（短边）
+    2: {x: 1.5, y: 2.2, yaw: 4.7124}     # 2号：朝 -y（长边负向）
+    3: {x: 2.6, y: 3.6, yaw: 0.0}        # 3号：朝 +x（短边）
+    4: {x: 3.5, y: 4.7, yaw: 4.7124}     # 4号：朝 -y（长边负向）
+    5: {x: 4.4, y: 1.6, yaw: 3.1416}     # 5号：朝 -x（短边负向）
+    6: {x: 3.5, y: 0.4, yaw: 1.5708}     # 6号：朝 +y（长边）
+
+# ============================================================
+# 【现场测量存档】黑线骨架 / 停车点 / 坡道边界
+# 这些是你现场量的数据，先按下面格式填进来存档；
+# 接入导航时，航点配置从这里读取（或由 field_map.py 引用）。
+# 填法见每项注释。若某类没量，整段保留空即可。
+# 所有 x 都是短边方向（0..4.8），所有 y 都是长边方向（0..7.2）。
+# ============================================================
+survey:
+  line_waypoints:                # 黑线骨架点，按机器人行驶顺序编号 L01, L02, ...
+    # 每个点: 类型 + 坐标 + 通向哪里
+    # 类型: start(启动区出线) / junction(路口) / turn(拐角) / end(终点)
+    # 示例:
+    #   L01: {type: start,    x: 0.7, y: 0.7, to: "L02", note: 启动区出线点}
+    #   L02: {type: junction, x: 1.5, y: 1.2, to: "L03,L05", note: 左转去搭建区}
+  stops:                         # 停车点，按编号 W01, W02, ...
+    # 每个点: 坐标 + 车头朝向 + 为什么停这里
+    # 示例:
+    #   W01: {x: 0.7, y: 0.7, yaw: 0.0, note: 启动姿态中心}
+    #   W02: {x: 1.0, y: 2.0, yaw: 1.5708, note: 墙体材料抓取位}
+    #   W04: {x: 2.0, y: 3.0, yaw: 0.0, note: 搭建放置位}
+  ramp_edges:                    # 坡道起止线，编号 R01...R06
+    # 示例:
+    #   R01: {x: 1.6, y: 2.9, note: 坡道下沿左端}
+    #   R02: {x: 1.6, y: 3.5, note: 坡道下沿右端}
+
+# 灰度阈值 / 相机外参 / 传感器标定数据不要填在这个文件里：
+#   灰度阈值     -> 巡线节点参数
+#   相机外参     -> 相机到机器人坐标变换
+#   停车误差     -> 到点容差、减速距离参数
+#   详见 docs/field/场地布局与现场测量大白话指南_2026.md 第九节
+
+state_policy:
+  priority: [STOP, TAG_DOCK, RAMP, LINE_FOLLOW, WAYPOINT]
+  stop_when: [emergency_stop, localization_invalid, communication_lost]
+  tag_dock_when: [expected_tag_visible, tag_observation_valid]
+  ramp_when: [pitch_threshold_crossed, ramp_region_entered]
+  line_follow_when: [line_visible, route_segment_is_line_follow]
+  waypoint_when: [localization_valid]
