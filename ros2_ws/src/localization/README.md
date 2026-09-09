@@ -1,70 +1,73 @@
-# localization 使用说明
+# localization
 
-## 1. 这个包负责什么
+轮式里程计 + IMU 融合定位节点，发布机器人统一位姿 `/pose` 和 TF 变换。
 
-它把底盘给出的轮式里程计整理成算法统一使用的位姿 `/pose`，同时广播 `map -> base_link` 坐标变换。可以把它理解为“告诉其他模块小车现在在哪里、朝向哪里”。
+## 话题
 
-## 2. 文件分工
+| 方向 | 话题 | 类型 | 说明 |
+|------|------|------|------|
+| 订阅 | `/wheel_odom` | `nav_msgs/Odometry` | 底盘轮式里程计 |
+| 订阅 | `/imu/data` | `sensor_msgs/Imu` | IMU 角速度（用于偏航观测） |
+| 发布 | `/pose` | `nav_msgs/Odometry` | 融合后统一位姿（map 坐标系） |
+| 广播 | `map -> base_link` | TF | 机器人位姿变换 |
 
-- `localization/node.py`：唯一功能文件，接收 `/wheel_odom` 和 `/imu/data`，发布 `/pose` 与 TF。
-- `setup.py`：登记可执行程序 `localization_node`。
-- `package.xml`：声明 ROS2 消息和 TF 依赖。
-- `resource/localization`、`__init__.py`：ROS2 Python 包识别所需的标准文件，通常不用修改。
+## 参数
 
-## 3. 启动
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `imu_stale_s` | float | 0.2 | IMU 数据过期阈值（秒），超过则回退到轮式里程计角速度 |
+| `max_speed_mps` | float | 3.0 | 物理最大速度（m/s），用于位姿跳变检测，超过此值视为异常 |
+| `divergence_threshold` | float | 0.5 | 轮速与 IMU 角速度分歧阈值（rad/s），超过则打印警告 |
+
+参数配置在 `robogame_bringup/config/robot.yaml`：
+
+```yaml
+localization:
+  ros__parameters:
+    imu_stale_s: 0.2
+    max_speed_mps: 3.0
+    divergence_threshold: 0.5
+```
+
+## 质量检查
+
+节点在发布 `/pose` 前依次执行以下检查，任一检查失败都会拒绝该帧（不发布、不广播 TF）：
+
+| 检查项 | 触发条件 | 行为 |
+|--------|----------|------|
+| IMU 过期回退 | IMU 年龄 > `imu_stale_s` | 角速度回退到轮式里程计，打印一次 warn |
+| NaN/Inf 拦截 | 位置、姿态、速度任一值非有限 | 拒绝发布，打印 warn |
+| 全零四元数 | qx=qy=qz=qw=0 | 拒绝发布，打印 warn |
+| 角速度分歧 | abs(轮速角速度 - IMU角速度) > `divergence_threshold` | 打印 warn（不拒绝，仅提示可能打滑） |
+| 位姿跳变 | 帧间速度 > `max_speed_mps` | 拒绝发布，打印 warn |
+
+## 运行
 
 ```bash
-cd ~/robogame/ros2_ws
+cd ~/robogame_git/ros2_ws
 source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
 source install/setup.bash
-ros2 run localization localization_node
+ros2 run localization localization_node --ros-args --params-file ~/robogame_git/ros2_ws/src/robogame_bringup/config/robot.yaml
 ```
 
-另开终端查看：
+## 测试
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/robogame/ros2_ws/install/setup.bash
-ros2 topic echo /pose --once
-ros2 topic hz /pose
-ros2 run tf2_ros tf2_echo map base_link
+cd ~/robogame_git
+python3 -m unittest tests.test_localization -v
 ```
 
-最方便的模拟测试是启动整套系统：
+## 实时监控工具
 
 ```bash
-ros2 launch robogame_bringup mock_demo.launch.py
+python3 tools/pose_monitor.py
 ```
 
-## 4. 输入和输出
+订阅 `/pose`、`/wheel_odom`、`/imu/data`、`/cmd_vel`，实时显示位姿、速度、IMU 状态、角速度分歧和跳变状态。
 
-- 输入 `/wheel_odom`：`nav_msgs/Odometry`，底盘累计位置和速度。
-- 输入 `/imu/data`：`sensor_msgs/Imu`，当前只取 `angular_velocity.z`。
-- 输出 `/pose`：`nav_msgs/Odometry`，供 `motion_control` 使用。
-- 输出 TF：`map -> base_link`，供坐标关系和可视化使用。
+## 后续计划
 
-## 5. 当前代码实际做到了什么
-
-当前版本是冲刺期的简化适配层，不是真正的传感器融合：它复制 `/wheel_odom` 的位置和姿态，把 frame 改成 `map`，并用 IMU 的 z 轴角速度替换输出速度中的角速度。它没有用 IMU 修正累计朝向，也没有处理漂移。
-
-参数 `imu_stale_s` 已声明，但当前代码尚未使用时间戳判断 IMU 是否过期。这是接真机前必须补齐的安全检查。
-
-## 6. 接硬件后必须完成
-
-- 和电控确认轮速/里程计单位、正方向、时间戳和坐标系。
-- 测量轮径、轮距或麦轮几何参数，做直行、横移、原地旋转标定。
-- 检查 IMU 安装方向、零偏和静止噪声。
-- 处理 IMU 过期、轮速跳变、时间倒退和启动复位。
-- 根据实测决定使用互补滤波或 `robot_localization` EKF。
-- AprilTag 只作为后续绝对位置修正，不要把当前 `/pose` 当成高精度真实定位。
-
-## 7. 验收建议
-
-让小车分别直行 1 m、横移 1 m、旋转 360°，每项做 10 次，对比 `/pose` 与卷尺/角度标记。先记录系统偏差，再修改参数；不要只看 RViz 中轨迹“像是正确”。
-
-纯算法测试：
-
-```bash
-cd ~/robogame
-python3 -m unittest tests.test_navigation -v
-```
+- 替换为 `robot_localization`（EKF）当单块任务通过后
+- AprilTag 修正作为可配置输入接入
+- 真车标定后调整 `max_speed_mps` 和 `divergence_threshold`
