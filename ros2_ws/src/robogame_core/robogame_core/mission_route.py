@@ -81,6 +81,15 @@ class RoutePlanError(ValueError):
     """路线数据不合法（自检失败）。任何一条都不允许「带病上路」。"""
 
 
+#: 位置比较容差（survey 的坐标是十进制定值，可以卡很紧）
+POSITION_TOLERANCE_M = 1e-6
+
+#: 角度比较容差。**为什么不是 1e-6**：`field_layout.yaml` 里的 yaw 只写到
+#: 小数点后 4 位（如 1.5708 而 π/2 = 1.5707963…，差 3.7e-6 rad ≈ 0.0002°）。
+#: 用 1e-6 会把「实测数据的写精度」误判成「计划与场地矛盾」。
+YAW_TOLERANCE_RAD = 1e-3
+
+
 def angle_diff(a: float, b: float) -> float:
     """两角之差，归一化到 [-pi, pi)。"""
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
@@ -266,6 +275,10 @@ class CargoPlan:
             cargo.add(CubeColor.PURPLE)
         if cargo.total < self.layers:
             raise RoutePlanError("cargo plan cannot build the requested layers")
+
+
+#: 现场确认的载货/搭建计划（3 橙、只停 W02、搭 2 层：底 2 + 顶 1）
+CARGO_PLAN_DEFAULT = CargoPlan()
 
 
 @dataclass(frozen=True)
