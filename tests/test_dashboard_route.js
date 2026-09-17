@@ -143,3 +143,21 @@ test('ramp state and per-segment speed limit are shown (B3)', () => {
   const flat = routeLiveView(live({line_limit_mps: 0.2, ramp_decision: ''}), 0.1);
   assert.doesNotMatch(flat.text, /坡道/);
 });
+
+test('work step progress is shown (B3 抓取/搭建序列)', () => {
+  const view = routeLiveView(
+    live({
+      segment_id: 'S06_PICK3', phase: 'WORKING', work_count: 1, work_required: 3,
+      work_step: '第 3/5 步：抓第 2 块', work_step_kind: 'PICK',
+    }), 0.1,
+  );
+  assert.match(view.text, /作业 1\/3/);
+  assert.match(view.text, /第 3\/5 步：抓第 2 块/);
+  assert.doesNotMatch(routeLiveView(live({work_step: ''}), 0.1).text, /第 \d+\/\d+ 步/);
+});
+
+test('degradation is flagged so nobody mistakes it for normal progress (B4)', () => {
+  const view = routeLiveView(live({degradations: 1, segment_id: 'S12_BUILD_2LAYER'}), 0.1);
+  assert.match(view.text, /已降级 1 次/);
+  assert.doesNotMatch(routeLiveView(live({degradations: 0}), 0.1).text, /已降级/);
+});

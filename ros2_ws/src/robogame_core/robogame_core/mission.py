@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from .mission_recovery import RecoveryAction, recovery_for_failure
 from .mission_route import RoutePlan, RouteRunner, SegmentRole
 from .models import Cargo, CubeColor, MissionResult
 
@@ -56,6 +57,15 @@ class MissionConfig:
     # A2 / P0-1: 上电等待通信就绪的上限（覆盖握手 3s×3 + 余量），
     # 超时才 fail(COMMUNICATION_ERROR)；等待期内不评估、不 fail。
     startup_wait_timeout_s: float = 15.0
+    # B4：段失败重试耗尽后是否按「降级阶梯」继续（取块失败但有存货 → 去搭建等）。
+    # 关掉就回到「一失败即判死」，便于现场对照排查。
+    degrade_on_failure: bool = True
+    # B4：比赛总时长上限（秒）。规则 3.2.1：正式比赛 6 分钟，计时结束后动作无效。
+    # >0 时，路线执行超过这个时长就**安全停车**（而不是继续跑到自然结束）。
+    match_time_limit_s: float = 360.0
+    # B4：多轮循环的最大趟数。1 = 只跑一趟（当前默认，因为「第二座建筑」的
+    # 落点与机构层计数复位还没有现场结论，见 mission_recovery/文档）。
+    max_rounds: int = 1
 
 
 def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
@@ -92,6 +102,8 @@ class MissionMachine:
     segment_index: int = -1
     segment_id: str = ""
     phase: MissionPhase = MissionPhase.IDLE
+    #: B4：已执行的降级次数（取块失败但有存货 → 去搭建 等），网页/日志可见
+    degradations: int = 0
     _route_runner: RouteRunner | None = field(default=None, repr=False)
 
     @property
@@ -183,6 +195,48 @@ class MissionMachine:
             self._advance_after_success(now)
         return self.state
 
+    def _retry_or_degrade(
+        self, result: MissionResult, detail: str, now: float
+    ) -> MissionState:
+        """路线模式下的失败处理：先重试，重试耗尽后走降级阶梯（B4）。
+
+        与旧的 `_retry_or_fail` 的区别：重试耗尽**不一定**判死——
+        取块失败但框里已有块时，跳到搭建段继续（那些块仍然计分）；
+        位置/朝向不可信时（丢线、没转过去、微移失败）才安全停车。
+        """
+        self.retries += 1
+        self.entered_at = now
+        runner = self._route_runner
+        if self.retries <= self.config.max_retries:
+            self.result = result
+            self.detail = f"retry {self.retries}: {detail}"
+            if runner is not None:
+                # 还在重试本段：清本段累计量，否则已满足的判据会立刻再次触发。
+                runner.observations.reset_segment()
+            return self.state
+
+        if not self.config.degrade_on_failure:
+            return self.fail(result, f"retry limit exceeded: {detail}", now)
+
+        decision = recovery_for_failure(self.route, self.current_segment, self.cargo)
+        target = decision.target_segment_id
+        if decision.action is RecoveryAction.SAFE_STOP or target is None or runner is None:
+            return self.fail(
+                result, f"retry limit exceeded: {detail}；降级为安全停车：{decision.reason}", now
+            )
+        try:
+            runner.skip_to(target)
+        except ValueError as exc:  # 目标段不在计划里：宁可不降级
+            return self.fail(
+                result, f"retry limit exceeded: {detail}；降级失败（{exc}）", now
+            )
+        self.degradations += 1
+        self.retries = 0
+        self.result = MissionResult.RUNNING
+        self.detail = f"degraded: {decision.reason} → {target}"
+        self._sync_route()
+        return self.state
+
     # -- B1: 路线模式 -----------------------------------------------------
     def _enter_route(self, now: float) -> None:
         """进入 ROUTE_RUNNING：建运行器、从第一段开始、同步段信息。"""
@@ -222,18 +276,28 @@ class MissionMachine:
         if runner is None:
             return self.fail(MissionResult.MECHANISM_ERROR, "route mode without runner", now)
 
+        # B4：比赛总时钟（规则 3.2.1：6 分钟，计时结束后动作无效）。
+        # 到点就**安全停车并释放授权**，而不是继续跑到自然结束。
+        limit = self.config.match_time_limit_s
+        if limit > 0.0 and self.route_started_at is not None:
+            elapsed = now - self.route_started_at
+            if elapsed > limit:
+                self._enter(MissionState.SAFE_STOP, now)
+                self.result = MissionResult.SAFETY_STOP
+                self.detail = (
+                    f"match time limit reached: {elapsed:.1f}s > {limit:.1f}s"
+                    "（比赛时间到，安全停车）"
+                )
+                return self.state
+
         # 每段一个超时预算：entered_at 在段切换时刷新（见下面 switched 分支）。
         if now - self.entered_at > self.config.state_timeout_s:
             segment_id = self.segment_id or "?"
-            state = self._retry_or_fail(
+            return self._retry_or_degrade(
                 MissionResult.TIMEOUT, f"segment {segment_id} timeout", now
             )
-            if self.state is MissionState.ROUTE_RUNNING:
-                # 还在重试：清本段累计量，否则已满足的判据会立刻再次触发。
-                runner.observations.reset_segment()
-            return state
         if action_failed:
-            return self._retry_or_fail(failure_result, failure_detail, now)
+            return self._retry_or_degrade(failure_result, failure_detail, now)
 
         segment = runner.current_segment
         if action_succeeded and segment is not None and segment.role is SegmentRole.WORK:
@@ -274,6 +338,7 @@ class MissionMachine:
             "segment_label": "" if segment is None else segment.label,
             "segment_count": total,
             "retries": self.retries,
+            "degradations": self.degradations,
             "detail": self.detail,
         }
 

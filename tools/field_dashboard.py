@@ -472,6 +472,8 @@ class RosFacade:
             "pushed": {name: (round(value, 1) if not isinstance(value, list)
                               else [round(v, 1) for v in value])
                        for name, value in payload.items()},
+            "white_ref": [float(v) for v in white],
+            "black_ref": [float(v) for v in black],
             "detail": f"已推送到巡线节点：white_ref≈{white_base:.0f}、black_ref≈{black_base:.0f}",
         }
 
@@ -483,9 +485,11 @@ class RosFacade:
 
 
 class DashboardController:
-    def __init__(self, console: FieldConsole, archive: SessionArchive, hub: EventHub, loop: asyncio.AbstractEventLoop, *, max_drive_speed: float = 0.3):
+    def __init__(self, console: FieldConsole, archive: SessionArchive, hub: EventHub, loop: asyncio.AbstractEventLoop, *, max_drive_speed: float = 0.3, calibration_file: str = "") -> None:
         if not math.isfinite(max_drive_speed) or not 0.02 <= max_drive_speed <= 0.8:
             raise ValueError("网页最大前后速度必须在 0.02～0.80 m/s 内")
+        # B4：标定落盘路径（空串 = 用 robogame_core 里的默认路径）
+        self.calibration_file = calibration_file
         self.max_drive_speed = max_drive_speed
         self.stopping = False
         self.control_epoch = 0
@@ -1017,7 +1021,12 @@ class DashboardController:
                 "detail": f"{label}已采 {len(samples)} 帧（{durations[target]:.1f}s）"}
 
     async def _calibrate_apply(self, body: dict) -> dict:
-        """校验两组基准并把 white_ref/black_ref 推给巡线节点，当场生效。"""
+        """校验两组基准 → 推给巡线节点（当场生效）→ **落盘**（上电后仍然有效）。
+
+        落盘这一步是「上电后无人干预」的前提：只推给运行中的节点，断电重启就丢，
+        节点回到只有方向意义的默认基准，巡线直接走不起来。写盘失败必须如实报错——
+        这正是最危险的一种「看起来成功」。
+        """
         now = time.monotonic()
         verdict = self.line_calibration.begin_apply(now)
         ros = self._require_ros()
@@ -1029,11 +1038,38 @@ class DashboardController:
             self.record({"type": "control", "action": "line_calibrate_apply",
                          "result": pushed})
             raise ValueError(pushed["detail"])
-        self.line_calibration_result = {"state": "已生效", **verdict, **pushed}
+        try:
+            saved_to = self._save_calibration(
+                pushed["white_ref"], pushed["black_ref"]
+            )
+        except Exception as exc:
+            self.line_calibration_result = {"state": "已推送未落盘", **verdict, **pushed,
+                                            "save_error": str(exc)}
+            self.record({"type": "control", "action": "line_calibrate_apply",
+                         "result": self.line_calibration_result})
+            raise ValueError(
+                f"已推送给节点，但**写盘失败**：{exc}——重启后标定会丢失，上电自主会失效"
+            )
+        self.line_calibration_result = {"state": "已生效并落盘", "saved_to": saved_to,
+                                        **verdict, **pushed}
         self.controller_calibration_note = pushed.get("detail", "")
         self.record({"type": "control", "action": "line_calibrate_apply",
                      "result": self.line_calibration_result})
-        return {"ok": True, "result": self.line_calibration_result}
+        return {"ok": True, "saved_to": saved_to, "result": self.line_calibration_result}
+
+    def _save_calibration(self, white_ref, black_ref) -> str:
+        """把标定写到盘上（路径来自 --calibration-file，空则用默认路径）。"""
+        from robogame_core.line_calibration import DEFAULT_CALIBRATION_FILE, LineCalibration
+
+        calibration = LineCalibration(
+            white_ref=tuple(float(v) for v in white_ref),
+            black_ref=tuple(float(v) for v in black_ref),
+            source="网页面板标定",
+        )
+        target = self.calibration_file or DEFAULT_CALIBRATION_FILE
+        saved = calibration.save(target)
+        self.calibration_saved = str(saved)
+        return str(saved)
 
     def zero_and_release(self, reason: str) -> None:
         with self.lock:
@@ -1185,7 +1221,8 @@ async def run(args) -> None:
     archive = SessionArchive(args.output)
     hub = EventHub()
     console = FieldConsole(load_specs(args.config), event_sink=None)
-    app = DashboardController(console, archive, hub, loop, max_drive_speed=args.max_drive_speed)
+    app = DashboardController(console, archive, hub, loop, max_drive_speed=args.max_drive_speed,
+                              calibration_file=args.calibration_file)
     console.event_sink = app.process_event
     app.start_ros()
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
@@ -1217,6 +1254,9 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-drive-speed", type=float, default=0.3,
                         help="网页前后最大速度 m/s；0.8 仅用于已升级固件，横移不超过 0.4，默认兼容旧固件 0.3")
+    parser.add_argument("--calibration-file", default="",
+                        help="巡线黑白标定落盘路径（面板「应用标定」会写这里；"
+                             "节点启动时用同一个路径加载）。留空则用默认路径 ~/robogame_line_calibration.json")
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("field_console.json"))
     parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "field_console")
     return parser.parse_args()

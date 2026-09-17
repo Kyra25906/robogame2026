@@ -35,6 +35,7 @@ from robogame_core.cmd_vel_arbiter import (
     CmdVelArbiter,
 )
 from robogame_core.junction_turn import JunctionTurner
+from robogame_core.line_calibration import LineCalibration, load_calibration, startup_verdict
 from robogame_core.line_follow import LineSensorReading, LineSensorState
 from robogame_core.mission_dispatch import (
     LineCommand,
@@ -90,6 +91,8 @@ class LineFollowNode(Node):
             "black_ref": 4095.0,
             "white_offset": [0.0] * 8,
             "black_offset": [0.0] * 8,
+            # B4：标定文件路径（上电时加载）。空串 = 只用参数默认值（会大声警告）。
+            "calibration_file": "",
         }.items():
             self.declare_parameter(name, default)
 
@@ -146,6 +149,11 @@ class LineFollowNode(Node):
         self.robot_status_time = 0.0
         self.last_output: LineFollowOutput | None = None
         self.calibration = self._read_calibration()
+        # B4：上电即自主的前提——标定必须落盘并在启动时加载。
+        # 没有持久化标定时默认基准只有方向意义，所以这里要**大声**说明。
+        self.calibration_file = str(self.get_parameter("calibration_file").value)
+        self.calibration_status = ""
+        self._load_persisted_calibration()
         # 参数可在运行时被现场面板改写（标定），改完立即生效，不必重启节点。
         self.add_on_set_parameters_callback(self._on_set_parameters)
         # 帧计数：valid = 真正喂给算法的帧；invalid = analog_valid=0 被丢弃的帧。
@@ -175,6 +183,44 @@ class LineFollowNode(Node):
     # ------------------------------------------------------------------
     # 黑白标定
     # ------------------------------------------------------------------
+
+    def _load_persisted_calibration(self) -> None:
+        """上电时加载落盘的标定；缺失或非法都**大声**报出来，绝不静默用默认值。
+
+        为什么这么严：默认基准（white=0 / black=4095）只有方向意义，静默使用会让
+        「车在巡线」与「读数是假的」看起来一样——而这正是「上电后无人干预」最怕的
+        失败模式（没人会去看读数，只会觉得车坏了）。
+        """
+        path = self.calibration_file
+        if not path:
+            self.calibration_status = "未配置标定文件：基准只有方向默认值，请先在网页面板标定"
+            self.get_logger().warn(
+                "未配置 calibration_file：巡线基准只有方向默认值，"
+                "归一化结果与真实黑白无关（上电自主前必须标定并落盘）"
+            )
+            return
+        try:
+            loaded = load_calibration(path)
+        except Exception as exc:  # 文件缺失/坏 JSON/校验不过
+            _, reason = startup_verdict(None, file_path=path)
+            self.calibration_status = f"标定不可用：{exc}"
+            self.get_logger().error(
+                f"加载标定失败（{path}）：{exc}；{reason}"
+            )
+            return
+        usable, reason = startup_verdict(loaded, file_path=path)
+        if not usable:
+            self.calibration_status = reason
+            self.get_logger().error(f"标定不可用：{reason}")
+            return
+        self.calibration = {
+            "white_ref": list(loaded.white_ref),
+            "black_ref": list(loaded.black_ref),
+            "white_base": min(loaded.white_ref),
+            "black_base": min(loaded.black_ref),
+        }
+        self.calibration_status = reason
+        self.get_logger().info(f"已加载落盘标定：{reason}")
 
     def _read_calibration(self) -> dict:
         """读取标定基准，还原成**逐路** white_ref[8] / black_ref[8]。
@@ -599,6 +645,9 @@ class LineFollowNode(Node):
                     "measured_speed_mps": None
                     if self.measured_speed_mps is None
                     else round(self.measured_speed_mps, 3),
+                    # B4：标定来源与可用性（网页显示「节点现在用的是哪份标定」）
+                    "calibration_file": self.calibration_file or None,
+                    "calibration_status": self.calibration_status or None,
                     **gates,
                 },
                 ensure_ascii=False,

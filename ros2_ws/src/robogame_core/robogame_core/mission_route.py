@@ -572,6 +572,13 @@ class RoutePlan:
     def segment_ids(self) -> tuple[str, ...]:
         return tuple(segment.id for segment in self.segments)
 
+    @property
+    def retreat_segment_id(self) -> str:
+        """撤退段 = 最后一段（路线收尾设计，见 S13）。"""
+        if not self.segments:
+            raise RoutePlanError("route has no segments")
+        return self.segments[-1].id
+
     def turn_registry(self) -> tuple[TurnSpec, ...]:
         """所有路口转向点（B3 按它接线；B1 只登记 + 自检）。"""
         registry = []
@@ -1242,6 +1249,24 @@ class RouteRunner:
             self.observations.reset_segment()
             self.switch_log.append(self.chain.detail)
         return switched
+
+    def skip_to(self, segment_id: str) -> str:
+        """跳到指定段（降级用：取块失败但有存货 → 直接去搭建）。
+
+        只允许在运行中跳；目标段必须在计划里。跳转后本段累计量清零，
+        因为新段的判据要从头开始算。
+        """
+        if self.chain.status is not ChainStatus.RUNNING:
+            raise ValueError("route runner is not running; nothing to skip")
+        index = self.plan.segment_ids.index(segment_id) if segment_id in self.plan.segment_ids else -1
+        if index < 0:
+            raise ValueError(f"unknown segment to skip to: {segment_id!r}")
+        previous = self.plan.segment_ids[self.chain.current_index]
+        self.chain.current_index = index
+        self.chain.detail = f"skipped to segment {index}: {segment_id} (was {previous})"
+        self.observations.reset_segment()
+        self.switch_log.append(self.chain.detail)
+        return self.chain.detail
 
     def reset(self) -> None:
         self.chain.reset()

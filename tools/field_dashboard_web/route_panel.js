@@ -49,6 +49,8 @@ function routeLiveView(raw, ageS, turnPhase) {
   const work = data.work_required
     ? `｜作业 ${data.work_count}/${data.work_required}`
     : '';
+  // B3：作业段的动作序列进度（抓/放 + 之间的车体微移）
+  const workStep = data.work_step ? `｜${data.work_step}` : '';
   // B3：转弯阶段（来自巡线节点的结构化状态，若缺则用任务层上报的）
   const turnFinal = turnPhase || data.turn_phase || '';
   const turnLine = turnFinal ? `｜转弯阶段 ${turnFinal}` : '';
@@ -58,8 +60,10 @@ function routeLiveView(raw, ageS, turnPhase) {
     : (data.ramp_decision === 'NORMAL' ? '｜坡道正常' : '');
   const text = `第 ${done}/${total} 段｜当前 ${data.segment_id || '-'}（${data.segment_label || '-'}）`
     + `｜阶段 ${data.phase || '-'}｜状态 ${data.state || '-'}`
-    + `｜底盘授权 ${data.active_source || 'none'}${work}${turnLine}${limit}${ramp}`
+    + `｜底盘授权 ${data.active_source || 'none'}${work}${workStep}${turnLine}${limit}${ramp}`
     + (data.retries ? `｜重试 ${data.retries}` : '')
+    // B4：降级（重试耗尽后跳过/撤退）必须显眼——否则现场会以为任务在正常推进
+    + (data.degradations ? `｜⚠️ 已降级 ${data.degradations} 次` : '')
     + `｜下一步 ${data.next_segment_id || '（已完成）'}`
     + (stale ? `｜⚠️ 该上报已过期 ${ageS.toFixed(1)}s，下面显示的是旧值` : '');
   return { available: true, stale: stale, text };

@@ -25,6 +25,9 @@ mission_manager:
     route_enabled: true
     # 每段独立超时预算：坡道/巡线段较短，20s 足够；现场可按实测收紧。
     state_timeout_s: 20.0
+    # B4：段失败重试耗尽后按降级阶梯继续（取块失败但有存货 → 去搭建；
+    # 位置/朝向不可信 → 安全停车）。关掉就回到「一失败即判死」，便于现场对照排查。
+    degrade_on_failure: true
 
 line_follow_controller:
   ros__parameters:
@@ -33,3 +36,7 @@ line_follow_controller:
     # （见 line_follow_hardware.launch.py 的内联参数与
     #  tests/test_launch_graph.py 的豁免测试）。
     require_authorization: true
+    # B4：上电即自主的前提——启动时从这里加载落盘的黑白标定。
+    # 路径必须与网页面板 `--calibration-file`（默认同值）一致；
+    # 文件不存在/不合法时节点会大声报错并保持默认基准（车不会假装在巡线）。
+    calibration_file: ~/robogame_line_calibration.json

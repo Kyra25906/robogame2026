@@ -36,6 +36,8 @@ from robogame_core.mission import (
     classify_action_result,
 )
 from robogame_core.mission_dispatch import (
+    SOURCE_ALIGN,
+    SOURCE_NAVIGATE,
     SOURCE_NONE,
     decide,
     line_command_for,
@@ -46,8 +48,21 @@ from robogame_core.mission_route import SegmentRole
 from robogame_core.models import MissionResult, Pose2D, yaw_from_quaternion
 from robogame_core.ramp_control import SlipDecision
 from robogame_core.route_loader import load_route_plan, resolve_field_layout_path
+from robogame_core.work_sequence import (
+    WorkPlan,
+    WorkStepKind,
+    shifted_pose,
+    work_steps,
+)
 from robogame_interfaces.msg import CargoState, MissionState as MissionStateMsg, RobotStatus
 from std_msgs.msg import String
+
+#: 作业步骤由谁驱动：抓/放归机构（视觉对准自己动底盘），侧移归位姿控制
+STEP_ACTIVE_SOURCE = {
+    WorkStepKind.PICK: SOURCE_ALIGN,
+    WorkStepKind.PLACE: SOURCE_ALIGN,
+    WorkStepKind.SHIFT: SOURCE_NAVIGATE,
+}
 
 
 class MissionManagerNode(Node):
@@ -62,6 +77,8 @@ class MissionManagerNode(Node):
             # --- B2 路线模式 ---
             "route_enabled": False,
             "field_layout_path": "",
+            # B4：失败降级阶梯（重试耗尽后 跳过/撤退/安全停车）
+            "degrade_on_failure": True,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -72,6 +89,7 @@ class MissionManagerNode(Node):
             state_timeout_s=float(self.get_parameter("state_timeout_s").value),
             build_stability_s=float(self.get_parameter("build_stability_s").value),
             startup_wait_timeout_s=float(self.get_parameter("startup_wait_timeout_s").value),
+            degrade_on_failure=bool(self.get_parameter("degrade_on_failure").value),
         ))
         self.route_enabled = bool(self.get_parameter("route_enabled").value)
         self.route_error = ""
@@ -110,8 +128,8 @@ class MissionManagerNode(Node):
         # B3：每段巡线参数（限速 + 坡道 profile；空串 = 清除）
         self.line_pub = self.create_publisher(String, "/mission/line", 10)
         self.create_subscription(RobotStatus, "/robot/status", self._on_status, 10)
-        self.create_subscription(String, "/motion/result", self._on_action_result, 10)
-        self.create_subscription(String, "/manipulator/result", self._on_action_result, 10)
+        self.create_subscription(String, "/motion/result", self._on_motion_result, 10)
+        self.create_subscription(String, "/manipulator/result", self._on_manipulator_result, 10)
         self.create_subscription(String, "/line_follow/status", self._on_line_status, 10)
         self.create_subscription(Odometry, "/pose", self._on_pose, 20)
         self.create_timer(0.05, self._tick)
@@ -144,11 +162,36 @@ class MissionManagerNode(Node):
     def _on_status(self, msg: RobotStatus) -> None:
         self.status = msg
 
-    def _on_action_result(self, msg: String) -> None:
+    def _on_motion_result(self, msg: String) -> None:
+        self._handle_result(msg, "motion")
+
+    def _on_manipulator_result(self, msg: String) -> None:
+        self._handle_result(msg, "manipulator")
+
+    def _handle_result(self, msg: String, source: str) -> None:
+        """动作结果统一入口。
+
+        `source` 区分 `/motion/result` 与 `/manipulator/result`：作业段里两者都会
+        出现（抓取 + 车体微移），必须分开——否则一次侧移成功会被记成「抓了一块」。
+        """
         succeeded, failure_result, detail = classify_action_result(msg.data)
+        runner = self.machine.route_runner
         if succeeded:
-            # A4/P0-6: INCONCLUSIVE 也走成功推进——进入 mission 级 VERIFY_BUILD
-            # 计时兜底，而不是被当作 MECHANISM_ERROR 判死。
+            # 作业段：按当前步骤推进（来源不匹配则忽略）
+            plan = self.work_plan
+            step = None if plan is None else plan.current
+            if (
+                plan is not None
+                and step is not None
+                and self.machine.state is MissionState.ROUTE_RUNNING
+            ):
+                if not plan.advance(result_source=source):
+                    return  # 不是这一步的结果（例如侧移结果落在抓取步上）
+                if step.kind is WorkStepKind.SHIFT:
+                    # 微移成功：只推进步骤，不计入作业次数（次数由机构结果决定）
+                    self.machine.tick()
+                    self.last_dispatched = None
+                    return
             self.machine.tick(action_succeeded=True)
         else:
             # 作业失败：允许重发同一条作业命令（重试语义由 state 机控制）
@@ -275,6 +318,7 @@ class MissionManagerNode(Node):
             self.published_retries = 0
             self.segment_distance_m = 0.0
             self.previous_pose = None
+            self._prepare_work_plan(segment)
             self._publish_turn_command(segment)
             self._publish_line_command(segment)
             self.get_logger().info(f"进入段 {segment.id}：{segment.label}")
@@ -285,6 +329,7 @@ class MissionManagerNode(Node):
             self.get_logger().warn(
                 f"{segment.id} 第 {self.machine.retries} 次重试：重发本段命令"
             )
+            self._prepare_work_plan(segment)
             self._publish_turn_command(segment)
             self._publish_line_command(segment)
         decision = decide(segment, self.cargo_plan, max(runner.observations.work_count, 0))
@@ -293,6 +338,12 @@ class MissionManagerNode(Node):
             self.goal_pub.publish(
                 Pose2DMsg(x=decision.goal.x, y=decision.goal.y, theta=decision.goal.yaw)
             )
+        # 作业段：按「动作序列」逐步下发（抓/放归机构，侧移归位姿控制）
+        step = None if self.work_plan is None else self.work_plan.current
+        if step is not None:
+            self._dispatch_work_step(segment, step)
+            self.authority_pub.publish(String(data=STEP_ACTIVE_SOURCE[step.kind]))
+            return
         self.authority_pub.publish(String(data=decision.active_source))
         if segment.role is SegmentRole.WORK and decision.work_command is not None:
             index = runner.observations.work_count
@@ -302,6 +353,46 @@ class MissionManagerNode(Node):
                 self.get_logger().info(
                     f"{segment.id}：第 {index + 1} 次作业 → {decision.work_command}"
                 )
+
+    def _prepare_work_plan(self, segment) -> None:
+        """进入/重试作业段时重建动作序列（抓放 + 之间的车体微移）。"""
+        self.published_step_index = -1
+        self.work_reference_pose = None
+        if segment.role is not SegmentRole.WORK or self.cargo_plan is None:
+            self.work_plan = None
+            return
+        try:
+            steps = work_steps(segment, self.cargo_plan)
+        except ValueError as exc:
+            self.work_plan = None
+            self.get_logger().error(f"{segment.id}：作业序列无法展开（{exc}），本段将不做动作")
+            return
+        self.work_plan = WorkPlan(steps=steps)
+        self.work_reference_pose = segment.to_pose
+        self.get_logger().info(
+            f"{segment.id}：作业序列共 {len(steps)} 步 — "
+            + "；".join(step.label for step in steps)
+        )
+
+    def _dispatch_work_step(self, segment, step) -> None:
+        """下发当前作业步骤：抓/放 → 机构命令；侧移 → 位姿目标（累积位移）。"""
+        if step.index == self.published_step_index and step.kind is not WorkStepKind.SHIFT:
+            return  # 同一步的机构命令只发一次
+        if step.kind is WorkStepKind.SHIFT:
+            if step.index == self.published_step_index:
+                return
+            base = self.work_reference_pose or segment.to_pose
+            target = shifted_pose(base, forward_m=step.forward_m, lateral_m=step.lateral_m)
+            self.work_reference_pose = target
+            self.goal_pub.publish(Pose2DMsg(x=target.x, y=target.y, theta=target.yaw))
+            self.get_logger().info(
+                f"{segment.id}：车体微移 → ({target.x:.3f}, {target.y:.3f})"
+                f"（前向 {step.forward_m:+.3f} m / 侧向 {step.lateral_m:+.3f} m）"
+            )
+        else:
+            self.manip_pub.publish(String(data=step.command))
+            self.get_logger().info(f"{segment.id}：{step.label} → {step.command}")
+        self.published_step_index = step.index
 
     def _publish_route_status(self) -> None:
         progress = self.machine.route_progress()
@@ -334,6 +425,14 @@ class MissionManagerNode(Node):
             "turn_phase": ""
             if self.last_line_status is None
             else self.last_line_status.turn_phase,
+            # B3：作业段动作序列进度（「第 2/5 步：侧移 0.15 m 到第 2 槽」）
+            "work_step": "" if self.work_plan is None else self.work_plan.progress_text(),
+            "work_step_kind": ""
+            if self.work_plan is None or self.work_plan.current is None
+            else self.work_plan.current.kind.value,
+            "work_step_label": ""
+            if self.work_plan is None or self.work_plan.current is None
+            else self.work_plan.current.label,
         }
         self.route_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
 

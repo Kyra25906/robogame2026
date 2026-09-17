@@ -511,6 +511,61 @@ class LineAndRampWiringTests(unittest.TestCase):
             self.assertIn(key, payload, f"/mission/route 必须带 {key}（网页显示坡道/转弯状态）")
 
 
+class WorkSequenceWiringTests(unittest.TestCase):
+    """B3：作业段动作序列（抓 3 块 / 搭 2 层 + 槽间微移）的接线。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mission = _tree(MISSION_NODE)
+        cls.mission_text = MISSION_NODE.read_text(encoding="utf-8")
+
+    def test_segment_entry_and_retry_build_the_work_plan(self):
+        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
+        self.assertEqual(
+            dispatch.count("_prepare_work_plan"), 2,
+            "进入段与重试都必须重建作业序列",
+        )
+        prepare = ast.unparse(_function(self.mission, "_prepare_work_plan"))
+        self.assertIn("work_steps", prepare)
+        self.assertIn("WorkPlan", prepare)
+        self.assertIn("work_reference_pose", prepare)
+
+    def test_each_step_is_dispatched_once_with_the_right_authority(self):
+        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
+        self.assertIn("_dispatch_work_step", dispatch)
+        self.assertIn("STEP_ACTIVE_SOURCE", dispatch)
+        step_dispatch = ast.unparse(_function(self.mission, "_dispatch_work_step"))
+        self.assertIn("published_step_index", step_dispatch)
+        # 侧移是位姿目标，抓放是机构命令
+        self.assertIn("goal_pub.publish", step_dispatch)
+        self.assertIn("manip_pub.publish", step_dispatch)
+        self.assertIn("shifted_pose", step_dispatch)
+
+    def test_shift_moves_are_cumulative_from_the_segment_pose(self):
+        step_dispatch = ast.unparse(_function(self.mission, "_dispatch_work_step"))
+        self.assertIn("self.work_reference_pose = target", step_dispatch)
+        self.assertIn("self.work_reference_pose or segment.to_pose", step_dispatch)
+
+    def test_result_sources_are_separated(self):
+        """抓取结果与车体微移结果必须分开：否则侧移成功会被记成抓了一块。"""
+        text = self.mission_text
+        self.assertIn("self._on_motion_result", text)
+        self.assertIn("self._on_manipulator_result", text)
+        handler = ast.unparse(_function(self.mission, "_handle_result"))
+        self.assertIn("result_source", handler)
+        self.assertIn("plan.advance", handler)
+        self.assertIn("WorkStepKind.SHIFT", handler)
+        # 侧移成功只推进步骤、不计入作业次数
+        shift_branch = handler.split("WorkStepKind.SHIFT", 1)[1].split("return", 1)[0]
+        self.assertIn("self.machine.tick()", shift_branch)
+        self.assertNotIn("action_succeeded=True", shift_branch)
+
+    def test_payload_exposes_the_work_step(self):
+        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
+        for key in ("work_step", "work_step_kind", "work_step_label"):
+            self.assertIn(key, payload, key)
+
+
 class TurnCommandPathTests(unittest.TestCase):
     """纯逻辑组合：转弯命令 → 仲裁门控（授权语义与巡线路径同一套）。"""
 
