@@ -52,8 +52,11 @@ ROS2服务 → 安全检查 → 0x20命令 → ACK → 0x21状态 → ROS2结果
 
 ## 4. Ubuntu启动
 
+> 树莓派上的仓库路径是 `~/robogame`（用户 `rg26`）；`~/robogame2026-integration`
+> 是另一台 Ubuntu 虚拟机（用户 `panwenhui`）的路径，不要混用。
+
 ```bash
-cd ~/robogame2026-integration/ros2_ws
+cd ~/robogame/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 run robot_bridge robot_bridge --ros-args \

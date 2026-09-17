@@ -9,11 +9,11 @@
 
 ## 启动
 
-必须在仓库根目录运行：
+必须在仓库根目录运行（树莓派上是 `~/robogame`）：
 
 ```bash
-cd ~/robogame2026-integration
-source /opt/ros/$ROS_DISTRO/setup.bash
+cd ~/robogame
+source /opt/ros/jazzy/setup.bash
 source ros2_ws/install/setup.bash
 python3 tools/field_console.py
 ```

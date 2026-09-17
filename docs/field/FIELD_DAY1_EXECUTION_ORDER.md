@@ -126,10 +126,11 @@ ls -l /dev/robot_mcu 2>/dev/null
 ```bash
 source ~/robogame/ros2_ws/install/setup.bash
 
-# 注意：用 hardware.yaml 覆盖 robot.yaml 中的 mock_mode
+# 注意：真实模式靠 robot_field.yaml 覆盖 robot.yaml 的 mock_mode（:3 mock_mode: false）。
+# hardware.yaml 是 legacy、已不被任何启动入口加载，不要再拿它当覆盖层。
 ros2 run robot_bridge robot_bridge --ros-args \
   --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml \
-  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/hardware.yaml
+  --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot_field.yaml
 ```
 
 **预期**：
@@ -140,7 +141,7 @@ ros2 run robot_bridge robot_bridge --ros-args \
 **如果卡在握手重试**：
 - 检查 USB 线是否插稳
 - 检查 STM32 是否已上电（看板子上的灯）
-- 如果多次重试后进入 UNAVAILABLE，检查 `hardware.yaml` 中的串口设备名是否正确
+- 如果多次重试后进入 UNAVAILABLE，检查 `robot_field.yaml`（第 4 行 `serial_port`）中的串口设备名是否正确
 
 **为什么先启动 robot_bridge 而不是全套系统？**
 robot_bridge 是通信的最低层。如果它连不上，其他 8 个节点都白启动。**逐级验证的意思就是在启动下游之前先确认上游正常。**

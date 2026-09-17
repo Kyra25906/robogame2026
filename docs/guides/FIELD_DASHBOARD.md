@@ -8,17 +8,22 @@ Windows 现场只保留一个 SSH 窗口和一个浏览器页面，不再为每�
 
 ## Windows 连接
 
-在 Windows Terminal 建立 SSH 隧道（替换用户名和 IP）：
+在 Windows Terminal 建立 SSH 隧道（用户名 `rg26`，主机名 `robogame-t26-rpi4.local`；
+**树莓派经手机热点上网，IP 每次重连都会变，所以优先用主机名，不要写死 IP**；
+找不到主机名时用 `python tools/find_pi_on_lan.py --source <你的IP>` 扫描）：
 
 ```powershell
-ssh -L 8765:127.0.0.1:8765 pi@192.168.1.20
+ssh -L 8765:127.0.0.1:8765 rg26@robogame-t26-rpi4.local
 ```
 
-登录树莓派后：
+> 完整的找 IP、免密、传文件、换端口、主机密钥变更处理见
+> `docs/guides/RASPBERRY_PI_SSH_AND_WEB_GUIDE.md`。
+
+登录树莓派后（**仓库路径是 `~/robogame`**）：
 
 ```bash
-cd ~/robogame2026-integration
-source /opt/ros/$ROS_DISTRO/setup.bash
+cd ~/robogame
+source /opt/ros/jazzy/setup.bash
 source ros2_ws/install/setup.bash
 python3 tools/field_dashboard.py
 ```
@@ -119,12 +124,19 @@ tools/field_dashboard_web/index.html      # 一行 <script src="/arm_panel.js">
 整条链路验证了一遍。面板会把每个关节的零位移参考角度直接列出来。
 
 前提：`/arm/set_joint` 默认被拒（`9010`，关节值域未冻结，依据现场问答表 C-11）。
-要在面板上做通路自检，先在 `robogame_bringup/config/hardware.yaml` 里填：
+要在面板上做通路自检，先在 `robogame_bringup/config/robot.yaml`（`robot_bridge.ros__parameters`
+下，当前 `robot.yaml:26-27` 为空串）填：
 
 ```yaml
     arm_joint_ranges: "0:0:270;1:0:270;2:0:270;3:0:270"
     arm_joint_ranges_evidence: "2026-09-17 上车联调临时冻结，仅用于通路验证"
 ```
+
+> ⚠️ **改 `robot.yaml`，不是 `hardware.yaml`**。现场启动命令见 `tools/field_console.json:7`，
+> 只加载 `robot.yaml` + `robot_field.yaml`；`hardware.yaml` 是 legacy、**未被加载**，
+> 在里面填 `arm_joint_ranges` 不会有任何效果
+> （`tests/test_config_validation.py:258` 把 hardware.yaml 的漂移仅判为 warning）。
+> 同理该文件里的 `command_timeout_s: 0.15` 也不生效，真正生效的是 `robot.yaml:7` 的 `0.5`。
 
 面板底部还有“手动 ARM_SET”（关节下拉 + 角度 + 超时），做小角度真动时不用开终端。
 
