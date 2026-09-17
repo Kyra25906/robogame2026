@@ -8,9 +8,10 @@
 - 新问题记录复现条件、影响和下一次验证方式；
 - `P0` 表示阻断真实闭环，`P1` 表示近期必须完成，`P2` 表示体验或维护改进；
 - 一次只选择一个小任务进入开发，避免同时修改过多模块；
-- 生成视频、JSONL 和 HTML 默认位于 `results/`，不提交 Git，重要数据需要另行备份。
+- 生成视频、JSONL 和 HTML 默认位于 `results/`，不提交 Git，重要数据需要另行备份；
+- 文档里出现的「测试 N 项」一律是**该行写入当日的快照**，不是当前数量。当前数量请现场取数（命令与口径见 `ISSUE-018`）。
 
-最后更新：2026-09-17（只读复核修正：过期的 `2001` 机构拒绝描述、第三轮复审清单的完成状态、测试计数）
+最后更新：2026-09-17（只读复核修正：过期的 `2001` 机构拒绝描述、第三轮复审清单的完成状态、测试计数不再钉死数字、失效文件路径（`FREEZE_TABLE.md` 归档、固件目录名）与 `robot.yaml` 行号引用改为按键名定位）
 
 ## 当前状态摘要
 
@@ -22,7 +23,7 @@
 - [x] 机构单动作验收工具、故障注入卡片和现场第一天执行清单。
 - [x] 视觉新视频处理、时间段标注、取消、恢复及 HTML 报告链路。
 - [x] `motion_control` 限速、异常时间步、停车顺序和机构故障传播测试。
-- [x] Windows 全项目 185 项测试通过；Ubuntu 提交 `347e020` 构建 9 包并输出 `CONFIG PASS`。
+- [x] Windows 全项目 185 项测试通过（历史快照，非当前值）；Ubuntu 提交 `347e020` 构建 9 包并输出 `CONFIG PASS`。
 - [x] `P0` `/cmd_vel` 可信状态门控修复：握手由未解码 0x12 信封完成后不再解锁非零速度。证据：2 AST 回归测试 + 6 行为测试，Ubuntu 239 测试全过，9 包构建通过。SHA `e50529c`。
 
 ### 仍可远程完成，但不阻断转现场
@@ -63,7 +64,7 @@
 
 ### 巡线链路核对记录（2026-08-19 只读检查）
 
-- 下位机（STM32，`Four_Motor_PID_Test (3)/`，⚠️ 该目录未跟踪 Git）：
+- 下位机（STM32，工作树路径 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/`，⚠️ `Four_Motor_PID_Test_1/` 被 `.gitignore:46` 忽略，Git 里查不到这个目录，只有本机磁盘上有；旧文写的 `Four_Motor_PID_Test (3)/` 在本机不存在）：
   - `line_sensor.c/h`：UART7（PE8=TX / PE7=RX，115200）驱动，发 `$0,1,1#` 使能模块，解析 `$D,x1:0..#`（数字）/`$A,x1:4096..#`（12bit 模拟）帧，输出 `line_digital[8]`/`line_analog[8]`/`line_online`/`line_frame_count`；
   - 已接入 `main.c`（Init、主循环 `LineSensor_Update()`、UART 回调）与 `stm32f4xx_it.c` UART7 中断；`line_sensor.h` 明说「仅 Keil Watch 观察，不接入任何控制」——**只采集、不上送**；
   - ~~`rpi_protocol.c` 无巡线消息类型~~（**2026-09-17 修正：已过期**，`rpi_protocol.c:144` 已有 `RPI_MSG_LINE_TELEMETRY 0x14U`、`:1552` 有 `RPI_SendLineTelemetry()`、`:1665` 在 `RPI_Update` 内周期上送）；`STM32_SERIAL_PROTOCOL_V1.md` **仍未收录** 0x14 定义（文档待补，但代码已存在）。
@@ -102,7 +103,7 @@
 
 ## 2026-08-17 第三轮复审修复清单（⚠️ 2026-09-17 复核：绝大部分已完成，勿重复实施）
 
-依据：第三轮复审报告（344 项测试基线）。详细修复方案（根因/行号/验证/依赖）见 `docs/RoboGame2026_第三轮复审修复方案_2026-08-17.md`。以下原为可执行清单，**标题里的「方案已出，代码未动」已过期**。
+依据：第三轮复审报告（当日基线 344 项测试，历史快照、非当前值）。详细修复方案（根因/行号/验证/依赖）见 `docs/RoboGame2026_第三轮复审修复方案_2026-08-17.md`。以下原为可执行清单，**标题里的「方案已出，代码未动」已过期**。
 
 > **开工前必读（2026-09-17 只读复核）**：本清单**不是**待做 backlog。原列 P0 6 项、P1 5 项、P2 5 项中的绝大多数，已由上方「2026-08-18 执行队列阶段 A 完成记录」（A2/A3/A4/A5/B1/C2/C3/C6 各条）实现并带测试。标记约定：`[x]` = 已完成（行内给出代码证据）；`[ ]` = **仍有剩余子项**（行内写明已完成哪部分、仍缺哪部分）。请先读 `[x]` 行的证据再动手，不要重做已完成项。
 >
@@ -115,7 +116,7 @@
 
 - [x] `P0` 启动竞态：`mission.py:80-81` 在 SELF_CHECK 就对 `communication_ok=False` 直接 fail，而 `robot_bridge` 上电 `_communication_ok=False`（`node.py:199/224`），首条 STATUS 必带 False → 立即 FAILED。方案：新增 `WAIT_FOR_COMMUNICATION` 前置状态（或 SELF_CHECK 容忍未就绪）+ 启动等待超时参数，运行时心跳丢失语义不变。**✅ 2026-08-19 已修（A2，见阶段 A 完成记录）**。
 - [x] `P0` 无相机节点：**已完成（B1，2026-09-17 复核）**。`ros2_ws/src/robogame_bringup/launch/camera.launch.py` 已存在（usb_cam 640×480@30fps MJPG + 静态 CameraInfo 焦距 1275.0），并由 `hardware.launch.py:19` include 挂入；`tools/launch_graph.py` 的 `KNOWN_HARDWARE_GAPS` 已置空，`tests/test_launch_graph.py` 钉住该图。**仍属现场依赖**：树莓派装 usb_cam 驱动、真机确认 `/camera/image_raw` 有发布者。
-- [x] `P0` cube_perception 漏传 field 配置 + 焦距值过时：**已完成（A3，2026-09-17 复核）**。`hardware.launch.py:41` 现为 `parameters=[common, field]`；`robot_field.yaml:18` `fallback_focal_px: 1275.0`（`robot.yaml:65` 保留 700.0 作开发兜底，field 层显式覆盖，并有焦距一致性回归测试）。下方「连带」的像素量纲参数仍按原计划留到现场重调。
+- [x] `P0` cube_perception 漏传 field 配置 + 焦距值过时：**已完成（A3，2026-09-17 复核）**。`hardware.launch.py:41` 现为 `parameters=[common, field]`；`robot_field.yaml:18` `fallback_focal_px: 1275.0`（`robot.yaml` 的 `cube_perception.fallback_focal_px` 保留 700.0 作开发兜底——按 `fallback_focal_px` 键名检索定位，2026-09-17 实测在 `:93`，行号会漂移；field 层显式覆盖，并有焦距一致性回归测试）。下方「连带」的像素量纲参数仍按原计划留到现场重调。
   - 依据：08-15 性能测试（`docs/field/单相机模拟双相机性能测试_2026-08-15.md`）证明树莓派 4B 在 1280×720 仅 ~13fps、CPU 270%，工作分辨率定 **640×480**；焦距按分辨率线性缩放 `2550×(640/1280)=1275`。**内参无需重标**（fx≈2526.98，RMS 0.82px 依然有效），这是纯数学换算。
   - 连带：`min_area_px`（400）/`min_side_px`（12）为像素量纲，分辨率减半后方块面积变 1/4，需现场重调。
 - [x] `P0` 真实模式不支持 RETREAT：**已完成（A4，2026-09-17 复核）**。`manipulator_client/node.py:318-332` 在 `runtime_mode == "field"` 时，RELEASE + 放置验证通过即成功返回，不再调用机构式 `/chassis/retreat`（真实固件不支持，error_code=9）；mock 模式保留原流程，撤退上移 mission 级 `RETREAT → /motion/goal`。**仍属现场项**：mission 级撤退导航的真车验收。
@@ -129,7 +130,7 @@
   - ⚠️ 几何冲突待决策：标签在墙上 40cm 需平视，方块在地面/高台需俯视，同一相机难兼顾 → 见执行队列「待拍板决策 1」。
 - [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：**离线部分已完成（C3，勿重写）**——`robogame_core/ramp_control.py`（RampProfile / RampController / SlipDecision：坡道限速、打滑检测、卡住停车、下坡防冲）+ `tests/test_ramp_control.py` 16 项合成数据。**仍缺**：IMU pitch 视距/重心补偿与真车坡道验收，依赖真实 IMU（当前 `imu_valid=false`）。
 - [x] `P1` 倒塌检测（规则 3.2.2 S4）：计时兜底已并入 A4 完成（`MissionResult.INCONCLUSIVE` 不判死 + mission 级 VERIFY_BUILD 3s 计时，`classify_action_result`）。**视觉证据部分对得分不必要**（3s 稳定由裁判判定、不判死已兜住），真正价值在 G3.7（塔倒→重搭决策），并入 G 阶段；可行性依赖「撤退后能否看到塔」实测（Claude 建议 1.6）。
-- [ ] `P1` 实测航点：`robot.yaml:84-87` 占位 waypoint → 现场实测回填 `robot_field.yaml`，补上坡航段。
+- [ ] `P1` 实测航点：`robot.yaml` 的 `mission_manager` 段四个占位航点（按键名 `orange_waypoint`/`purple_waypoint`/`build_waypoint`/`retreat_waypoint`；2026-09-17 实测在 `robot.yaml:137-140`，行号随文件改动漂移，**请按键名检索**）→ 现场实测回填 `robot_field.yaml`，补上坡航段。旧文写的 `robot.yaml:84-87` 有误：那几行是 line_follow 标定注释的结尾与 `cube_perception:` 段头，不是航点。
 
 ### P2：稳健性（原 5 项，2026-09-17 复核：3 项已修，2 项仍待确认）
 
@@ -146,7 +147,7 @@
 - [x] `P0` 增加真实模式失败安全测试：没有成功解码 `0x12 RobotStatus` 时，`communication_ok` 不得仅因收到其他合法帧而变为真。证据：8项硬件准备测试、全项目148项测试通过。
 - [x] `P0` 分离模拟与现场配置：公共参数使用 `robot.yaml`，环境参数使用 `robot_mock.yaml`/`robot_field.yaml`；field模式在代码层拒绝 `mock_qualified` 和 `mock_failed`。证据：12项硬件准备测试、全项目152项测试通过。
 - [x] `P0` 为抓取和放置建立时间预算表，检查 `action_timeout_s=12.0` 是否能覆盖全部真实步骤。证据：`docs/field/TIME_BUDGET.csv`，结论为 12.0s 最坏情况不足，建议现场先用 18s 调试。
-- [x] `P1` 把机械/电控必须回答的问题整理成现场可逐项填写的冻结表：动作、参数、完成证据、错误码、取消、断电行为。证据：`docs/field/FREEZE_TABLE.md`，含十节共 50+ 待填项；2026-08-08 电控组已答复底盘速度命令、里程计、IMU、串口与安全共 20 条，FREEZE_TABLE 已同步更新。
+- [x] `P1` 把机械/电控必须回答的问题整理成现场可逐项填写的冻结表：动作、参数、完成证据、错误码、取消、断电行为。证据：冻结表 `docs/field/_archived/FREEZE_TABLE.md`（原路径 `docs/field/FREEZE_TABLE.md` 已于 2026-09-17 复核时确认**不存在**，表已归档到 `_archived/`），含十节共 50+ 待填项；2026-08-08 电控组已答复底盘速度命令、里程计、IMU、串口与安全共 20 条，FREEZE_TABLE 已同步更新。
 
 ### 第二天：现场验收工具与交接准备
 
@@ -159,7 +160,7 @@
 
 ## 电控协议确认后新增待办（2026-08-08）
 
-电控组通过 `电控协议确认清单.xlsx` 答复了 20 条问题。分析结论见 `docs/field/FREEZE_TABLE.md`（已更新）和当天对话记录。
+电控组通过 `电控协议确认清单.xlsx` 答复了 20 条问题。分析结论见 `docs/field/_archived/FREEZE_TABLE.md`（表已归档，旧路径 `docs/field/FREEZE_TABLE.md` 不存在）和当天对话记录。
 
 - [x] `P0` RobotStatus 消息新增 `calibrating`、`imu_valid`、`boot_id` 三个字段，用于区分 IMU 校准状态和 MCU 复位检测。证据：commit `2ccc0a6`，Ubuntu 验证通过，`ros2 topic echo /robot/status` 正确输出新字段。
 - [x] `P0` `robot_bridge` 新增握手状态机：HELLO → 等 ACK → READY，握手完成前不接受运动命令。握手超时 3s，最多 3 次重试。证据：commit `9891799`，Ubuntu 模拟验收 12/12 通过，mock 模式直接 READY 不受影响。
@@ -215,7 +216,7 @@
 
 - [x] 新视频在网页中自动生成 schema v2 检测时间线。证据：提交 `d8ffecb`。
 - [x] HEVC 手机视频自动生成 H.264 浏览器预览。证据：提交 `17f6ada`，真实视频转换前后均为 574 帧。
-- [x] 增加检测进度、处理取消和半成品清理。证据：提交 `277edf4`，139 项测试通过。
+- [x] 增加检测进度、处理取消和半成品清理。证据：提交 `277edf4`，139 项测试通过（历史快照，非当前值）。
 - [x] manifest 保存后可从同一工作目录恢复最后一个数据集。证据：自动恢复测试通过。
 - [x] 防止恢复后把 H.264 历史预览再次当作原视频处理；重新检测必须重新提交原始视频。
 - [ ] `P1` 收集并标注橙色、紫色、空场景三类真实视频——距离/角度/遮挡样本已采集验证（见「视觉真实相机与标定进展」），但正式手动标注数据集仍未建立。
@@ -374,32 +375,39 @@
 - 优先级：`P1`；
 - 发现时间：2026-08-12 安全审计；
 - 现象：`serial.write()` 和 `serial.read()` 没有 try/except。USB 意外断开时 SerialException 传播到定时器回调，可能导致整个 bridge 功能（里程计、状态发布、握手、命令超时）全部冻结；
-- 已完成（2026-08-13）：新增 `_safe_serial_write` / `_safe_serial_read`，捕获 `OSError`（`serial.SerialException` 是其子类，覆盖 USB 拔线），失败时关闭串口、置 None、记日志后继续；`node.py` 三处读写（原 132/214/302 行）改走助手。证据：新增 1 个 AST 回归测试 + 6 个行为测试（假串口），Windows 全量 252 项通过（12 项 rclpy 行为测试按预期 skip）。
+- 已完成（2026-08-13）：新增 `_safe_serial_write` / `_safe_serial_read`，捕获 `OSError`（`serial.SerialException` 是其子类，覆盖 USB 拔线），失败时关闭串口、置 None、记日志后继续；`node.py` 三处读写（原 132/214/302 行）改走助手。证据：新增 1 个 AST 回归测试 + 6 个行为测试（假串口），Windows 全量 252 项通过（历史快照，非当前值；12 项 rclpy 行为测试按预期 skip）。
 
 ### ISSUE-016：命令超时不发零速度帧给 MCU
 
 - 优先级：`P1`；
 - 发现时间：2026-08-12 安全审计；
 - 现象：`_tick` 超时只将内存 velocity 归零，不向 MCU 发送零速度帧。MCU 继续执行最后一个非零速度直到自身看门狗触发，中间可能有 350ms+ 失控窗口；
-- 已完成（2026-08-13）：`_tick` 超时且内存速度非零时调用 `_send_zero_velocity`，在握手 READY + communication_ok + 串口在位时主动发送 `encode_velocity(0,0,0)`，关掉 350ms 失控窗口；只在「动→停」过渡发一次，不刷屏串口。证据：新增 1 个 AST 回归测试 + 3 个行为测试，Windows 全量 256 项通过（15 项 rclpy 行为测试按预期 skip）。
+- 已完成（2026-08-13）：`_tick` 超时且内存速度非零时调用 `_send_zero_velocity`，在握手 READY + communication_ok + 串口在位时主动发送 `encode_velocity(0,0,0)`，关掉 350ms 失控窗口；只在「动→停」过渡发一次，不刷屏串口。证据：新增 1 个 AST 回归测试 + 3 个行为测试，Windows 全量 256 项通过（历史快照，非当前值；15 项 rclpy 行为测试按预期 skip）。
 
 
 ### ISSUE-017：软件 CANCEL 不调用 STOP 服务
 
 - 优先级：`P0`（ISSUE-009 的软件侧）；
 - 现象：`manipulator_client/node.py` 的 `_cancel_current_action` 最终只 `_publish_stop()`（发零速度 Twist），从不调用已创建的 `/chassis/stop` 服务；结果字符串也承认 `active {operation} service may still complete`；
-- 已完成（2026-08-13，软件侧）：新增 `self.stop` 客户端（`/chassis/stop`），`_cancel_current_action` 顶部调用 `_request_stop()` fire-and-forget 发送 STOP，失败经 `_on_stop_done` 记日志。证据：新增 1 个 AST 回归测试 + 1 个行为测试，Windows 全量 258 项通过（16 项 rclpy 行为测试按预期 skip）。
+- 已完成（2026-08-13，软件侧）：新增 `self.stop` 客户端（`/chassis/stop`），`_cancel_current_action` 顶部调用 `_request_stop()` fire-and-forget 发送 STOP，失败经 `_on_stop_done` 记日志。证据：新增 1 个 AST 回归测试 + 1 个行为测试，Windows 全量 258 项通过（历史快照，非当前值；16 项 rclpy 行为测试按预期 skip）。
 - 仍未完成：等待 STOP 完成证据、以及真实 STOP 能否物理停止执行器，仍须电控/机械确认（ISSUE-009）。
 
 ### ISSUE-018：测试数量文档不一致
 
 - 优先级：`P2`；
-- 已完成（2026-08-13）：当日实测全量 258 项（Windows 16 项 rclpy 行为测试 skip，Ubuntu 上全量运行），`README.md` 当时更新为该数。
-- **2026-09-17 复核修正**：`258` 是 08-13 的快照，早已过期，且**不要再把某个具体数字当作「当前数量」写进文档**——测试数每轮都在变（08-13 是 258，阶段 A 记录里已到 399，现在又涨了）。请用命令现场取数，而不是抄文档：
-  - 测试函数定义数（口径 = `tests/` 下所有 `def test_`，含 skip）：`python -c "import pathlib,re;print(sum(len(re.findall(r'def test_',p.read_text(encoding='utf-8'))) for p in pathlib.Path('tests').rglob('*.py')))"`；2026-09-17 实测 **992**（69 个测试文件）。
-  - 实际运行用例数（权威口径）：`D:\python.exe -B tools\run_tests.py`（DSH 沙箱适配的 unittest discover 包装器，见 `tools/run_tests.py:1-20`），以它输出的 `Ran N tests` 为准。
-- 两个口径**不相等**（运行数受 skip、参数化与集合方式影响），引用数字时必须同时写明命令与口径。
-- `docs/README.md:87` 的 `258` 已在 2026-09-17 改为「不固定数字 + 给命令」的写法。
+- 已完成（2026-08-13）：当日实测全量 258 项（历史快照，非当前值；Windows 16 项 rclpy 行为测试 skip，Ubuntu 上全量运行），`README.md` 当时更新为该数。
+- **2026-09-17 复核修正（本次修订的关键：让「已解决」不再依赖任何钉死的数字）**：`258` 是 08-13 的快照，早已过期。**本 issue 的解决方案不是「把数字改对」，而是「文档不再钉数字、只给取数命令」**——因为测试数量每轮都在变，任何写进文档的具体数字都会立刻过期。这一点当天就自证了：08-13 是 258，阶段 A 记录到 399，2026-09-17 同一天内用同一条命令先后量到 992 与 1128。因此**禁止再把某个具体数字当作「当前数量」写进文档**，请现场取数：
+  - 测试函数定义数（口径 = `tests/` 下所有 `def test_`，含 skip）：
+    `python -c "import pathlib,re;print(sum(len(re.findall(r'def test_',p.read_text(encoding='utf-8'))) for p in pathlib.Path('tests').rglob('*.py')))"`
+  - 实际运行用例数（权威口径）：`D:\python.exe -B tools\run_tests.py`（DSH 沙箱适配的 unittest discover 包装器，见 `tools/run_tests.py:1-20`），**以它输出的 `Ran N tests` 为准**。
+- 两个口径**不相等是正常的**（运行数受 skip、参数化与集合方式影响），引用数字时必须同时写明命令与口径。2026-09-17 当天实测示例（仅供对照，**明天即过期**）：
+  - 定义数 1135（74 个测试文件）；
+  - PATH 上的 `python`（本机为 3.11，**无 cv2**）跑 `python -B tools/run_tests.py`：`Ran 1108 tests`、`errors=5, skipped=68`——5 个 error 全是本机环境（3 个缺 `cv2` 的导入失败 + 2 个 `field_console` 子进程建管道被沙箱拒绝），**不是代码回归**；
+  - `D:\python.exe`（3.14，**有 cv2**）跑同一条命令：`Ran 1136 tests`、`errors=2, skipped=75`，剩下的 2 个 error 就是那两个沙箱子进程用例。
+  - **注意这几行本身几分钟内就变过**：同一天先量到 1128/1101/1128，随后（队友继续提交测试）变成 1135/1108/1136。这不是笔误，正是本节主张的「数字必过期」——所以**别引用这里的具体数，去跑命令**。
+  - 结论：**同一份代码在不同解释器/环境下 `Ran` 数不同**（有无 `cv2` 直接决定若干测试能否导入），这正是不能把数字写进文档的原因；权威全量仍需在 Ubuntu / 树莓派上跑。
+- **实际被改一致的东西**（这才是本 issue 的完成证据）：`README.md`、`docs/README.md` 与本文件都不再钉死数字，而是统一写明「数量每轮都在变 + 给取数命令 + 两个口径不相等」。`docs/README.md` 的对应段落现位于「测试数量**不在文档里写死**」一条（2026-09-17 复核时在 `:103`；早先引用的 `:87` 行号已漂移，**按键名/句首检索定位**）。
+- 本文件中所有旧行残留的「测试 N 项」已逐条标注为**历史快照、非当前值**，不再冒充现况。
 
 ## 2026-08-13 串口协议与部署准备
 

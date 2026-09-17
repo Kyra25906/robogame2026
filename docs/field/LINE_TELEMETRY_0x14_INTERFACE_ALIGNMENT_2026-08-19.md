@@ -20,7 +20,7 @@
 
 ## 1. 现状（仓库证据）
 
-- 下位机采集已就绪：`Four_Motor_PID_Test (3)/Core/Src/line_sensor.c`（⚠️ 该目录未跟踪 Git）
+- 下位机采集已就绪：工作树路径 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/line_sensor.c`（⚠️ `Four_Motor_PID_Test_1/` 被 `.gitignore:46` 忽略，Git 里查不到这个目录，只有本机磁盘上有；旧文写的 `Four_Motor_PID_Test (3)/` 在本机不存在）
   - UART7（PE8=TX / PE7=RX，115200），发 `$0,1,1#` 使能模块持续回传；
   - 解析 `$A,x1:4096,x2:4096,...#`（12bit 模拟值 0~4095）与 `$D,x1:0,x2:0,...#`（数字 0/1）帧；
   - 已接入 `main.c`（`LineSensor_Init()` / 主循环 `LineSensor_Update()` / UART 回调）与 `stm32f4xx_it.c` UART7 中断；
