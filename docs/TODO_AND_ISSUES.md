@@ -169,7 +169,7 @@
 - [x] `P1` `localization` 融合时检查 `imu_valid`：false 或数据过期时降级为纯里程计定位。证据：commit `a93d073`，`_imu_usable()` 同时检查 imu_valid 标志和 imu_stale_s 新鲜度（0.2s）。Ubuntu 验证新订阅 /robot/status 已生效，152 测试全过。
 - [x] `P1` `StreamDecoder` 增加 0x10（里程计）、0x11（IMU）、0x12（STATUS）帧解析骨架。证据：commit `8c8fe43`，`_dispatch_frame()` 已可按消息类型路由；实际载荷解析仍等待逐字节布局。
 - [x] `P1` 补齐串口外层协议抗异常测试：覆盖逐字节分片、多帧粘包、帧头跨读取、payload 内帧头、CRC 损坏、截断恢复、错误版本、超长声明、序号回绕、长噪声和编码边界；14/14 通过，未猜测 0x10/0x11/0x12 内部字段。
-- [x] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：缺失串口时 bridge 保持运行且通信不可信，机构以 2001 拒绝、非零 cmd_vel 被握手门控。证据：commit `e49d088` 在 Ubuntu 构建 9 个包，field 无硬件 smoke 输出 PASS，并正常退出。⚠️ **已过期（2026-09-17）**：本行是 08-13 当日的实测记录，「机构以 2001 拒绝」只对当时代码成立；现在的真实拒绝码是 `9003` 等（见 ISSUE-007），且 `field_no_hardware_smoke.py` 仍断言 `2001`，该 smoke 在无硬件场景下**必然失败**（期望 2001，实得 9003），详见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」。
+- [x] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：缺失串口时 bridge 保持运行且通信不可信，机构以 2001 拒绝、非零 cmd_vel 被握手门控。证据：commit `e49d088` 在 Ubuntu 构建 9 个包，field 无硬件 smoke 输出 PASS，并正常退出。⚠️ **已过期（2026-09-17）**：本行是 08-13 当日的实测记录，「机构以 2001 拒绝」只对当时代码成立；现在的真实拒绝码是 `9003` 等（见 ISSUE-007），且 `field_no_hardware_smoke.py` 当时仍断言 `2001`，该 smoke 在无硬件场景下**必然失败**（期望 2001，实得 9003）；**该断言已于 2026-09-17 修正**，详见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」。
 - [x] `P0` 修正 STATUS 解析骨架的失败安全边界：在 0x12 载荷尚未完成长度、字段和值域校验时，不更新 `last_decoded_status_rx`，也不把占位 `boot_id=0` 当成真实 MCU 状态。证据：新增静态回归测试，防止占位分支重新写入这两个状态入口；硬件安全测试 13/13、全项目 153/153 通过。
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
@@ -312,7 +312,7 @@
 - 已确认：消息类型（0x01=CMD_VEL, 0x02=HEARTBEAT, 0x10=ODOM, 0x11=IMU, 0x12=STATUS, 0x13=ACK/握手）、字节序（小端）、帧结构（帧头+版本+类型+长度+seq+payload+CRC16-CCITT）、速度命令和反馈通道的频率与单位。
 - 仍待电控给出：STATUS（0x12）各字段的偏移/长度/类型、ODOM（0x10）和 IMU（0x11）的逐字节布局，以及机构命令的独立消息类型和载荷定义。
 - 协议冲突：已确认 `0x02=HEARTBEAT`，但旧机构文档仍把 `0x02` 写成机构命令；真实机构接入前必须由电控和机械共同确认，代码不得猜测复用。
-- 当前行为（**2026-09-17 修正：旧文「`robot_bridge` 在非模拟模式主动拒绝机构服务，错误码为 2001」已过期**）：非 mock 模式**已实现**机构动作，不再有 `2001` 占位阻塞——`robot_bridge/node.py` 的真实分支映射 `GRAB / RELEASE / HOME`（`node.py:754-766`）、`STOP`（`node.py:733-753`）、`LIFT_ABS`（`node.py:840-860`）、`ARM_SET`（`node.py:883-931`），统一经 `_execute_real_mechanism` 下发 0x20。真实拒绝码是 `9003`（串口/会话/未解码 STATUS 不可用，`node.py:663-669`）、`9001`（软件急停，`node.py:670-671`）、`9006`（固件报机构故障，`node.py:672-673`）、`5`（物理启动未授权，`node.py:674-675`）、`4`（timeout 非法，`node.py:689-690`）、`6`（已有机构命令在执行，`node.py:694-698`）、`9`（未知真实命令，`node.py:761-766`）。**`2001` 已不在任何实现路径中**，代码里只剩 `robogame_bringup/field_no_hardware_smoke.py:75,77` 的断言（该断言本身已过期，见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」）。注意区分：协议文档里的 `2001` 另有含义——「升降未回零」（`docs/树莓派_STM32机械机构通信协议_v1.0.md:261`），与本文旧文的「占位拒绝」不是同一件事。
+- 当前行为（**2026-09-17 修正：旧文「`robot_bridge` 在非模拟模式主动拒绝机构服务，错误码为 2001」已过期**）：非 mock 模式**已实现**机构动作，不再有 `2001` 占位阻塞——`robot_bridge/node.py` 的真实分支映射 `GRAB / RELEASE / HOME`（`node.py:754-766`）、`STOP`（`node.py:733-753`）、`LIFT_ABS`（`node.py:840-860`）、`ARM_SET`（`node.py:883-931`），统一经 `_execute_real_mechanism` 下发 0x20。真实拒绝码是 `9003`（串口/会话/未解码 STATUS 不可用，`node.py:663-669`）、`9001`（软件急停，`node.py:670-671`）、`9006`（固件报机构故障，`node.py:672-673`）、`5`（物理启动未授权，`node.py:674-675`）、`4`（timeout 非法，`node.py:689-690`）、`6`（已有机构命令在执行，`node.py:694-698`）、`9`（未知真实命令，`node.py:761-766`）。**`2001` 已不在任何实现路径中**，代码里原先只剩 `robogame_bringup/field_no_hardware_smoke.py` 的断言（该断言本身已过期，已于 2026-09-17 修正为按真实拒绝码集合断言，见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」）。注意区分：协议文档里的 `2001` 另有含义——「升降未回零」（`docs/树莓派_STM32机械机构通信协议_v1.0.md:261`），与本文旧文的「占位拒绝」不是同一件事。
 - 补充（2026-09-17 复核）：`LIFT_ABS` 是唯一被明确拒绝的动作，且由**固件**返回 `3010`（真车没有升降装置，C-3）——`ros2_ws/src/robot_bridge/README.md:134`、`docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:182-189`、固件 `rpi_protocol.c:217`（`RPI_ERROR_MECH_NO_LIFT = 3010`）。`ARM_SET` 通路已实现，但关节值域尚未冻结（`robot.yaml:26` `arm_joint_ranges: ""`）→ 每次下发都被策略层以 `9010` 拒绝，需先由机械/电控冻结范围。
 - 下一步：保留 StreamDecoder 的 0x10/0x11/0x12 路由骨架，但占位分支不得刷新真实状态新鲜度；等电控给出精确布局后再实现完整校验和状态更新。
 
@@ -602,7 +602,7 @@
 
 ### 复核发现：无硬件 smoke 的 2001 断言已与实现不符（2026-09-17 复核 → **当日已修正**）
 
-- 现象：`ros2_ws/src/robogame_bringup/robogame_bringup/field_no_hardware_smoke.py:75` 在 `WAIT_REJECTION` 阶段要求 `response.error_code == 2001`，否则 `_fail()`（同文件 `:77` 的日志也写死 2001）。
+- 现象：`ros2_ws/src/robogame_bringup/robogame_bringup/field_no_hardware_smoke.py` 的 `WAIT_REJECTION` 阶段原先要求 `response.error_code == 2001`，否则 `_fail()`（同一处日志也写死 2001）。**（行号提示：原在 `:75,77`，修正后断言位于 `:91` 附近——**按 `REAL_REJECTION_CODES` 符号检索，不要记行号**。）**
 - 依据：全仓库检索 `2001` 的结果里，`robot_bridge` 实现**没有任何路径返回 2001**；field 模式无串口时 `_real_mechanism_ready()` 直接返回 `9003`（`robot_bridge/node.py:663-664`）。因此该 smoke 在它自己的目标场景（无硬件）下**必然失败**：期望 2001，实得 9003。
 - 需要注意的例外（不要把上面写成「永远无法通过」）：固件协议错误码表里 `2001 = 尚未回零`（`docs/树莓派_STM32机械机构通信协议_v1.0.md:261`），而 `_execute_real_mechanism` 会把固件 ACK/状态的 `error_code` 原样透传。所以真接上 STM32 且固件恰好回 2001 时，这个断言**可能碰巧通过**——但那验证的是「未回零」，不是这条 smoke 声称的「无硬件时失败安全」，属于假通过。
 - 影响：现场第一天若按 `docs/` 的说明跑「field 无硬件失败安全 smoke」验收，会得到 FAIL，并可能被误判为「field 模式不安全」，实际是断言过期。
