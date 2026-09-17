@@ -115,16 +115,13 @@ class LineFollowNode(Node):
             stale_s=float(self.get_parameter("cmd_stale_s").value),
         ))
         self.active_source = str(self.get_parameter("active_source").value)
-        # B2：任务层广播的授权（唯一有权驱动底盘的来源）。没收到过消息时保持
-        # 参数默认值，这样独立巡线联调（无 mission_manager）行为不变。
-        self.require_authorization = bool(
-            self.get_parameter("require_authorization").value
+        # B2/B4：任务层广播的授权（唯一有权驱动底盘的来源）。规则见
+        # robogame_core.authorization；未收到消息时保持参数默认值，
+        # 独立巡线联调（无 mission_manager）行为不变。
+        self.authorization = AuthorizationState(
+            require=bool(self.get_parameter("require_authorization").value),
+            stale_s=float(self.get_parameter("authorization_stale_s").value),
         )
-        self.authorization_stale_s = float(
-            self.get_parameter("authorization_stale_s").value
-        )
-        self.granted_source: str | None = None
-        self.granted_time = 0.0
         self.was_driving = False
         # B3：路口转弯（命令来自任务层；执行与状态上报都在本节点）
         self.turner: JunctionTurner | None = None
@@ -310,8 +307,7 @@ class LineFollowNode(Node):
 
     def _on_authorization(self, msg: String) -> None:
         """任务层广播的底盘授权（唯一来源）。"""
-        self.granted_source = str(msg.data).strip()
-        self.granted_time = time.monotonic()
+        self.authorization.grant(str(msg.data), time.monotonic())
 
     def _authorized_source(self, now: float) -> str:
         """本节点输出时使用哪个授权来源。
@@ -319,14 +315,12 @@ class LineFollowNode(Node):
         - 未开启 `require_authorization`：用参数 `active_source`（独立联调行为不变）；
         - 开启但没有（或过期）授权消息：返回 `""` → 仲裁找不到该来源 → 输出零速。
           这是 fail-safe：授权断流时车停下，而不是按旧授权继续跑。
+
+        规则实现见 `robogame_core.authorization`（三个运动节点共用一份，避免分叉）。
         """
-        if not self.require_authorization:
+        if not self.authorization.require:
             return self.active_source
-        if self.granted_source is None:
-            return ""
-        if (now - self.granted_time) > self.authorization_stale_s:
-            return ""
-        return self.granted_source
+        return self.authorization.granted_source(now)
 
     def _on_line_command(self, msg: String) -> None:
         """任务层下发的巡线段参数（限速 + 坡道 profile）；空串 = 清除。"""
@@ -594,7 +588,7 @@ class LineFollowNode(Node):
             "active_source": self.active_source,
             # B2：授权信息与安全门控分开报告——「没授权停车」不是故障，
             # 但现场排障时必须能一眼看出是授权没给还是安全门控拦了。
-            "authorization_required": bool(self.require_authorization),
+            "authorization_required": bool(self.authorization.require),
             "authorized_source": self._authorized_source(now),
             "invalid_frames": self.invalid_frames,
             "blocked": blocked,
