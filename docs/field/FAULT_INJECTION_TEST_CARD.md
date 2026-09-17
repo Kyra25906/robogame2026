@@ -73,7 +73,7 @@ ros2 topic echo /robot/status
 |---|---|
 | `/cmd_vel` 是否变为零 | 是，三个方向全为零 |
 | `/mission/state` 的结果 | `FAILED` 或 `SAFE_STOP` |
-| 小车物理上是否停止 | 是（电控的 150ms 失联停车独立生效） |
+| 小车物理上是否停止 | 是（电控的 **250 ms** 失联停车独立生效）<br>⚠️ **2026-09-17 更正**：旧文写 150 ms。仓库固件现为 `RPI_WATCHDOG_TIMEOUT_MS 250U`（`rpi_protocol.c:116`），是 2026-08-18 晚与电控商定「150→250 ms」后的值（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）。**但车上烧录版本无法从仓库确认**，现场以实测值为准。 |
 | 日志中是否有明确错误信息 | 有，包含 `COMMUNICATION_ERROR` 或 `status stale` |
 
 ### 恢复方法
