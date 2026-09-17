@@ -38,10 +38,13 @@ from robogame_core.mission import (
 from robogame_core.mission_dispatch import (
     SOURCE_NONE,
     decide,
+    line_command_for,
     parse_line_status,
+    turn_command_for,
 )
 from robogame_core.mission_route import SegmentRole
 from robogame_core.models import MissionResult, Pose2D, yaw_from_quaternion
+from robogame_core.ramp_control import SlipDecision
 from robogame_core.route_loader import load_route_plan, resolve_field_layout_path
 from robogame_interfaces.msg import CargoState, MissionState as MissionStateMsg, RobotStatus
 from std_msgs.msg import String
@@ -85,6 +88,14 @@ class MissionManagerNode(Node):
         self.previous_pose: Pose2D | None = None
         self.published_work_index = -1
         self.published_segment_id = ""
+        self.published_retries = 0
+        self.last_line_status = None
+        self.ramp_stuck_reports = 0
+        self.ramp_stuck_retry_reports = 3
+        # B3：作业段动作序列（抓/放 + 之间的车体微移）
+        self.work_plan: WorkPlan | None = None
+        self.work_reference_pose: Pose2D | None = None
+        self.published_step_index = -1
 
         self.state_pub = self.create_publisher(MissionStateMsg, "/mission/state", 10)
         self.cargo_pub = self.create_publisher(CargoState, "/mission/cargo", 10)
@@ -94,6 +105,10 @@ class MissionManagerNode(Node):
         # B2：唯一授权话题 + 段进度（网页读取）
         self.authority_pub = self.create_publisher(String, "/mission/active_source", 10)
         self.route_pub = self.create_publisher(String, "/mission/route", 10)
+        # B3：转弯命令（进入 JUNCTION_TURN 段时下发一次；空串 = 清除）
+        self.turn_pub = self.create_publisher(String, "/mission/turn", 10)
+        # B3：每段巡线参数（限速 + 坡道 profile；空串 = 清除）
+        self.line_pub = self.create_publisher(String, "/mission/line", 10)
         self.create_subscription(RobotStatus, "/robot/status", self._on_status, 10)
         self.create_subscription(String, "/motion/result", self._on_action_result, 10)
         self.create_subscription(String, "/manipulator/result", self._on_action_result, 10)
@@ -145,10 +160,27 @@ class MissionManagerNode(Node):
     def _on_line_status(self, msg: String) -> None:
         parsed = parse_line_status(msg.data)
         self.last_line_status_time = time.monotonic()
+        self.last_line_status = parsed
         runner = self.machine.route_runner
         if runner is not None:
             runner.observe_line(parsed.state)
             runner.mark_stale(parsed.stale)
+        # B3：坡道打滑卡住 → 按失败重试本段（节点已经停车，这里决定重试还是判死）
+        if (
+            self.machine.state is MissionState.ROUTE_RUNNING
+            and parsed.ramp_decision == SlipDecision.STUCK.value
+        ):
+            self.ramp_stuck_reports += 1
+            if self.ramp_stuck_reports >= self.ramp_stuck_retry_reports:
+                self.ramp_stuck_reports = 0
+                self.get_logger().warn("坡道打滑卡住：按失败重试本段")
+                self.machine.tick(
+                    action_failed=True,
+                    failure_result=MissionResult.MECHANISM_ERROR,
+                    failure_detail="ramp stuck (slip timeout)",
+                )
+        else:
+            self.ramp_stuck_reports = 0
 
     def _on_pose(self, msg: Odometry) -> None:
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
@@ -200,6 +232,34 @@ class MissionManagerNode(Node):
     def _release_authority(self) -> None:
         """释放底盘授权（谁都不许动）。终态与异常都走这里。"""
         self.authority_pub.publish(String(data=SOURCE_NONE))
+        # 同时清除待执行转弯与巡线参数：否则任务失败后残留的指令会在下次授权时突然执行
+        self.turn_pub.publish(String(data=""))
+        self.line_pub.publish(String(data=""))
+
+    def _publish_line_command(self, segment) -> None:
+        """进入段时下发/清除巡线参数（空串 = 本段不走巡线）。"""
+        command = line_command_for(segment)
+        self.line_pub.publish(
+            String(data="" if command is None else command.to_json())
+        )
+        if command is not None:
+            kind = "巡线" if not command.is_ramp else f"坡道({command.ramp_profile.kind.value})"
+            self.get_logger().info(
+                f"{segment.id}：下发{kind}参数，限速 {command.max_speed_mps:.2f} m/s"
+            )
+
+    def _publish_turn_command(self, segment) -> None:
+        """进入段时下发/清除转弯命令（空串 = 本段不需要转弯）。"""
+        command = turn_command_for(segment)
+        self.turn_pub.publish(
+            String(data="" if command is None else json.dumps(command, ensure_ascii=False))
+        )
+        if command is not None:
+            self.get_logger().info(
+                f"{segment.id}：下发转弯命令 {command['direction']} @ {command['ref']}"
+                f"（角速度 {command['turn_rate_radps']} rad/s，稳定 "
+                f"{command['reacquire_samples']} 拍）"
+            )
 
     def _dispatch_route(self) -> None:
         """按当前段下发授权 / 目标 / 作业命令。"""
@@ -212,9 +272,21 @@ class MissionManagerNode(Node):
         if segment.id != self.published_segment_id:
             self.published_segment_id = segment.id
             self.published_work_index = -1
+            self.published_retries = 0
             self.segment_distance_m = 0.0
             self.previous_pose = None
+            self._publish_turn_command(segment)
+            self._publish_line_command(segment)
             self.get_logger().info(f"进入段 {segment.id}：{segment.label}")
+        elif self.machine.retries != self.published_retries:
+            # 本段重试：必须重发本段命令——巡线节点会把「打滑卡住」保持零速，
+            # 只重置计时是叫不醒它的；重发命令会让它重建转弯器/坡道控制器重新开始。
+            self.published_retries = self.machine.retries
+            self.get_logger().warn(
+                f"{segment.id} 第 {self.machine.retries} 次重试：重发本段命令"
+            )
+            self._publish_turn_command(segment)
+            self._publish_line_command(segment)
         decision = decide(segment, self.cargo_plan, max(runner.observations.work_count, 0))
         # 顺序：先给目标（若有），再授权——两个顺序都安全，因为未授权的运动节点只会发零速
         if decision.goal is not None:
@@ -252,6 +324,16 @@ class MissionManagerNode(Node):
             "work_required": None if segment is None else segment.exit.required_count,
             "active_source": active_source,
             "route_error": self.route_error,
+            # B3：巡线节点上报的本段限速/坡道状态（网页显示「现在在坡道哪一步」）
+            "line_limit_mps": None
+            if self.last_line_status is None
+            else self.last_line_status.line_limit_mps,
+            "ramp_decision": ""
+            if self.last_line_status is None
+            else self.last_line_status.ramp_decision,
+            "turn_phase": ""
+            if self.last_line_status is None
+            else self.last_line_status.turn_phase,
         }
         self.route_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
 

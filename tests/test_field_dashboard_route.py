@@ -149,6 +149,17 @@ class RoutePanelWiringTests(unittest.TestCase):
             "renderRoute 应挂在同一处 refresh 渲染里",
         )
 
+    def test_panel_reads_the_turn_phase_from_line_diag(self):
+        """B3：转弯阶段由巡线节点的结构化状态上报，面板从 line_diag 读它。"""
+        script = (WEB_ROOT / "route_panel.js").read_text(encoding="utf-8")
+        self.assertIn("line_diag", script)
+        self.assertIn("turn_phase", script)
+        # 巡线节点必须真的上报这个字段（否则面板永远读不到）
+        line_node = (
+            PROJECT_ROOT / "ros2_ws/src/motion_control/motion_control/line_follow_node.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"turn_phase"', line_node)
+
     def test_panel_js_declares_pure_view_and_export(self):
         script = (WEB_ROOT / "route_panel.js").read_text(encoding="utf-8")
         self.assertIn("function routePanelView(", script)

@@ -342,5 +342,152 @@ class PlacementHeightTests(unittest.TestCase):
         self.assertIn("[0.1, 0.1, 0.2]", issue)
 
 
+class LineAndRampCommandTests(unittest.TestCase):
+    """B3：每段巡线限速 + 坡道参数（C3 接入）。"""
+
+    def test_line_segments_carry_their_planned_speed(self):
+        """路线登记表写了每段限速，此前巡线节点完全没采用——现在按段下发。"""
+        from robogame_core.mission_dispatch import line_command_for
+
+        route = _plan()
+        commands = {
+            segment.id: line_command_for(segment)
+            for segment in route.segments
+            if line_command_for(segment) is not None
+        }
+        self.assertEqual(
+            set(commands),
+            {
+                "S01_LINE_START", "S02_LINE_MAIN", "S03_RAMP_APPROACH",
+                "S04_RAMP_UP", "S05_LINE_PLATFORM", "S08_LINE_BACK_PLATFORM",
+                "S09_RAMP_DOWN", "S10_LINE_BACK_MAIN",
+            },
+        )
+        for segment_id, command in commands.items():
+            segment = route.segment(segment_id)
+            self.assertAlmostEqual(command.max_speed_mps, segment.max_speed_mps, msg=segment_id)
+
+    def test_only_ramp_segments_carry_a_ramp_profile(self):
+        from robogame_core.mission_dispatch import line_command_for
+
+        route = _plan()
+        ramps = {
+            segment.id: line_command_for(segment)
+            for segment in route.segments
+            if (command := line_command_for(segment)) is not None and command.is_ramp
+        }
+        self.assertEqual(set(ramps), {"S04_RAMP_UP", "S09_RAMP_DOWN"})
+        self.assertEqual(ramps["S04_RAMP_UP"].ramp_profile.kind.value, "RAMP_UP")
+        self.assertEqual(ramps["S09_RAMP_DOWN"].ramp_profile.kind.value, "RAMP_DOWN")
+        # 下坡的生效限速要比登记限速更保守（防冲）
+        down = ramps["S09_RAMP_DOWN"]
+        self.assertLess(
+            down.ramp_profile.max_speed_mps * down.ramp_profile.descent_speed_factor,
+            down.max_speed_mps + 1e-9,
+        )
+
+    def test_non_line_segments_produce_no_command(self):
+        from robogame_core.mission_dispatch import line_command_for
+
+        route = _plan()
+        for segment in route.segments:
+            if segment.role.value in ("WORK", "SHIFT", "TURN"):
+                self.assertIsNone(line_command_for(segment), segment.id)
+        self.assertIsNone(line_command_for(None))
+
+    def test_command_round_trips_through_json(self):
+        from robogame_core.mission_dispatch import line_command_for, parse_line_command
+
+        route = _plan()
+        for segment in route.segments:
+            command = line_command_for(segment)
+            if command is None:
+                continue
+            parsed = parse_line_command(command.to_json())
+            self.assertIsNotNone(parsed, segment.id)
+            self.assertEqual(parsed, command, segment.id)
+
+    def test_garbage_commands_are_rejected_not_guessed(self):
+        from robogame_core.mission_dispatch import parse_line_command
+
+        for text in ("", " ", "not json", "[]", '{"segment_id": "S01"}',
+                     '{"segment_id": "S01", "max_speed_mps": 0}',
+                     '{"segment_id": "S04", "max_speed_mps": 0.15, "ramp": {"kind": "FLAT"}}'):
+            self.assertIsNone(parse_line_command(text), repr(text))
+
+    def test_effective_speed_takes_the_stricter_limit(self):
+        from robogame_core.mission_dispatch import (
+            effective_line_speed,
+            line_command_for,
+        )
+
+        route = _plan()
+        command = line_command_for(route.segment("S02_LINE_MAIN"))  # 计划 0.25
+        self.assertAlmostEqual(command.max_speed_mps, 0.25)
+        # 节点参数是现场兜底上限：更小就按节点来（这里 0.2 < 0.25）
+        self.assertAlmostEqual(effective_line_speed(command, 0.2), 0.2)
+        self.assertAlmostEqual(effective_line_speed(command, 0.3), 0.25)
+        # 没有命令时用节点参数
+        self.assertAlmostEqual(effective_line_speed(None, 0.2), 0.2)
+        with self.assertRaises(ValueError):
+            effective_line_speed(command, 0.0)
+
+
+class RampSlipCompositionTests(unittest.TestCase):
+    """坡道限速与打滑判定在「PD 输出 → 限速 → 坡道 → 命令」这条链上的行为。"""
+
+    def _controller(self, kind="RAMP_UP"):
+        from robogame_core.ramp_control import RampController, RampProfile
+        from robogame_core.route_segment import SegmentKind
+
+        profile = RampProfile(kind=SegmentKind(kind), max_speed_mps=0.15)
+        controller = RampController(profile)
+        controller.begin(now=0.0)
+        return controller
+
+    def test_ramp_limits_the_line_follower_output(self):
+        from robogame_core.models import Velocity2D
+
+        controller = self._controller()
+        command, decision = controller.step(
+            now=0.05, desired=Velocity2D(0.25, 0.0, 0.0), measured_speed=0.25, dt=0.05
+        )
+        self.assertEqual(decision.value, "NORMAL")
+        self.assertLessEqual(command.vx, controller.effective_max_speed)
+
+    def test_descent_is_stricter_than_ascent(self):
+        up = self._controller("RAMP_UP")
+        down = self._controller("RAMP_DOWN")
+        self.assertLess(down.effective_max_speed, up.effective_max_speed)
+        self.assertLess(down.effective_max_accel, up.effective_max_accel)
+
+    def test_wheel_speed_far_below_command_is_slipping_then_stuck(self):
+        """轮速跟不上命令（上坡上不去的典型表现）→ 先降速，超时后停车。"""
+        from robogame_core.models import Velocity2D
+
+        controller = self._controller()
+        first, decision = controller.step(
+            now=0.05, desired=Velocity2D(0.15, 0.0, 0.0), measured_speed=0.01, dt=0.05
+        )
+        self.assertEqual(decision.value, "SLIPPING")
+        self.assertLessEqual(first.vx, controller.profile.slip_retreat_speed_mps + 1e-9)
+        command, decision = controller.step(
+            now=2.0, desired=Velocity2D(0.15, 0.0, 0.0), measured_speed=0.01, dt=0.05
+        )
+        self.assertEqual(decision.value, "STUCK")
+        self.assertEqual((command.vx, command.wz), (0.0, 0.0), "卡住必须停车")
+
+    def test_normal_wheel_speed_never_triggers_slip(self):
+        from robogame_core.models import Velocity2D
+
+        controller = self._controller()
+        for step in range(40):
+            _, decision = controller.step(
+                now=0.05 * (step + 1), desired=Velocity2D(0.15, 0.0, 0.0),
+                measured_speed=0.15, dt=0.05,
+            )
+            self.assertEqual(decision.value, "NORMAL")
+
+
 if __name__ == "__main__":
     unittest.main()

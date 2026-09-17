@@ -691,21 +691,26 @@ class DashboardController:
                 self.zero_and_release("用户停止定距")
             return {"ok": True}
         if path == "/api/odom/record":
-            # 把「这次走了多少（里程计）」与「实际走了多少（尺量）」配成一条标定样本
+            # 把本次定距结果记成一条样本。**尺量可以留空**：这样「里程计自洽性」
+            # （里程计等效速度 vs 命令速度，不用尺子）也能累积样本；
+            # 只填了尺量才能算「标度」。
             measured = body.get("measured_m")
-            if measured is None or str(measured).strip() == "":
-                raise ValueError("请填写尺量位移（米）")
+            if measured is not None and str(measured).strip() == "":
+                measured = None
             with self.lock:
                 if self.odom_trial_candidate is None:
                     raise ValueError(
                         "没有可记录的定距结果：先在「底盘定距测试」里完整跑一次"
                         "（中途停止/超时的不算样本）"
                     )
-                trial = trial_from_result(
-                    self.odom_trial_candidate,
-                    measured_m=float(measured),
-                    note=str(body.get("note", ""))[:120],
-                )
+                try:
+                    trial = trial_from_result(
+                        self.odom_trial_candidate,
+                        measured_m=None if measured is None else float(measured),
+                        note=str(body.get("note", ""))[:120],
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"尺量位移无效：{exc}") from exc
                 self.odom_trials.append(trial)
                 analysis = analyze_trials(self.odom_trials)
             self.record({"type": "control", "action": "odom_record",

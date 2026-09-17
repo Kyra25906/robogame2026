@@ -26,6 +26,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
 from robogame_core.cmd_vel_arbiter import (
@@ -33,8 +34,16 @@ from robogame_core.cmd_vel_arbiter import (
     ArbiterConfig,
     CmdVelArbiter,
 )
+from robogame_core.junction_turn import JunctionTurner
 from robogame_core.line_follow import LineSensorReading, LineSensorState
+from robogame_core.mission_dispatch import (
+    LineCommand,
+    effective_line_speed,
+    parse_line_command,
+    parse_turn_command,
+)
 from robogame_core.models import Velocity2D
+from robogame_core.ramp_control import RampController, SlipDecision
 from robogame_interfaces.msg import RobotStatus, LineSensor
 from std_msgs.msg import String
 
@@ -114,6 +123,22 @@ class LineFollowNode(Node):
         self.granted_source: str | None = None
         self.granted_time = 0.0
         self.was_driving = False
+        # B3：路口转弯（命令来自任务层；执行与状态上报都在本节点）
+        self.turner: JunctionTurner | None = None
+        self.turn_phase = ""
+        self.turn_reason = ""
+        self.last_turn_result = ""
+        self.last_yaw: float | None = None
+        # B3：每段巡线参数（限速）与坡道控制（C3）。任务层进入段时下发一次。
+        self.line_command: LineCommand | None = None
+        self.effective_vx_limit = float(self.get_parameter("vx_base").value)
+        self.ramp: RampController | None = None
+        self.ramp_decision = SlipDecision.NORMAL.value
+        self.measured_speed_mps: float | None = None
+        self.measured_speed_time = 0.0
+        self.measured_speed_stale_s = 0.2
+        self.last_publish_at: float | None = None
+        self.ramp_stuck_logged = False
         self.status_stale_s = float(
             self.get_parameter("status_stale_s").value
         )
@@ -140,6 +165,11 @@ class LineFollowNode(Node):
         self.create_subscription(
             String, "/mission/active_source", self._on_authorization, 10
         )
+        self.create_subscription(String, "/mission/turn", self._on_turn_command, 10)
+        self.create_subscription(String, "/mission/line", self._on_line_command, 10)
+        # 轮速（打滑检测用）。⚠️ 轮速里程计看不到「轮子空转车不走」，
+        # 只抓得到「轮速跟不上命令」——上坡最常见的失败正是后者。
+        self.create_subscription(Odometry, "/wheel_odom", self._on_wheel_odom, 20)
         self.create_timer(0.02, self._tick)
 
     # ------------------------------------------------------------------
@@ -252,6 +282,78 @@ class LineFollowNode(Node):
             return ""
         return self.granted_source
 
+    def _on_line_command(self, msg: String) -> None:
+        """任务层下发的巡线段参数（限速 + 坡道 profile）；空串 = 清除。"""
+        command = parse_line_command(msg.data)
+        self.line_command = command
+        if command is None:
+            self.effective_vx_limit = float(self.get_parameter("vx_base").value)
+            self.ramp = None
+            self.ramp_decision = SlipDecision.NORMAL.value
+            return
+        # 本段生效限速 = min(任务层本段限速, 节点自身上限)；节点参数是现场兜底上限
+        self.effective_vx_limit = effective_line_speed(
+            command, float(self.get_parameter("vx_base").value)
+        )
+        self.ramp_stuck_logged = False
+        if command.ramp_profile is None:
+            self.ramp = None
+            self.ramp_decision = SlipDecision.NORMAL.value
+            self.get_logger().info(
+                f"{command.segment_id}：本段巡线限速 {self.effective_vx_limit:.2f} m/s"
+            )
+            return
+        self.ramp = RampController(command.ramp_profile)
+        self.ramp.begin(time.monotonic())
+        self.ramp_decision = SlipDecision.NORMAL.value
+        self.get_logger().info(
+            f"{command.segment_id}：坡道段 {command.ramp_profile.kind.value}，"
+            f"限速 {self.effective_vx_limit:.2f} m/s（坡道生效上限 "
+            f"{self.ramp.effective_max_speed:.2f}），"
+            f"打滑阈值 {command.ramp_profile.slip_threshold_mps} m/s"
+        )
+
+    def _on_wheel_odom(self, msg: Odometry) -> None:
+        speed = float(msg.twist.twist.linear.x)
+        if math.isfinite(speed):
+            self.measured_speed_mps = speed
+            self.measured_speed_time = time.monotonic()
+
+    def _apply_line_limits(self, out: LineFollowOutput, now: float) -> LineFollowOutput:
+        """按本段限速与坡道 profile 处理 PD 输出（坡道段穿过 C3 的 RampController）。"""
+        dt = 0.02
+        if self.last_publish_at is not None:
+            dt = max(1e-3, min(0.5, now - self.last_publish_at))
+        self.last_publish_at = now
+        limited_vx = min(float(out.vx), self.effective_vx_limit)
+        if self.ramp is None:
+            self.ramp_decision = SlipDecision.NORMAL.value
+            return LineFollowOutput(
+                state=out.state, deviation=out.deviation,
+                vx=limited_vx, wz=out.wz,
+                lost_count=out.lost_count, reading_stale=out.reading_stale,
+            )
+        measured = self.measured_speed_mps
+        if measured is None or (now - self.measured_speed_time) > self.measured_speed_stale_s:
+            measured = None  # 轮速过期：不做打滑判定（宁可不判，也不要误判停车）
+        command, decision = self.ramp.step(
+            now=now,
+            desired=Velocity2D(limited_vx, 0.0, float(out.wz)),
+            measured_speed=measured,
+            dt=dt,
+        )
+        self.ramp_decision = decision.value
+        if decision is SlipDecision.STUCK and not self.ramp_stuck_logged:
+            self.ramp_stuck_logged = True
+            self.get_logger().error(
+                "坡道打滑超时：已停车，交给任务层决定重试或判失败"
+            )
+        return LineFollowOutput(
+            state=out.state, deviation=out.deviation,
+            vx=float(command.vx), wz=float(command.wz),
+            lost_count=out.lost_count, reading_stale=out.reading_stale,
+        )
+
     def _on_line_sensor(self, msg: LineSensor) -> None:
         if not msg.analog_valid:
             # analog_valid=0 表示模块掉线或最近帧不是 $A：**不能**用旧值纠偏，
@@ -291,7 +393,76 @@ class LineFollowNode(Node):
     def _tick(self) -> None:
         now = time.monotonic()
         out = self._effective_output(now)
-        self._publish(out, now)
+        # B3：先按本段限速/坡道 profile 处理（含打滑降速），
+        # 再由转弯命令接管（转弯时原地转，与限速无关）。
+        out = self._apply_line_limits(out, now)
+        turn = self._turn_output(out, now)
+        self._publish(turn if turn is not None else out, now)
+
+    # ------------------------------------------------------------------
+    # B3：路口转弯（命令来自任务层 /mission/turn，见 mission_dispatch）
+    # ------------------------------------------------------------------
+
+    def _on_turn_command(self, msg: String) -> None:
+        """任务层下发的转弯命令；空串 = 清除待执行转弯。"""
+        params = parse_turn_command(msg.data)
+        if params is None:
+            if self.turner is not None:
+                self.get_logger().info("收到清除指令：放弃待执行的转弯")
+            self.turner = None
+            self.last_turn_result = ""
+            return
+        self.turner = JunctionTurner(params)
+        self.last_turn_result = ""
+        self.get_logger().info(
+            f"收到转弯命令：{params.direction.value}（{params.expect_states}），"
+            f"角速度 {params.turn_rate_radps} rad/s，最短 {params.min_turn_s:.2f}s，"
+            f"稳定 {params.reacquire_samples} 拍"
+        )
+
+    def _turn_output(self, out: LineFollowOutput, now: float) -> LineFollowOutput | None:
+        """若正在转弯：返回接管用的输出；否则 None（用常规巡线输出）。
+
+        只在**本节点被授权驱动底盘**时推进转弯计时——否则车不是我们在开，
+        推进转弯状态等于凭空消耗它的超时预算。
+        """
+        turner = self.turner
+        if turner is None:
+            return None
+        authorized = self._authorized_source(now) == SOURCE_LINE_FOLLOW
+        command = turner.update(
+            line_state=out.state,
+            deviation=None if math.isnan(out.deviation) else out.deviation,
+            now=now,
+            yaw=self._yaw(),
+            stale=out.reading_stale,
+        ) if authorized else None
+        if command is None:
+            # 未授权：停住等待（不动计时），并如实上报「等待授权」
+            return LineFollowOutput(
+                state=out.state, deviation=out.deviation,
+                vx=0.0, wz=0.0, lost_count=out.lost_count, reading_stale=out.reading_stale,
+            )
+        self.turn_phase = command.phase.value
+        self.turn_reason = command.reason
+        if command.done:
+            self.last_turn_result = f"DONE: {command.reason}"
+            self.get_logger().info(f"转弯完成：{command.reason}")
+            self.turner = None
+            self.turn_phase = ""
+        elif command.failed:
+            # 不回退 PD：保持零速等任务层重发或判失败
+            self.last_turn_result = f"FAILED: {command.reason}"
+            self.get_logger().error(f"转弯失败：{command.reason}（保持零速，不恢复巡线）")
+        return LineFollowOutput(
+            state=out.state, deviation=out.deviation,
+            vx=command.vx, wz=command.wz,
+            lost_count=out.lost_count, reading_stale=out.reading_stale,
+        )
+
+    def _yaw(self) -> float | None:
+        """航向（可选确认用）。没有 IMU/定位时返回 None（默认不依赖它）。"""
+        return self.last_yaw
 
     def _effective_output(self, now: float) -> LineFollowOutput:
         """传感器失联时输出停车（安全），否则用最近一次算法输出。"""
@@ -400,6 +571,7 @@ class LineFollowNode(Node):
             f"lost={out.lost_count} stale={out.reading_stale} "
             f"valid_frames={self.valid_frames} invalid_frames={self.invalid_frames} "
             f"blocked={gates['blocked']}"
+            f" turn={self.turn_phase or 'none'}"
             # 结构化部分：现场面板解析这一段做逐层显示（#diag# 之后到行尾）。
             " #diag#"
             + json.dumps(
@@ -412,6 +584,21 @@ class LineFollowNode(Node):
                     "invalid_frames": int(self.invalid_frames),
                     "out_vx": round(float(out.vx), 4),
                     "out_wz": round(float(out.wz), 4),
+                    # B3：转弯状态（网页显示「现在在转弯的哪个阶段」）
+                    "turn_phase": self.turn_phase or None,
+                    "turn_reason": self.turn_reason or None,
+                    "turn_pending": self.turner is not None,
+                    "turn_last_result": self.last_turn_result or None,
+                    # B3：本段巡线限速与坡道状态（网页显示「现在在坡道哪一步」）
+                    "line_limit_mps": round(self.effective_vx_limit, 3),
+                    "line_segment": None if self.line_command is None else self.line_command.segment_id,
+                    "ramp_kind": None
+                    if self.ramp is None
+                    else self.ramp.profile.kind.value,
+                    "ramp_decision": self.ramp_decision,
+                    "measured_speed_mps": None
+                    if self.measured_speed_mps is None
+                    else round(self.measured_speed_mps, 3),
                     **gates,
                 },
                 ensure_ascii=False,

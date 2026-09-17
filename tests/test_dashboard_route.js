@@ -120,3 +120,26 @@ test('panel view carries the live line and the placement warning', () => {
   assert.match(view.turnsText, /放置高度核对/);
   assert.match(view.turnsText, /0\.1, 0\.1, 0\.2/);
 });
+
+test('turn phase is shown on the live line (B3)', () => {
+  const view = routeLiveView(live({segment_id: 'S01_LINE_START'}), 0.1, 'TURNING');
+  assert.match(view.text, /转弯阶段 TURNING/);
+  assert.doesNotMatch(routeLiveView(live(), 0.1, '').text, /转弯阶段/);
+});
+
+test('turn phase falls back to the mission payload when line diag is missing', () => {
+  const view = routeLiveView(live({turn_phase: 'SETTLE'}), 0.1, '');
+  assert.match(view.text, /转弯阶段 SETTLE/);
+});
+
+test('ramp state and per-segment speed limit are shown (B3)', () => {
+  const view = routeLiveView(
+    live({segment_id: 'S04_RAMP_UP', line_limit_mps: 0.15, ramp_decision: 'SLIPPING'}), 0.1,
+  );
+  assert.match(view.text, /本段限速 0\.15 m\/s/);
+  assert.match(view.text, /坡道 SLIPPING/);
+  const normal = routeLiveView(live({line_limit_mps: 0.2, ramp_decision: 'NORMAL'}), 0.1);
+  assert.match(normal.text, /坡道正常/);
+  const flat = routeLiveView(live({line_limit_mps: 0.2, ramp_decision: ''}), 0.1);
+  assert.doesNotMatch(flat.text, /坡道/);
+});

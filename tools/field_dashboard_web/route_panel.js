@@ -29,9 +29,10 @@ function routeRowHtml(row) {
 }
 
 /** 纯函数：把 /mission/route 的原始字符串变成「车现在在哪一段」的一行说明。 */
-function routeLiveView(raw, ageS) {
+function routeLiveView(raw, ageS, turnPhase) {
   if (typeof raw !== 'string' || !raw.trim()) {
-    return { available: false, text: '任务层未上报段进度（/mission/route 未收到）——路线模式下应由 mission_manager 以 10Hz 上报；没有它说明任务层没在跑路线模式。' };
+    const turn = turnPhase ? `｜转弯阶段 ${turnPhase}` : '';
+    return { available: false, text: '任务层未上报段进度（/mission/route 未收到）——路线模式下应由 mission_manager 以 10Hz 上报；没有它说明任务层没在跑路线模式。' + turn };
   }
   let data;
   try {
@@ -48,9 +49,16 @@ function routeLiveView(raw, ageS) {
   const work = data.work_required
     ? `｜作业 ${data.work_count}/${data.work_required}`
     : '';
+  // B3：转弯阶段（来自巡线节点的结构化状态，若缺则用任务层上报的）
+  const turnFinal = turnPhase || data.turn_phase || '';
+  const turnLine = turnFinal ? `｜转弯阶段 ${turnFinal}` : '';
+  const limit = data.line_limit_mps == null ? '' : `｜本段限速 ${data.line_limit_mps} m/s`;
+  const ramp = data.ramp_decision && data.ramp_decision !== 'NORMAL'
+    ? `｜⚠️ 坡道 ${data.ramp_decision}`
+    : (data.ramp_decision === 'NORMAL' ? '｜坡道正常' : '');
   const text = `第 ${done}/${total} 段｜当前 ${data.segment_id || '-'}（${data.segment_label || '-'}）`
     + `｜阶段 ${data.phase || '-'}｜状态 ${data.state || '-'}`
-    + `｜底盘授权 ${data.active_source || 'none'}${work}`
+    + `｜底盘授权 ${data.active_source || 'none'}${work}${turnLine}${limit}${ramp}`
     + (data.retries ? `｜重试 ${data.retries}` : '')
     + `｜下一步 ${data.next_segment_id || '（已完成）'}`
     + (stale ? `｜⚠️ 该上报已过期 ${ageS.toFixed(1)}s，下面显示的是旧值` : '');
@@ -104,7 +112,8 @@ function renderRoute(s) {
   const live = document.querySelector('#routeLive');
   if (!panel || !summary || !turns) return;
   const telemetry = (s && s.telemetry) || {};
-  const liveView = routeLiveView(telemetry.mission_route, telemetry.mission_route_age_s);
+  const turnPhase = (telemetry.line_diag && telemetry.line_diag.turn_phase) || '';
+  const liveView = routeLiveView(telemetry.mission_route, telemetry.mission_route_age_s, turnPhase);
   const view = routePanelView(s && s.route, liveView);
   panel.innerHTML = view.rowsHtml;
   summary.textContent = view.summary;

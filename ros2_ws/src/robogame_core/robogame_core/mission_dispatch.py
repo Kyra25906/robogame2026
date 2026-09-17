@@ -45,6 +45,8 @@ from .cmd_vel_arbiter import SOURCE_ALIGN, SOURCE_LINE_FOLLOW, SOURCE_NAVIGATE
 from .line_follow import LineSensorState
 from .mission_route import CargoPlan, RouteSegmentPlan, SegmentRole, WorkKind
 from .models import CubeColor, Pose2D
+from .ramp_control import RampProfile
+from .route_segment import SegmentKind
 
 #: 谁都不许驱动底盘（路线结束 / 失败 / 安全停车）
 SOURCE_NONE = "none"
@@ -83,6 +85,12 @@ class LineStatus:
     stale: bool
     blocked: bool
     deviation: float | None = None
+    #: 转弯阶段（B3；'' 表示当前没有在执行转弯）
+    turn_phase: str = ""
+    #: 坡道打滑判定（B3；NORMAL/SLIPPING/STUCK）
+    ramp_decision: str = ""
+    #: 本段生效巡线限速（B3）
+    line_limit_mps: float | None = None
 
 
 def parse_line_status(text: str) -> LineStatus:
@@ -135,11 +143,22 @@ def parse_line_status(text: str) -> LineStatus:
     if not isinstance(deviation, (int, float)) or not math.isfinite(float(deviation)):
         deviation = None
 
+    limit = payload.get("line_limit_mps")
+    try:
+        limit = None if limit is None else float(limit)
+    except (TypeError, ValueError):
+        limit = None
+    if limit is not None and not math.isfinite(limit):
+        limit = None
+
     return LineStatus(
         state=_LINE_STATES_BY_NAME[state_name],
         stale=_flag("stale", default=True),
         blocked=_flag("blocked", default=True),
         deviation=None if deviation is None else float(deviation),
+        turn_phase=str(payload.get("turn_phase") or ""),
+        ramp_decision=str(payload.get("ramp_decision") or ""),
+        line_limit_mps=limit,
     )
 
 
@@ -310,6 +329,142 @@ def parse_turn_command(text: str):
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# B3：巡线段参数（每段限速）+ 坡道段（C3：限速/加速度/打滑）
+# ---------------------------------------------------------------------------
+#
+# 两个缺口一起补：
+# 1. **每段限速此前没被采用**：路线登记表里写了 0.20/0.25/0.15，但巡线节点一直用
+#    自己参数里的 `vx_base`，等于全路段一个速度。现在由任务层按段下发。
+# 2. **坡道段没有限速/打滑保护**：坡上要更慢、下坡要防冲；`RampController`（C3）
+#    早就写好了但零引用，现在由巡线节点在坡道段把 PD 输出穿过它再发布。
+#
+# 交接方式与转弯命令一致：JSON over `/mission/line`，空串 = 清除（非巡线段）。
+#
+# ⚠️ 诚实边界（写进代码而不是只写在文档里）：打滑检测用**轮速**里程计，
+# 它看不到「轮子空转、车不走」这种真打滑（编码器量的是轮子转了多少）。
+# 它能抓到的是「轮速跟不上命令」（动力不足/上不去），这在上坡是最常见的失败。
+# 真要抓空转需要 IMU 俯仰/加速度或视觉，而 `imu_valid` 目前为 false。
+
+
+@dataclass(frozen=True)
+class LineCommand:
+    """巡线段的参数：本段限速 +（坡道段才有）坡道 profile。"""
+
+    segment_id: str
+    max_speed_mps: float
+    ramp_profile: RampProfile | None = None
+
+    def __post_init__(self) -> None:
+        if not self.segment_id:
+            raise ValueError("line command requires segment_id")
+        if not math.isfinite(self.max_speed_mps) or self.max_speed_mps <= 0.0:
+            raise ValueError("line command max_speed_mps must be positive and finite")
+        if self.ramp_profile is not None and not isinstance(self.ramp_profile, RampProfile):
+            raise ValueError("ramp_profile must be a RampProfile or None")
+
+    @property
+    def is_ramp(self) -> bool:
+        return self.ramp_profile is not None
+
+    def to_json(self) -> str:
+        payload: dict[str, Any] = {
+            "segment_id": self.segment_id,
+            "max_speed_mps": self.max_speed_mps,
+            "ramp": None,
+        }
+        if self.ramp_profile is not None:
+            profile = self.ramp_profile
+            payload["ramp"] = {
+                "kind": profile.kind.value,
+                "max_speed_mps": profile.max_speed_mps,
+                "max_accel_mps2": profile.max_accel_mps2,
+                "slip_threshold_mps": profile.slip_threshold_mps,
+                "slip_retreat_speed_mps": profile.slip_retreat_speed_mps,
+                "slip_stop_after_s": profile.slip_stop_after_s,
+                "descent_speed_factor": profile.descent_speed_factor,
+                "descent_decel_mps2": profile.descent_decel_mps2,
+            }
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def line_command_for(segment: RouteSegmentPlan | None) -> LineCommand | None:
+    """本段的巡线参数；非巡线/非坡道段返回 None（由调用方下发空串清除）。
+
+    限速取路线登记表的 `max_speed_mps`（该值已被 B1 自检过 ≤ 底盘限幅）；
+    坡道段再把 `RampProfile`（C3 占位值）附上。
+    """
+    if segment is None:
+        return None
+    if segment.role is SegmentRole.RAMP_UP:
+        return LineCommand(
+            segment_id=segment.id,
+            max_speed_mps=segment.max_speed_mps,
+            ramp_profile=RampProfile(
+                kind=SegmentKind.RAMP_UP, max_speed_mps=segment.max_speed_mps
+            ),
+        )
+    if segment.role is SegmentRole.RAMP_DOWN:
+        return LineCommand(
+            segment_id=segment.id,
+            max_speed_mps=segment.max_speed_mps,
+            ramp_profile=RampProfile(
+                kind=SegmentKind.RAMP_DOWN, max_speed_mps=segment.max_speed_mps
+            ),
+        )
+    if segment.role is SegmentRole.LINE:
+        return LineCommand(segment_id=segment.id, max_speed_mps=segment.max_speed_mps)
+    return None
+
+
+def parse_line_command(text: str) -> LineCommand | None:
+    """把巡线参数 JSON 还原成 `LineCommand`；任何异常都返回 None（不猜）。"""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        ramp = payload.get("ramp")
+        profile = None
+        if ramp is not None:
+            if not isinstance(ramp, dict):
+                return None
+            profile = RampProfile(
+                kind=SegmentKind(str(ramp["kind"])),
+                max_speed_mps=float(ramp["max_speed_mps"]),
+                max_accel_mps2=float(ramp["max_accel_mps2"]),
+                slip_threshold_mps=float(ramp["slip_threshold_mps"]),
+                slip_retreat_speed_mps=float(ramp["slip_retreat_speed_mps"]),
+                slip_stop_after_s=float(ramp["slip_stop_after_s"]),
+                descent_speed_factor=float(ramp["descent_speed_factor"]),
+                descent_decel_mps2=float(ramp["descent_decel_mps2"]),
+            )
+        return LineCommand(
+            segment_id=str(payload["segment_id"]),
+            max_speed_mps=float(payload["max_speed_mps"]),
+            ramp_profile=profile,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def effective_line_speed(command: LineCommand | None, node_limit_mps: float) -> float:
+    """本段实际生效的巡线速度上限 = min(任务层本段限速, 节点自身上限)。
+
+    取 min 的原因：任务层的限速来自路线登记表（≤ 底盘限幅），节点参数是现场调试
+    时更保守的兜底值。两者都是「上限」，所以只能取更小的那个。
+    """
+    if not math.isfinite(node_limit_mps) or node_limit_mps <= 0.0:
+        raise ValueError("node_limit_mps must be positive and finite")
+    if command is None:
+        return float(node_limit_mps)
+    return float(min(command.max_speed_mps, node_limit_mps))
 
 
 # ---------------------------------------------------------------------------

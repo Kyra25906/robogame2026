@@ -44,7 +44,11 @@ from robogame_core.route_loader import (  # noqa: E402
     load_route_plan,
     resolve_field_layout_path,
 )
+from robogame_core.cmd_vel_arbiter import SOURCE_LINE_FOLLOW  # noqa: E402
 from tools.launch_params import effective_parameter  # noqa: E402
+
+# 仲裁器里的另一个合法来源（用于验证「未授权来源不得驱动底盘」）
+SOURCE_MISSION_OTHER = "motion_control"
 
 
 def _tree(path: Path) -> ast.Module:
@@ -362,6 +366,179 @@ class RouteLoadingTests(unittest.TestCase):
         self.assertIn("from robogame_core.route_loader import", text)
         self.assertNotIn("safe_load", text)
         self.assertNotIn("survey_from_layout_text", text)
+
+
+class TurnWiringTests(unittest.TestCase):
+    """B3：转弯命令的端到端接线（任务层下发 → 巡线节点执行 → 网页可见）。
+
+    节点行为在本机跑不了（无 rclpy），所以用 AST 结构断言把**危险的那几条**钉死：
+    失败后不许回退 PD、未授权不许推进转弯、终态必须清除待执行转弯。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mission = _tree(MISSION_NODE)
+        cls.line = _tree(LINE_NODE)
+        cls.line_text = LINE_NODE.read_text(encoding="utf-8")
+
+    def test_mission_manager_publishes_and_clears_turn_command(self):
+        calls = _calls(self.mission)
+        self.assertTrue(
+            any(name == "create_publisher" and "/mission/turn" in literals for name, literals in calls)
+        )
+        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
+        self.assertIn("_publish_turn_command", dispatch)
+        # 终态必须清空待执行转弯，否则任务失败后残留指令会在下次授权时突然执行
+        release = ast.unparse(_function(self.mission, "_release_authority"))
+        self.assertIn("turn_pub", release)
+        publisher = ast.unparse(_function(self.mission, "_publish_turn_command"))
+        self.assertIn("turn_command_for", publisher)
+        self.assertIn("if command is None", publisher, "非转弯段必须下发空串（清除）")
+
+    def test_line_node_subscribes_and_parses_turn_command(self):
+        calls = _calls(self.line)
+        self.assertTrue(
+            any(name == "create_subscription" and "/mission/turn" in literals for name, literals in calls)
+        )
+        handler = ast.unparse(_function(self.line, "_on_turn_command"))
+        self.assertIn("parse_turn_command", handler)
+        self.assertIn("JunctionTurner", handler)
+        # 空串/坏输入 = 清除待执行转弯
+        self.assertIn("self.turner = None", handler)
+
+    def test_turn_takes_over_the_output(self):
+        tick = ast.unparse(_function(self.line, "_tick"))
+        self.assertIn("_turn_output", tick)
+        self.assertIn("turn if turn is not None else out", tick)
+
+    def test_turn_only_progresses_when_we_are_authorized(self):
+        turn_output = ast.unparse(_function(self.line, "_turn_output"))
+        self.assertIn("_authorized_source", turn_output)
+        self.assertIn("SOURCE_LINE_FOLLOW", turn_output)
+        self.assertIn("stale", turn_output, "读数过期必须传给转弯器（它会停车）")
+
+    def test_failed_turn_does_not_resume_line_following(self):
+        """方向没转对时继续往前开是危险的：失败后保持零速等任务层处置。"""
+        turn_output = ast.unparse(_function(self.line, "_turn_output"))
+        self.assertIn("command.failed", turn_output)
+        failed_branch = turn_output.split("command.failed", 1)[1]
+        self.assertNotIn(
+            "self.turner = None",
+            failed_branch.split("return", 1)[0],
+            "失败分支不许清除转弯器（清掉就会回退 PD 继续巡线）",
+        )
+        self.assertIn("get_logger().error", failed_branch)
+
+    def test_status_reports_turn_phase_for_the_web_panel(self):
+        publish = ast.unparse(_function(self.line, "_publish"))
+        for key in ("turn_phase", "turn_reason", "turn_pending", "turn_last_result"):
+            self.assertIn(key, publish, f"状态串必须上报 {key}（网页显示转弯阶段）")
+        self.assertIn("turn=", publish, "人类可读前缀也要带 turn=")
+
+
+class LineAndRampWiringTests(unittest.TestCase):
+    """B3：每段巡线限速 + 坡道（C3）接线。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mission = _tree(MISSION_NODE)
+        cls.line = _tree(LINE_NODE)
+        cls.line_text = LINE_NODE.read_text(encoding="utf-8")
+        cls.mission_text = MISSION_NODE.read_text(encoding="utf-8")
+
+    def test_mission_manager_publishes_and_clears_line_command(self):
+        calls = _calls(self.mission)
+        self.assertTrue(
+            any(name == "create_publisher" and "/mission/line" in literals for name, literals in calls)
+        )
+        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
+        self.assertIn("_publish_line_command", dispatch)
+        publisher = ast.unparse(_function(self.mission, "_publish_line_command"))
+        self.assertIn("line_command_for", publisher)
+        self.assertIn("if command is None", publisher, "非巡线段必须下发空串（清除）")
+        release = ast.unparse(_function(self.mission, "_release_authority"))
+        self.assertIn("line_pub", release, "终态必须清除巡线参数")
+
+    def test_retry_republishes_the_segment_commands(self):
+        """打滑卡住后节点保持零速：只重置计时叫不醒它，必须重发本段命令。"""
+        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
+        self.assertIn("published_retries", dispatch)
+        self.assertIn("self.machine.retries", dispatch)
+        retry_branch = dispatch.split("elif", 1)[-1]
+        self.assertIn("_publish_line_command", retry_branch)
+        self.assertIn("_publish_turn_command", retry_branch)
+
+    def test_stuck_ramp_triggers_a_segment_retry(self):
+        handler = ast.unparse(_function(self.mission, "_on_line_status"))
+        self.assertIn("SlipDecision.STUCK.value", handler)
+        self.assertIn("ramp_stuck_reports", handler)
+        self.assertIn("action_failed=True", handler)
+        self.assertIn("MECHANISM_ERROR", handler)
+
+    def test_line_node_consumes_line_and_wheel_speed(self):
+        calls = _calls(self.line)
+        for topic in ("/mission/line", "/wheel_odom"):
+            self.assertTrue(
+                any(name == "create_subscription" and topic in literals for name, literals in calls),
+                f"巡线节点必须订阅 {topic}",
+            )
+        handler = ast.unparse(_function(self.line, "_on_line_command"))
+        self.assertIn("parse_line_command", handler)
+        self.assertIn("effective_line_speed", handler)
+        self.assertIn("RampController", handler)
+
+    def test_line_limits_are_applied_before_publishing(self):
+        tick = ast.unparse(_function(self.line, "_tick"))
+        self.assertIn("_apply_line_limits", tick)
+        limits = ast.unparse(_function(self.line, "_apply_line_limits"))
+        self.assertIn("effective_vx_limit", limits)
+        self.assertIn("self.ramp.step", limits)
+
+    def test_stale_wheel_speed_disables_slip_detection(self):
+        """轮速过期时不做打滑判定——宁可不判，也不要误判停车。"""
+        limits = ast.unparse(_function(self.line, "_apply_line_limits"))
+        self.assertIn("measured_speed_stale_s", limits)
+        self.assertIn("measured = None", limits)
+
+    def test_status_reports_ramp_and_limit_for_the_web_panel(self):
+        publish = ast.unparse(_function(self.line, "_publish"))
+        for key in ("line_limit_mps", "ramp_kind", "ramp_decision", "measured_speed_mps"):
+            self.assertIn(key, publish, f"状态串必须上报 {key}")
+
+    def test_route_payload_exposes_ramp_state(self):
+        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
+        for key in ("ramp_decision", "line_limit_mps", "turn_phase"):
+            self.assertIn(key, payload, f"/mission/route 必须带 {key}（网页显示坡道/转弯状态）")
+
+
+class TurnCommandPathTests(unittest.TestCase):
+    """纯逻辑组合：转弯命令 → 仲裁门控（授权语义与巡线路径同一套）。"""
+
+    def _params(self):
+        from robogame_core.junction_turn import turn_params_for_direction
+        from robogame_core.mission_route import TurnDirection
+
+        return turn_params_for_direction(TurnDirection.RIGHT, turn_rate_radps=1.0)
+
+    def test_turn_command_reaches_cmd_vel_only_when_authorized(self):
+        from robogame_core.cmd_vel_arbiter import CmdVelArbiter, ArbiterConfig
+        from robogame_core.junction_turn import JunctionTurner
+        from robogame_core.line_follow import LineSensorState
+        from robogame_core.models import Velocity2D
+
+        turner = JunctionTurner(self._params())
+        turner.update(line_state=LineSensorState.INTERSECTION, now=0.0)
+        command = turner.update(line_state=LineSensorState.INTERSECTION, now=0.02)
+        self.assertNotEqual(command.wz, 0.0, "到路口后必须开始原地转")
+
+        arbiter = CmdVelArbiter(ArbiterConfig(stale_s=0.5))
+        arbiter.update(SOURCE_LINE_FOLLOW, Velocity2D(command.vx, 0.0, command.wz), now=0.05)
+        authorized = arbiter.output(active_source=SOURCE_LINE_FOLLOW, now=0.06, emergency_stop=False)
+        self.assertAlmostEqual(authorized.wz, command.wz)
+        blocked = arbiter.output(active_source=SOURCE_MISSION_OTHER, now=0.06, emergency_stop=False)
+        self.assertEqual((blocked.vx, blocked.wz), (0.0, 0.0), "未授权来源不得驱动底盘")
+        stopped = arbiter.output(active_source=SOURCE_LINE_FOLLOW, now=0.06, emergency_stop=True)
+        self.assertEqual((stopped.vx, stopped.wz), (0.0, 0.0), "急停优先于授权")
 
 
 if __name__ == "__main__":

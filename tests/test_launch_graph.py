@@ -31,12 +31,18 @@ KNOWN_HARDWARE_GAPS = set()
 #: 各 launch 允许的「已解释缺口」。默认是空集：新缺口一律让测试红。
 ALLOWED_GAPS = {
     "hardware.launch.py": KNOWN_HARDWARE_GAPS,
-    # 独立巡线联调图（真车 / mock 两张）：刻意不启动 mission_manager（没有任务层
-    # 就没有授权广播），所以 /mission/active_source 没有发布者。豁免必须一直成立：
-    # 这两张图都不能开启 require_authorization，否则巡线节点永远收不到授权而不动
-    # （mock 那张还有 line_follow_mock_smoke 会直接失败）。
-    "line_follow_hardware.launch.py": {"/mission/active_source"},
-    "line_follow_mock.launch.py": {"/mission/active_source"},
+    # 独立巡线联调图（真车 / mock 两张）：刻意不启动任务层，因此三条任务层话题
+    # 都没有发布者——`/mission/active_source`（授权）、`/mission/turn`（转弯命令）、
+    # `/mission/line`（每段限速/坡道参数）。
+    # 豁免必须一直成立：这两张图都不能开启授权门控，否则巡线节点永远收不到授权而不动
+    # （mock 那张还有 line_follow_mock_smoke 会直接失败）；转弯/坡道参数同理——没有
+    # 任务层就没有这些指令，节点只会走常规巡线（限速退回自己的 vx_base）。
+    "line_follow_hardware.launch.py": {
+        "/mission/active_source", "/mission/turn", "/mission/line",
+    },
+    "line_follow_mock.launch.py": {
+        "/mission/active_source", "/mission/turn", "/mission/line",
+    },
 }
 
 
@@ -94,16 +100,17 @@ class LaunchGraphCompletenessTests(unittest.TestCase):
                 )
 
     def test_standalone_line_launch_justifies_its_active_source_exemption(self):
-        """两张独立巡线图有意不启动任务层，因此没有 /mission/active_source 的发布者。
+        """两张独立巡线图有意不启动任务层，因此没有任务层三条话题的发布者。
 
         豁免的**语义前提**是「这些图里巡线节点不要求授权」——那条由
         `tests/test_mission_manager_route.py::test_standalone_line_graphs_do_not_require_authorization`
         按「配置层 + 内联覆盖」算出最终生效值来强制（文本级断言查不出这类冲突）。
         这里只确认缺口登记与实现仍然一致，防止悄悄多出别的缺口。
         """
+        expected = {"/mission/active_source", "/mission/turn", "/mission/line"}
         for name in ("line_follow_hardware.launch.py", "line_follow_mock.launch.py"):
             gaps = missing_publishers(LAUNCH_DIR / name, SRC_ROOT)
-            self.assertEqual(set(gaps), {"/mission/active_source"}, name)
+            self.assertEqual(set(gaps), expected, name)
 
 
 class LaunchGraphParserTests(unittest.TestCase):

@@ -420,6 +420,17 @@ class RoutePlan:
             self._check_heading(segment)
             self._check_exit(segment)
 
+        # 作业段的作业次数必须等于载货计划里的总块数：取块段要抓完所有块，
+        # 搭建段要放完所有块。两者不一致时（例如把计划改成 2 块却忘了改 required_count）
+        # 会出现「抓 3 次但只有 2 块」这种到现场才暴露的错误。
+        cargo_total = self.cargo_plan.orange + self.cargo_plan.purple
+        for segment in self.segments:
+            if segment.role is SegmentRole.WORK and segment.exit.required_count != cargo_total:
+                raise RoutePlanError(
+                    f"{segment.id}: required_count={segment.exit.required_count} "
+                    f"但载货计划共 {cargo_total} 块——两者必须一致"
+                )
+
         previous: RouteSegmentPlan | None = None
         for segment in self.segments:
             if previous is not None:
