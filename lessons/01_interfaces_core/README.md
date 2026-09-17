@@ -33,7 +33,7 @@
 ## 运行
 
 ```powershell
-cd C:\Users\dahli\Documents\机器人算法开发\lessons\01_interfaces_core
+cd C:\Users\dahli\Documents\robogame_algorithm\lessons\01_interfaces_core
 python experiment.py
 ```
 

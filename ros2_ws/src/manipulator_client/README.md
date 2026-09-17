@@ -4,6 +4,15 @@
 
 它是“视觉与机械机构之间的协调员”。抓取时根据视觉距离和左右偏差低速对准，然后请求夹爪抓取；放置时先请求升降机构到指定层高，再请求释放。
 
+> ⚠️ **本车没有升降装置，放置流程的升降这一步在真车上必然失败。**
+> `manipulator_client` 会调用 `/lift/set_height`（`manipulator_client/node.py:514-523`），
+> `robot_bridge` 在真实模式把它翻成固件的 `LIFT_ABS`（`robot_bridge/node.py:840-860`），
+> 而固件对该操作**明确回 `FAILED` + `error_code=3010`**
+> （`RPI_ERROR_MECH_NO_LIFT`，`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:217`、`:766-776`）。
+> 看到 `3010` 说明“这台车根本没有升降”，**不是客户端 bug，也不是通信问题**——不要再去调客户端超时或重试，
+> 应先和机械组确认放置方式（错误码表见 `robot_bridge/README.md` §7）。
+> mock 模式下升降是模拟的，所以模拟流程通过**不能**证明真车放置可用。
+
 ## 2. 文件分工
 
 - `manipulator_client/node.py`：全部协调逻辑，包括命令检查、视觉对准、服务调用、超时和结果发布。
@@ -46,7 +55,7 @@ ros2 topic echo /cmd_vel
 - 订阅 `/robot/status`：通信、急停和机构故障；不安全时拒绝新动作并终止当前动作。
 - 发布 `/cmd_vel`：视觉接近时的低速底盘命令。
 - 发布 `/manipulator/result`：动作结果。
-- 调用 `/gripper/grab`、`/gripper/release`、`/lift/set_height`。
+- 调用 `/gripper/grab`、`/gripper/release`、`/lift/set_height`（最后这个在真车上必然返回 `3010`，见 §1 的警告）。
 
 ## 5. 参数
 
@@ -57,11 +66,11 @@ ros2 topic echo /cmd_vel
 - `target_stale_s`：视觉结果过期时间。
 - `status_stale_s`：机器人状态话题的过期时间，过期后停止当前动作。
 - `action_timeout_s`：整个动作超时。
-- `place_heights_m`：第一、二、三层放置高度。
+- `place_heights_m`：第一、二、三层放置高度。**依赖升降机构，而本车没有升降装置**：真车调用 `/lift/set_height` 只会拿到固件错误码 `3010`，这三层高度目前只是 mock 流程用的值。
 
 ## 6. 当前流程和缺口
 
-当前抓取流程是：收到命令 → 等目标 → 距离/横向 P 控制 → 进入容差 → 调用抓取服务 → 返回结果。放置流程是：选层高 → 升降 → 释放 → 层数加一。
+当前抓取流程是：收到命令 → 等目标 → 距离/横向 P 控制 → 进入容差 → 调用抓取服务 → 返回结果。放置流程是：选层高 → 升降 → 释放 → 层数加一。**其中“升降”这一步在真车上会被固件拒绝（`3010`，见 §1）**，所以真车放置目前走不通，需要机械组给出无升降的放置方案。
 
 尚未实现完整的 `SEARCH` 旋转搜索、目标角度 `wz` 控制、抓取后的双证据验证、运输掉块检测、放置后视觉稳定性验证、机构取消命令和精细重试。目标一直看不到时当前节点先停车，最终由总动作超时返回失败。
 

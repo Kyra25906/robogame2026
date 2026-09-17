@@ -7,8 +7,11 @@
 ## 2. 文件分工
 
 - `motion_control/node.py`：ROS2 节点、目标接收、安全检查、20 ms 控制循环。
+- `motion_control/line_follow_node.py`：循迹控制节点（现场模式的 `line_follow_controller`），消费 `/line_sensor` 并驱动底盘。
+- `motion_control/line_sensor_mock.py`：无硬件时模拟 `/line_sensor` 读数。
+- `motion_control/line_follow_runner.py`：循迹运行的辅助逻辑（不含 ROS2 入口）。
 - `robogame_core/navigation.py`：真正的到点误差计算、比例控制、限速和接近减速。
-- `setup.py`：登记程序名 `motion_controller`。
+- `setup.py`：登记三个程序名：`motion_controller`（到点控制）、`line_follow_controller`（循迹控制）、`line_sensor_mock`（循迹传感器模拟）。
 - `package.xml`：声明消息和核心库依赖。
 
 ## 3. 启动和手动发目标

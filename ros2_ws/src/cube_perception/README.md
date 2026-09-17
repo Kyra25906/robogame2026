@@ -14,7 +14,7 @@
 - `cube_perception/mock_node.py`：持续发布理想的假目标，供整车流程联调。
 - `config/vision_default.json`：常规视觉参数。
 - `config/vision_demo_roi.json`：带演示 ROI 的参数样例。
-- `setup.py`：登记四个 `ros2 run` 程序入口。
+- `setup.py`：登记七个 `ros2 run` 程序入口：`cube_perception`（正式节点）、`mock_perception`（假目标）、`cube_detector`（独立相机/录像入口）、`hsv_tuner`（调阈值）、`vision_report`（单份 JSONL 验收报告）、`vision_batch_report`（批量报告）、`vision_segment_annotator`（分段标注）。
 
 ## 3. 编译和加载
 

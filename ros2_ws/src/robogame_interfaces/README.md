@@ -13,11 +13,13 @@
 - `CubeDetectionArray.msg`：一帧中多个方块检测。
 - `MissionState.msg`：任务状态、结果、错误码、重试数和说明。
 - `CargoState.msg`：算法认为的车载橙/紫方块数量。
+- `LineSensor.msg`：八路循迹通道读数（`channels` 8 个 `uint16`、`analog_valid`）加 MCU 时标 `mcu_tick_ms`，对应固件 0x14 遥测。
 
 ### 服务 `srv`
 
 - `ExecuteMechanism.srv`：抓取、释放或停车类命令及完成结果。
-- `SetLiftHeight.srv`：升降目标高度、超时和完成结果。
+- `SetLiftHeight.srv`：升降目标高度、超时和完成结果。**本车没有升降装置**，固件对 `LIFT_ABS` 明确回错误码 `3010`（`RPI_ERROR_MECH_NO_LIFT`，见 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:217`、`:775`），所以这个服务在真车上必然失败。
+- `SetArmJoint.srv`：设置单个机械臂关节角（`joint`、`angle_deg`、`timeout_s` → `success`、`error_code`、`duration_s`、`detail`）。它背的是 `/arm/set_joint` 服务（`robot_bridge/node.py:241` 注册、`:883` 实现）；关节编号与固件 `arm.h` 的 `Arm_Joint` 一致（0=腰、1=肩、2=肘、3=腕、4=爪），爪子不许走这条通道。
 
 ### 构建文件
 

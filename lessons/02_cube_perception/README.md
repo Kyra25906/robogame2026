@@ -21,10 +21,10 @@
 python experiment.py
 ```
 
-如果原项目不在默认位置：
+默认情况下实验会自动定位到本仓库根目录（用 `experiment.py` 自身的位置往上三层推导），不需要手写路径。只有把仓库放在别处、或想指向另一个副本时才需要显式指定：
 
 ```powershell
-python experiment.py --project D:\your\path\xu
+python experiment.py --project D:\your\path\robogame_algorithm
 ```
 
 看到最后一行“实验通过”即完成。打开 `output/scene.png` 和两张 `*_mask.png` 对照：原图中的目标在对应掩膜里应为白色，其余区域为黑色。

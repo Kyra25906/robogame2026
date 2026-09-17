@@ -8,7 +8,7 @@
 
 用法：
   source /opt/ros/jazzy/setup.bash
-  source ~/robogame_git/ros2_ws/install/setup.bash
+  source ~/robogame/ros2_ws/install/setup.bash
   python3 tools/pose_monitor.py
 
 按 Ctrl+C 退出。

@@ -32,7 +32,7 @@
 
 | 概念 | 一句话解释 | 在本项目中 |
 |---|---|---|
-| 波特率 (baud rate) | 每秒传多少位，收发双方必须一致 | `robot_field.yaml:5` 的 `baud_rate: 115200`（现场层；`robot.yaml` 里没有这一项） |
+| 波特率 (baud rate) | 每秒传多少位，收发双方必须一致 | `robot_field.yaml:5` 的 `baud_rate: 115200`（现场层；`robot.yaml` 里没有这一项）。`config/hardware.yaml` 里虽然也有同值副本，但它是 legacy、不被任何启动入口加载（`tools/field_console.json:7`、`launch/hardware.launch.py:13-14` 只加载 `robot.yaml` + `robot_field.yaml`），改它不生效 |
 | UART/USB 转串口 | 树莓派没有原生串口，靠 USB 模拟 | 设备路径用 by-id 稳定符号链接（`robot_field.yaml:4`）；`/dev/ttyACM0` 会随插拔变号，不要写死 |
 | 全双工 | 可以同时收发，互不干扰 | 上位机发命令、下位机回状态可以同时进行 |
 | 流控制 | 防止发送太快对方来不及处理 | 本项目未使用，靠协议自身帧定界 |
@@ -109,7 +109,7 @@
 ### 对应代码
 
 - `robogame_core/navigation.py`：`OdometryIntegrator` 用速度积分推算位置
-- `robot_bridge/node.py` 第 319-335 行：发布 `/wheel_odom` 话题
+- `robot_bridge/node.py` 第 1197-1225 行：在 `_tick()` 里构造并发布 `/wheel_odom`（发布点第 1225 行；publisher 在第 207 行声明）
 
 ### 学完后能回答
 
@@ -141,8 +141,8 @@ IMU 是一块小芯片，里面有一个陀螺仪（测角速度）和一个加�
 ### 对应代码
 
 - `localization/node.py`：IMU+里程计融合定位
-- `localization/quality.py` 第 16-25 行：`choose_yaw_rate()` 选择陀螺仪还是轮速差
-- `robot_bridge/node.py` 第 338-347 行：mock 模式 2 秒假装校准
+- `localization/quality.py` 第 4-26 行：`choose_yaw_rate()` 选择陀螺仪还是轮速差（第 16-25 行是 IMU 可用性判定那几行）
+- `robot_bridge/node.py` 第 1286-1292 行：mock 模式 2 秒假装校准（`mock_start_after_s` 默认 2.0，声明在第 138 行）
 
 ### 学完后能回答
 
@@ -164,14 +164,14 @@ IMU 是一块小芯片，里面有一个陀螺仪（测角速度）和一个加�
 | 看门狗 (watchdog) | MCU 内部定时器，超时没被"喂"就自动复位 | MCU 150ms 没收到命令就停车 |
 | 急停 (E-stop) | 物理按钮，按下直接断电/停止，不经过软件 | `emergency_stop` 字段 |
 | 失联停车 | 通信断了，MCU 自己把速度归零 | 硬件安全链第 1 条 |
-| 心跳 (heartbeat) | 定时互发小包，证明"我还活着" | `0x03` 消息类型 |
+| 心跳 (heartbeat) | 定时互发小包，证明"我还活着" | `0x02` 消息类型（`MSG_TYPE_HEARTBEAT = 0x02`；`0x03` 是 `MSG_TYPE_HELLO` 建链，别混） |
 | 上电默认安全 | 通电后不动，直到收到明确启动信号 | `physical_start` 字段 |
 | boot_id | MCU 每次重启后递增的计数器 | 检测 MCU 是否意外重启过 |
 
 ### 对应代码
 
-- `robot_bridge/node.py` 第 229-250 行：`_on_status_boot_id()` 检测 MCU 重启
-- `robot_bridge/node.py` 第 190-227 行：握手状态机
+- `robot_bridge/node.py` 第 990-1019 行：`_on_status_boot_id()` 检测 MCU 重启
+- `robot_bridge/node.py` 第 933-960 行 `_run_handshake()` + 第 961-989 行 `_accept_frame_for_handshake()`：握手状态机（`_tick()` 里的调用点在第 1135-1143 行）
 - `robogame_core/hardware_readiness.py`：`robot_status_communication_ok()` 通信健康判定
 
 ### 学完后能回答
@@ -208,7 +208,7 @@ IMU 是一块小芯片，里面有一个陀螺仪（测角速度）和一个加�
 → 读 StreamDecoder 看它怎么从乱序字节中找帧头
 → 读 robot_bridge/node.py 的 _tick 跟着一次完整的收发流程
 → 读 hardware_readiness.py 理解"什么是可信的通信状态"
-→ 读 FREEZE_TABLE.md 看看还有哪些参数等硬件组确认
+→ 读 docs/field/_archived/FREEZE_TABLE.md 看看还有哪些参数等硬件组确认（已归档，路径别再用根目录下的 FREEZE_TABLE.md）
 ```
 
 每读完一段，回答上面的"学完后能回答"问题。答不上来就回头看对应代码。

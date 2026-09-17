@@ -9,7 +9,9 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_PROJECT = Path(r"C:\Users\dahli\Documents\Codex\2026-07-13\xu")
+# 默认指向本实验所在的这个仓库（lessons/01_interfaces_core/experiment.py 往上数三层）。
+# 用 __file__ 推导而不是写死绝对路径，克隆到别的目录或换电脑后也不会指向旧副本。
+DEFAULT_PROJECT = Path(__file__).resolve().parents[2]
 
 
 def load_core(project: Path):
@@ -90,7 +92,7 @@ def cargo_experiment(Cargo, CubeColor):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", type=Path, default=DEFAULT_PROJECT, help="原项目 xu 的路径")
+    parser.add_argument("--project", type=Path, default=DEFAULT_PROJECT, help="项目根目录（含 ros2_ws），默认自动定位到本仓库")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "output")
     args = parser.parse_args()
 

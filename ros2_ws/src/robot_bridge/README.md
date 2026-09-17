@@ -139,7 +139,6 @@ ros2 service call /arm/set_joint robogame_interfaces/srv/SetArmJoint \
 > `3010` / `3020` 来自 STM32 的 0x21 `error_code`，由本节点原样透传。
 > `3020` 只表示"命令没在预算内到位"，**不是机构故障**：固件不会因此置
 > `STATUS_MECHANISM_FAULT`，所以不需要按 PB2 物理重新授权就能发下一条命令。
-| `1104` | 模拟模式注入的 ARM_SET 失败 |
 
 ## 8. 机械臂通道（ARM_SET）
 

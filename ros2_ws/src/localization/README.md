@@ -8,6 +8,7 @@
 |------|------|------|------|
 | 订阅 | `/wheel_odom` | `nav_msgs/Odometry` | 底盘轮式里程计 |
 | 订阅 | `/imu/data` | `sensor_msgs/Imu` | IMU 角速度（用于偏航观测） |
+| 订阅 | `/robot/status` | `robogame_interfaces/RobotStatus` | 取 `imu_valid` 决定是否用 IMU 角速度；通信正常时用 `boot_id` 变化检测 MCU 重启并丢弃旧的位姿基准（`localization/node.py:46` 订阅、`:65` 处理） |
 | 发布 | `/pose` | `nav_msgs/Odometry` | 融合后统一位姿（map 坐标系） |
 | 广播 | `map -> base_link` | TF | 机器人位姿变换 |
 
@@ -44,17 +45,17 @@ localization:
 ## 运行
 
 ```bash
-cd ~/robogame_git/ros2_ws
+cd ~/robogame/ros2_ws
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
-ros2 run localization localization_node --ros-args --params-file ~/robogame_git/ros2_ws/src/robogame_bringup/config/robot.yaml
+ros2 run localization localization_node --ros-args --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml
 ```
 
 ## 测试
 
 ```bash
-cd ~/robogame_git
+cd ~/robogame
 python3 -m unittest tests.test_localization -v
 ```
 

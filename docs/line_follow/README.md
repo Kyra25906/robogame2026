@@ -97,7 +97,7 @@ PD 控制器，输出机体坐标系 (vx, wz)：
 ## 测试
 
 ```bash
-cd ~/robogame_git
+cd ~/robogame
 python3 -m unittest tests.test_line_follow -v
 ```
 

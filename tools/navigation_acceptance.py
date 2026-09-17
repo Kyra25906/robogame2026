@@ -8,7 +8,7 @@
   T4: (可选) ros2 topic echo /motion/result
 
 运行：
-  cd ~/robogame_git
+  cd ~/robogame
   python3 tools/navigation_acceptance.py
   python3 tools/navigation_acceptance.py --rounds 10 --output navigation_results.csv
   python3 tools/navigation_acceptance.py --result-topic /motion/result   # 指定结果话题
