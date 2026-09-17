@@ -243,6 +243,13 @@ python3 tools/field_dashboard.py
 
 浏览器打开 **http://127.0.0.1:8765**。
 
+> ⚠️ **只从网页（或 `hardware.launch.py`）启动 `bridge`，不要手敲裸 `ros2 run`。**
+> 网页的 `bridge` 走 `tools/field_console.json`，会加载 `robot.yaml` + `robot_field.yaml`。
+> 若某个启动方式**不传 params 文件**，节点会退回**硬编码默认值**
+> （`serial_port=/dev/ttyACM0`、`command_timeout_s=0.15`、`max_mcu_sample_gap_ms=250`），
+> 于是 08-18 修好的**零速插入顿挫**和 **LOCALIZATION_ERROR 停车**会静默复发，
+> 而且日志上看不出原因。（`line_follow_hardware.launch.py` 曾有此缺陷，已于 2026-09-17 修复。）
+
 ### 4.1 安全顺序（不要跳步）
 
 1. **架空车轮、机构卸载**，并且**独立验证物理急停有效**（不依赖软件）。
