@@ -906,5 +906,74 @@ class MissionRouteModeTests(unittest.TestCase):
         self.assertIn("segment_label", progress)
 
 
+class MultiRoundRouteTests(unittest.TestCase):
+    """B4：多趟循环（`build_route_plan(rounds=N)`）。"""
+
+    def test_default_stays_single_round(self):
+        """默认必须与原来完全一致（13 段）——多趟是显式开启的能力。"""
+        route = plan()
+        self.assertEqual(route.rounds, 1)
+        self.assertEqual(len(route.segments), 13)
+        self.assertEqual(build_route_plan(survey()).segment_ids, route.segment_ids)
+
+    def test_two_rounds_repeat_the_fetch_and_build_loop(self):
+        two = build_route_plan(survey(), rounds=2)
+        self.assertEqual(two.rounds, 2)
+        # 13 段 + 1 段返回 + 11 段取存环 = 25
+        self.assertEqual(len(two.segments), 25)
+        self.assertEqual(len(set(two.segment_ids)), 25, "克隆段的 id 必须唯一")
+        # 第二趟的段带 _R2 后缀
+        suffixes = [sid for sid in two.segment_ids if sid.endswith("_R2")]
+        self.assertEqual(len(suffixes), 12, "返回段 + 11 段取存环")
+        # 每趟都还有一个取块段和一个搭建段
+        picks = [s for s in two.segments if s.work is WorkKind.PICK]
+        places = [s for s in two.segments if s.work is WorkKind.PLACE]
+        self.assertEqual(len(picks), 2)
+        self.assertEqual(len(places), 2)
+        # 作业次数是「每趟」的 3 块（框里的块放完就空了）
+        for segment in picks + places:
+            self.assertEqual(segment.exit.required_count, 3)
+
+    def test_return_segment_closes_the_loop(self):
+        two = build_route_plan(survey(), rounds=2)
+        return_segment = next(
+            s for s in two.segments if s.id.startswith("S14_RETURN_TO_LINE")
+        )
+        self.assertIs(return_segment.role, SegmentRole.SHIFT)
+        self.assertEqual(return_segment.from_ref, "W05")
+        self.assertEqual(return_segment.to_ref, "N06")
+        # 来回都必须朝 +y：下一趟的「接近坡道」段是沿 E05 朝 +y
+        self.assertAlmostEqual(return_segment.to_pose.yaw, AXIS_HEADINGS["y+"], places=6)
+        after = two.segments[two.segment_ids.index(return_segment.id) + 1]
+        self.assertTrue(after.id.endswith("_R2"))
+        self.assertEqual(after.from_ref, "N06")
+        self.assertAlmostEqual(after.from_pose.yaw, return_segment.to_pose.yaw, places=6)
+
+    def test_segments_remain_continuous_across_rounds(self):
+        two = build_route_plan(survey(), rounds=2)
+        for previous, current in zip(two.segments, two.segments[1:]):
+            self.assertAlmostEqual(previous.to_pose.x, current.from_pose.x, places=9)
+            self.assertAlmostEqual(previous.to_pose.y, current.from_pose.y, places=9)
+            delta = math.atan2(
+                math.sin(current.from_pose.yaw - previous.to_pose.yaw),
+                math.cos(current.from_pose.yaw - previous.to_pose.yaw),
+            )
+            expected = 0.0
+            if previous.exit.kind is ExitKind.JUNCTION_TURN:
+                expected = {
+                    TurnDirection.RIGHT: -math.pi / 2.0,
+                    TurnDirection.LEFT: math.pi / 2.0,
+                    TurnDirection.STRAIGHT: 0.0,
+                }[previous.exit.turn]
+            self.assertAlmostEqual(delta, expected, delta=1e-4, msg=f"{previous.id} -> {current.id}")
+
+    def test_rounds_must_be_positive(self):
+        with self.assertRaises(RoutePlanError):
+            build_route_plan(survey(), rounds=0)
+
+    def test_three_rounds_scale_linearly(self):
+        self.assertEqual(len(build_route_plan(survey(), rounds=3).segments), 37)
+
+
 if __name__ == "__main__":
     unittest.main()

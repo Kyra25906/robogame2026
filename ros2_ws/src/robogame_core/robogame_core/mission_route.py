@@ -53,6 +53,7 @@ survey 段）解析，本模块只声明「走哪条边、什么朝向、怎么�
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from enum import Enum
@@ -394,8 +395,12 @@ class RoutePlan:
     default_yaw_radps: float = 0.50
     version: str = ROUTE_VERSION
     source_note: str = ROUTE_SOURCE_NOTE
+    #: 本路线包含几趟「取存 + 搭建」环（1 = 单趟，默认）
+    rounds: int = 1
 
     def __post_init__(self) -> None:
+        if self.rounds < 1:
+            raise RoutePlanError("rounds must be >= 1")
         if not self.version:
             raise RoutePlanError("version must be non-empty")
         if not self.segments:

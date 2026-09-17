@@ -46,6 +46,11 @@ function routeLiveView(raw, ageS, turnPhase) {
   const stale = typeof ageS === 'number' && ageS > 2.0;
   const total = data.segment_count == null ? '?' : data.segment_count;
   const done = data.segments_completed == null ? '?' : data.segments_completed;
+  // B4：比赛剩余时间（6 分钟时钟）——到点任务会安全停车
+  const remaining = typeof data.match_remaining_s === 'number'
+    ? `｜剩余 ${Math.floor(data.match_remaining_s / 60)}:${String(Math.floor(data.match_remaining_s % 60)).padStart(2, '0')}`
+    : '';
+  const rounds = data.rounds && data.rounds > 1 ? `｜共 ${data.rounds} 趟` : '';
   const work = data.work_required
     ? `｜作业 ${data.work_count}/${data.work_required}`
     : '';
@@ -60,7 +65,7 @@ function routeLiveView(raw, ageS, turnPhase) {
     : (data.ramp_decision === 'NORMAL' ? '｜坡道正常' : '');
   const text = `第 ${done}/${total} 段｜当前 ${data.segment_id || '-'}（${data.segment_label || '-'}）`
     + `｜阶段 ${data.phase || '-'}｜状态 ${data.state || '-'}`
-    + `｜底盘授权 ${data.active_source || 'none'}${work}${workStep}${turnLine}${limit}${ramp}`
+    + `｜底盘授权 ${data.active_source || 'none'}${work}${workStep}${turnLine}${limit}${ramp}${rounds}${remaining}`
     + (data.retries ? `｜重试 ${data.retries}` : '')
     // B4：降级（重试耗尽后跳过/撤退）必须显眼——否则现场会以为任务在正常推进
     + (data.degradations ? `｜⚠️ 已降级 ${data.degradations} 次` : '')

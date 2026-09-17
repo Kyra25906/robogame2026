@@ -324,8 +324,11 @@ class MissionMachine:
             self.detail = "route complete"
         return self.state
 
-    def route_progress(self) -> dict[str, object]:
-        """路线进度快照（B2 推给网页显示）。"""
+    def route_progress(self, now: float | None = None) -> dict[str, object]:
+        """路线进度快照（B2 推给网页显示）。
+
+        `now` 只用于测试注入模拟时钟；生产路径传 None 即用真实单调时钟。
+        """
         runner = self._route_runner
         segment = None if runner is None else runner.current_segment
         total = 0 if self.route is None else len(self.route.segments)
@@ -348,8 +351,8 @@ class MissionMachine:
             "retries": self.retries,
             "degradations": self.degradations,
             "match_remaining_s": None
-            if self.match_remaining_s() is None
-            else round(self.match_remaining_s(), 1),
+            if self.match_remaining_s(now) is None
+            else round(self.match_remaining_s(now), 1),
             "detail": self.detail,
         }
 

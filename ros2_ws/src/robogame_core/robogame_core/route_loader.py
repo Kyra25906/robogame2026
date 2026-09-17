@@ -140,8 +140,11 @@ def resolve_field_layout_path(
     return ""
 
 
-def load_route_plan(layout_path: Path | str | None = None) -> RoutePlan:
-    """读场地图并构造自检过的路线；任何失败都抛异常（由调用方判失败）。"""
+def load_route_plan(layout_path: Path | str | None = None, *, rounds: int = 1) -> RoutePlan:
+    """读场地图并构造自检过的路线；任何失败都抛异常（由调用方判失败）。
+
+    `rounds > 1` 时把取存环重复多趟（见 `mission_route.build_route_plan`）。
+    """
     if layout_path is None or str(layout_path) == "":
         raise FileNotFoundError("未提供 field_layout.yaml 路径（场地数据缺失）")
-    return build_route_plan(load_survey(layout_path))
+    return build_route_plan(load_survey(layout_path), rounds=rounds)

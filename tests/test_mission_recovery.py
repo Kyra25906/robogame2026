@@ -234,5 +234,130 @@ class MachineDegradationTests(unittest.TestCase):
         self.assertEqual(machine.degradations, 0)
 
 
+class MatchClockTests(unittest.TestCase):
+    """比赛总时钟（规则 3.2.1：6 分钟，计时结束后动作无效）。"""
+
+    def _machine(self, **config) -> MissionMachine:
+        machine = MissionMachine(MissionConfig(**config), route=_plan())
+        machine.tick(now=100.0, action_succeeded=True)
+        machine.tick(now=100.1, physical_start=True)
+        self.assertIs(machine.state, MissionState.ROUTE_RUNNING)
+        return machine
+
+    def test_remaining_time_counts_down(self):
+        machine = self._machine(match_time_limit_s=360.0)
+        self.assertAlmostEqual(machine.match_remaining_s(now=100.1), 360.0, places=3)
+        self.assertAlmostEqual(machine.match_remaining_s(now=160.1), 300.0, places=3)
+        self.assertEqual(machine.match_remaining_s(now=999.0), 0.0)
+
+    def test_time_limit_stops_safely_not_silently(self):
+        """到点必须安全停车并说明原因——不能继续跑到自然结束。"""
+        machine = self._machine(match_time_limit_s=360.0)
+        machine.tick(now=100.1 + 361.0)
+        self.assertIs(machine.state, MissionState.SAFE_STOP)
+        self.assertIs(machine.result, MissionResult.SAFETY_STOP)
+        self.assertIn("比赛时间到", machine.detail)
+
+    def test_clock_is_absolute_not_per_segment(self):
+        """时钟从路线开始算，不随段切换重置；否则永远到不了 6 分钟。"""
+        machine = self._machine(match_time_limit_s=360.0, state_timeout_s=20.0)
+        runner = machine.route_runner
+        for step in range(1, 7):
+            # 每次都在不同段上、且每段都有正常切换（entered_at 被刷新），
+            # 但总时钟必须继续走：路线从 100.1 开始，360 s 后在 460.1 到点。
+            runner.skip_to("S12_BUILD_2LAYER" if step % 2 else "S06_PICK3")
+            machine.entered_at = 100.1 + 100.0 * step  # 模拟「刚切完段」
+            machine.tick(now=100.1 + 100.0 * step)
+            if machine.state is MissionState.SAFE_STOP:
+                break
+        self.assertIs(machine.state, MissionState.SAFE_STOP, "总时钟必须累计到 6 分钟")
+        self.assertIn("比赛时间到", machine.detail)
+
+    def test_limit_can_be_disabled(self):
+        machine = self._machine(match_time_limit_s=0.0)
+        self.assertIsNone(machine.match_remaining_s(now=100.1))
+        machine.tick(now=100.1 + 10_000.0)
+        self.assertIs(machine.state, MissionState.ROUTE_RUNNING)
+
+    def test_progress_reports_remaining_time(self):
+        machine = self._machine(match_time_limit_s=360.0)
+        machine.tick(now=160.1)
+        progress = machine.route_progress(now=160.1)
+        self.assertAlmostEqual(progress["match_remaining_s"], 300.0, places=1)
+
+
+class MultiRoundRecoveryTests(unittest.TestCase):
+    """多趟路线下的降级目标：必须是**当前这一趟**的搭建段。"""
+
+    def _two_round_plan(self):
+        return build_route_plan(load_survey(), rounds=2)
+
+    def test_pick_failure_in_round_two_targets_round_two_build(self):
+        plan = self._two_round_plan()
+        round_two_pick = next(
+            segment for segment in plan.segments
+            if segment.work is WorkKind.PICK and segment.id.endswith("_R2")
+        )
+        decision = recovery_for_failure(plan, round_two_pick, _cargo(1))
+        self.assertIs(decision.action, RecoveryAction.SKIP_TO_BUILD)
+        self.assertTrue(
+            decision.target_segment_id.endswith("_R2"),
+            f"第 2 趟取块失败不该跳回第 1 趟的搭建段：{decision.target_segment_id}",
+        )
+        self.assertGreater(
+            plan.segment_ids.index(decision.target_segment_id),
+            plan.segment_ids.index(round_two_pick.id),
+            "降级只能向前跳（倒回去会重搭已完成的建筑）",
+        )
+
+    def test_first_round_failure_still_targets_the_first_build(self):
+        plan = self._two_round_plan()
+        first_pick = plan.segment("S06_PICK3")
+        decision = recovery_for_failure(plan, first_pick, _cargo(1))
+        self.assertEqual(decision.target_segment_id, "S12_BUILD_2LAYER")
+
+    def test_pick_failure_after_the_last_build_retreats(self):
+        """最后一趟的取块之后已无搭建段 → 只能撤退（不许倒回去）。"""
+        plan = self._two_round_plan()
+        last_build_index = max(
+            index for index, segment in enumerate(plan.segments)
+            if segment.work is WorkKind.PLACE
+        )
+        # 构造一个「位于最后一次搭建之后」的取块段场景：借用最后一趟的取块段但把
+        # 下标挪到最后一次搭建之后是不可能的（计划固定），因此这里直接验证
+        # 目标选择函数在「当前下标之后没有搭建段」时的行为。
+        from robogame_core.mission_recovery import _build_segment_id
+
+        self.assertIsNone(_build_segment_id(plan, last_build_index + 1))
+        decision = recovery_for_failure(
+            plan, plan.segments[last_build_index + 1], _cargo(1)
+        )
+        # 该段是撤退段之后的返回段（SHIFT）→ 位置不可信 → 安全停车
+        self.assertIs(decision.action, RecoveryAction.SAFE_STOP)
+
+    def test_skip_to_current_round_build_works_end_to_end(self):
+        plan = self._two_round_plan()
+        machine = MissionMachine(MissionConfig(max_retries=1), route=plan)
+        machine.tick(action_succeeded=True)
+        machine.tick(physical_start=True)
+        runner = machine.route_runner
+        target = next(
+            segment.id for segment in plan.segments
+            if segment.work is WorkKind.PICK and segment.id.endswith("_R2")
+        )
+        runner.skip_to(target)
+        machine.cargo.add(CubeColor.ORANGE)
+        machine._sync_route()
+        for _ in range(2):
+            machine.tick(action_failed=True, failure_result=MissionResult.TIMEOUT,
+                         failure_detail="pick failed")
+        self.assertIs(machine.state, MissionState.ROUTE_RUNNING)
+        self.assertTrue(machine.segment_id.endswith("_R2"))
+        self.assertGreater(
+            plan.segment_ids.index(machine.segment_id),
+            plan.segment_ids.index(target),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

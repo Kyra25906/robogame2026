@@ -79,6 +79,11 @@ class MissionManagerNode(Node):
             "field_layout_path": "",
             # B4：失败降级阶梯（重试耗尽后 跳过/撤退/安全停车）
             "degrade_on_failure": True,
+            # B4：比赛总时长上限（秒）。规则 3.2.1：6 分钟，计时结束后动作无效。
+            "match_time_limit_s": 360.0,
+            # B4：多趟循环（1 = 只跑一趟）。默认 1：真车计时未测，且「第二座建筑
+            # 落点」「机构层计数复位」都还没有结论——打开前先看工作留痕文档。
+            "rounds": 1,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -90,6 +95,7 @@ class MissionManagerNode(Node):
             build_stability_s=float(self.get_parameter("build_stability_s").value),
             startup_wait_timeout_s=float(self.get_parameter("startup_wait_timeout_s").value),
             degrade_on_failure=bool(self.get_parameter("degrade_on_failure").value),
+            match_time_limit_s=float(self.get_parameter("match_time_limit_s").value),
         ))
         self.route_enabled = bool(self.get_parameter("route_enabled").value)
         self.route_error = ""
@@ -140,8 +146,9 @@ class MissionManagerNode(Node):
 
     def _load_route(self) -> None:
         path = resolve_field_layout_path(str(self.get_parameter("field_layout_path").value))
+        rounds = int(self.get_parameter("rounds").value)
         try:
-            plan = load_route_plan(path)
+            plan = load_route_plan(path, rounds=rounds)
         except Exception as exc:  # 缺文件 / 结构变化 / 自检失败
             self.route_error = f"{exc}"
             self.get_logger().error(
@@ -410,6 +417,7 @@ class MissionManagerNode(Node):
         payload = {
             **progress,
             "route_version": None if plan is None else plan.version,
+            "rounds": 1 if plan is None else plan.rounds,
             "next_segment_id": next_segment,
             "work_count": 0 if runner is None else runner.observations.work_count,
             "work_required": None if segment is None else segment.exit.required_count,

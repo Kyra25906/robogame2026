@@ -47,8 +47,15 @@ class RecoveryDecision:
     reason: str
 
 
-def _build_segment_id(plan: RoutePlan) -> str | None:
-    for segment in plan.segments:
+def _build_segment_id(plan: RoutePlan, current_index: int) -> str | None:
+    """**当前这一趟**的搭建段：取下标 >= 当前段的第一处 WORK/PLACE。
+
+    不能简单地取「路线里第一个搭建段」——多趟路线（`rounds > 1`）里那是**上一趟**
+    的搭建段，跳过去等于倒回去重放，会把已经搭好的建筑再搭一遍。
+    """
+    for index, segment in enumerate(plan.segments):
+        if index < current_index:
+            continue
         if segment.role is SegmentRole.WORK and segment.work is WorkKind.PLACE:
             return segment.id
     return None
@@ -74,6 +81,9 @@ def recovery_for_failure(
         return RecoveryDecision(
             RecoveryAction.SAFE_STOP, None, "没有路线信息：停车并释放授权"
         )
+    current_index = (
+        plan.segment_ids.index(segment.id) if segment.id in plan.segment_ids else -1
+    )
 
     if segment.role in (
         SegmentRole.LINE, SegmentRole.RAMP_UP, SegmentRole.RAMP_DOWN, SegmentRole.TURN,
@@ -86,7 +96,7 @@ def recovery_for_failure(
         )
 
     if segment.work is WorkKind.PICK:
-        build = _build_segment_id(plan)
+        build = _build_segment_id(plan, max(current_index, 0))
         if cargo.total >= 1 and build is not None:
             return RecoveryDecision(
                 RecoveryAction.SKIP_TO_BUILD, build,
@@ -94,10 +104,14 @@ def recovery_for_failure(
                 "（已抓到的块仍然计分）",
             )
         retreat = _retreat_segment_id(plan)
-        return RecoveryDecision(
-            RecoveryAction.RETREAT, retreat,
-            "取块失败且框里没有块：没什么可搭，退到撤退位安全收场",
+        reason = (
+            "取块失败且框里没有块：没什么可搭，退到撤退位安全收场"
+            if build is None or cargo.total < 1
+            else "取块失败：退到撤退位安全收场"
         )
+        if build is None and cargo.total >= 1:
+            reason = "取块失败：本趟之后已无搭建段，退到撤退位安全收场"
+        return RecoveryDecision(RecoveryAction.RETREAT, retreat, reason)
 
     if segment.work is WorkKind.PLACE:
         retreat = _retreat_segment_id(plan)

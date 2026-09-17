@@ -161,3 +161,11 @@ test('degradation is flagged so nobody mistakes it for normal progress (B4)', ()
   assert.match(view.text, /已降级 1 次/);
   assert.doesNotMatch(routeLiveView(live({degradations: 0}), 0.1).text, /已降级/);
 });
+
+test('match clock and round count are shown (B4)', () => {
+  const view = routeLiveView(live({match_remaining_s: 245.0, rounds: 1}), 0.1);
+  assert.match(view.text, /剩余 4:05/);
+  assert.doesNotMatch(view.text, /共 1 趟/, "只有一趟时不必显示趟数");
+  assert.match(routeLiveView(live({rounds: 2}), 0.1).text, /共 2 趟/);
+  assert.doesNotMatch(routeLiveView(live({match_remaining_s: null}), 0.1).text, /剩余/);
+});
