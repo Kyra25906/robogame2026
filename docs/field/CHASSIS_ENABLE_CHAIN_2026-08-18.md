@@ -11,10 +11,12 @@
 |---|---|---|---|
 | 1 | **本地长按 PB2 授权**（physical_start=1） | 现场操作员 | 长按 PB2 ~1.5s；看 `/robot/status` 的 `physical_start=true` |
 | 2 | **树莓派发 HELLO 建立会话**（handshake READY） | 算法（robot_bridge） | 日志 `handshake complete`；`_handshake_state=READY` |
-| 3 | **每 150ms 内有 HEARTBEAT 或 CMD_VEL**（看门狗） | 算法（robot_bridge） | `_send_heartbeat` 50Hz 自动发；确认 `/cmd_vel` 或心跳持续 |
+| 3 | **每 250ms 内有 HEARTBEAT 或 CMD_VEL**（看门狗） | 算法（robot_bridge） | `_send_heartbeat` 50Hz 自动发；确认 `/cmd_vel` 或心跳持续 |
 | 4 | **无急停 / 协议故障 / 底盘故障** | 电控 + 现场 | `/robot/status`：`emergency_stop=false`、`mechanism_fault=false`、`error_code=0` |
 | 5 | **遥控器离线**（⚠️ 最容易踩的坑） | 现场操作员 | **手柄必须关机/离线**——手柄在线时底盘切人工接管，树莓派 CMD_VEL 被丢弃，车只听手柄的 |
 | 6 | **限幅非零**（本次电控改动） | 电控 | `chassis.h` 三个宏非 0 + 烧录后确认 |
+
+> ⚠️ **2026-09-17 更正**：第 3 条原写「每 150ms」。固件看门狗已于 **2026-08-18 晚**与电控商定由 150 ms 放宽到 **250 ms**（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）；仓库固件源码为 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`。心跳仍是 50Hz（20 ms 周期），相对 250 ms 的余量因此更大，第 3 条本身不变，只是阈值数字改了。**车上烧录的是否就是这份源码无法从仓库确认**——现场以实测值为准。
 
 ## 数值约定（电控建议，算法已对齐）
 

@@ -73,7 +73,10 @@ STM32必须拒绝 NaN、无穷大和超出实车限幅的值。限幅值在架�
 |---:|---:|---|---|---|
 | 0 | 4 | u32 | host_tick_ms | 树莓派单调时钟低 32 位 |
 
-连续 150 ms 没有收到合法 HEARTBEAT 或 CMD_VEL 时，STM32必须独立将底盘目标速度归零，并设置 STATUS 的 `watchdog_stop`。恢复通信后不得自动恢复旧速度或旧机构动作。
+连续 **250 ms** 没有收到合法 HEARTBEAT 或 CMD_VEL 时，STM32必须独立将底盘目标速度归零，并设置 STATUS 的 `watchdog_stop`。恢复通信后不得自动恢复旧速度或旧机构动作。
+
+> ⚠️ **2026-09-17 更正**：本行原写 150 ms。2026-08-18 晚与电控商定由 150 ms 放宽到 **250 ms**（治标，为 USB 调度/树莓派负载留余量；`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`），仓库固件源码已生效：`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`（使用点 `:1620`）。
+> **但车上 MCU 当前烧录的是否就是这份源码，无法从仓库确认**（`docs/TODO_AND_ISSUES.md` ISSUE-022）。现场必须实测确认，**不得把 250 ms 当成车上已验证的事实**；验收记录写实测毫秒数。
 
 ### 5.3 HELLO (`0x03`，1 字节)
 
@@ -205,7 +208,7 @@ BOOT_SAFE
 ## 8. 首次联调顺序
 
 1. STM32只实现通用帧、CRC、HELLO和ACK，执行器不供电。
-2. 实现HEARTBEAT与150 ms看门狗，通过停止发送心跳验证状态位。
+2. 实现HEARTBEAT与250 ms看门狗（⚠️ **2026-09-17 更正**：原写 150 ms；2026-08-18 晚与电控商定放宽到 250 ms，依据见 5.2 节说明），通过停止发送心跳验证状态位。
 3. 实现STATUS，上位机确认急停、boot_id和电池电压。
 4. 架空轮子，以很小速度验证六个方向和超时停车。
 5. 手推车辆验证ODOM正负号；旋转车辆验证IMU正负号。

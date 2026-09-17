@@ -299,6 +299,8 @@ communication_ok: true
 - 新HELLO清除旧速度；
 - 当前树莓派 `vx/vy/wz` 自动限幅均为 `0.0f`，因此固件明确拒绝所有非零自动运动命令。
 
+> ⚠️ **2026-09-17 补注（不改写历史）**：以上是 2026-08-10 当时只读审查到的固件值。其中「树莓派控制看门狗 150ms」**已不是当前值**——2026-08-18 晚与电控商定放宽到 **250 ms**（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`；固件 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`）。原文保留，仅提示当前值；车上烧录版本仍须实测确认。
+
 ### 本轮正式结论与边界
 
 - `ROSDEP PASS`
