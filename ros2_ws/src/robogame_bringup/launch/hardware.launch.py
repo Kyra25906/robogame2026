@@ -40,7 +40,12 @@ def generate_launch_description():
         Node(package="motion_control", executable="motion_controller", parameters=[common]),
         # B2：巡线控制器必须在场——路线里的巡线段由它驱动底盘（robot_bridge 只
         # 负责把 0x14 巡线遥测解码成 /line_sensor，不控制方向）。
-        Node(package="motion_control", executable="line_follow_controller", parameters=[common]),
+        # 必须带 field 层：机器人授权门控（require_authorization）只在 field 层打开。
+        Node(
+            package="motion_control",
+            executable="line_follow_controller",
+            parameters=[common, field],
+        ),
         Node(package="cube_perception", executable="cube_perception", parameters=[common, field]),
         Node(package="manipulator_client", executable="manipulator_client", parameters=[common, field]),
         Node(

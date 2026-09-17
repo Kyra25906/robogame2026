@@ -62,10 +62,11 @@ motion_controller:
 line_follow_controller:
   ros__parameters:
     # B2：巡线节点与 motion_controller 共用同一个授权话题，避免两个节点抢 /cmd_vel。
-    # 黑白基准仍是「方向默认值」，具体数值必须现场用面板标定后推送
-    # （见 docs/line_follow/CALIBRATION_AND_HARDWARE.md）。
+    # ⚠️ 这里默认 **false**（共用层）：本文件也被「独立巡线联调图」加载，那些图里
+    # 没有任务层（不会广播授权），若在共用层打开就会让巡线节点一动不动。
+    # 比赛环境在 robot_field.yaml 里打开它（hardware.launch.py 传 common+field）。
     active_source: line_follow
-    require_authorization: true
+    require_authorization: false
     authorization_stale_s: 0.5
     kp: 1.0
     kd: 0.1
@@ -78,6 +79,9 @@ line_follow_controller:
     max_reading_gap_s: 0.25
     cmd_stale_s: 0.5
     status_stale_s: 0.3
+    # 黑白基准仍是「方向默认值」，具体数值必须现场用面板标定后推送
+    # （见 docs/line_follow/CALIBRATION_AND_HARDWARE.md 与
+    #  docs/field/现场待测清单_B2B3_待填值.md A2 节）。
 
 cube_perception:
   ros__parameters:

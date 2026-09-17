@@ -224,6 +224,95 @@ def decide(
 
 
 # ---------------------------------------------------------------------------
+# B3：路口转弯命令（任务层 → 巡线节点）
+# ---------------------------------------------------------------------------
+#
+# 转弯由**巡线节点**执行（它才有 /line_sensor 与 PD 纠偏状态），任务层只负责
+# 「在哪一段、往哪转、要稳几拍」。两者之间用一条 JSON 消息交接：
+# 任务层在进入 JUNCTION_TURN 段时下发一次，巡线节点在授权给它的时候执行。
+#
+# 为什么用 JSON 而不是新增消息类型：与 `/line_follow/status`（结构化 JSON）
+# 同一套做法，避免了改消息哈希引发整包重建；解析失败一律返回 None（不猜）。
+
+
+def turn_command_for(
+    segment: RouteSegmentPlan | None, *, turn_rate_radps: float = 0.6
+) -> dict[str, Any] | None:
+    """本段的转弯命令（非转弯段返回 None）。
+
+    参数来自 B1 的路线登记（方向、稳定拍数、期望路口签名）与 `junction_turn`
+    的占位值（角速度/最短转向时间）——**同一份来源**，不另写一套。
+    """
+    from .junction_turn import TurnParams, turn_params_for_direction
+    from .mission_route import ExitKind, TurnDirection
+
+    if segment is None or segment.exit.kind is not ExitKind.JUNCTION_TURN:
+        return None
+    direction = segment.exit.turn
+    if direction is None or direction is TurnDirection.STRAIGHT:
+        return None
+    params: TurnParams = turn_params_for_direction(
+        direction,
+        reacquire_samples=segment.exit.settle_samples,
+        expect_states=tuple(segment.exit.expected_line_states),
+        turn_rate_radps=turn_rate_radps,
+        use_yaw_check=segment.exit.require_yaw,
+    )
+    return {
+        "segment_id": segment.id,
+        "ref": segment.exit.at_ref,
+        "direction": params.direction.value,
+        "expect_states": [state.value for state in params.expect_states],
+        "junction_samples": params.junction_samples,
+        "reacquire_samples": params.reacquire_samples,
+        "turn_rate_radps": params.turn_rate_radps,
+        "approach_speed_mps": params.approach_speed_mps,
+        "min_turn_s": params.min_turn_s,
+        "max_turn_s": params.max_turn_s,
+        "approach_timeout_s": params.approach_timeout_s,
+        "center_tolerance": params.center_tolerance,
+        "use_yaw_check": params.use_yaw_check,
+        "yaw_fraction": params.yaw_fraction,
+        "around_sign": params.around_sign,
+    }
+
+
+def parse_turn_command(text: str):
+    """把转弯命令 JSON 还原成 `TurnParams`；任何异常都返回 None（不猜）。"""
+    from .junction_turn import TurnParams
+    from .mission_route import TurnDirection
+
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        direction = TurnDirection(str(payload["direction"]))
+        expect_states = tuple(LineSensorState(str(item)) for item in payload["expect_states"])
+        return TurnParams(
+            direction=direction,
+            expect_states=expect_states,
+            junction_samples=int(payload["junction_samples"]),
+            turn_rate_radps=float(payload["turn_rate_radps"]),
+            approach_speed_mps=float(payload["approach_speed_mps"]),
+            min_turn_s=float(payload["min_turn_s"]),
+            max_turn_s=float(payload["max_turn_s"]),
+            approach_timeout_s=float(payload["approach_timeout_s"]),
+            center_tolerance=float(payload["center_tolerance"]),
+            reacquire_samples=int(payload["reacquire_samples"]),
+            use_yaw_check=bool(payload["use_yaw_check"]),
+            yaw_fraction=float(payload["yaw_fraction"]),
+            around_sign=int(payload["around_sign"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
 # 搭建 2 层对放置高度的要求（与 robot.yaml 比对）
 # ---------------------------------------------------------------------------
 

@@ -44,6 +44,7 @@ from robogame_core.route_loader import (  # noqa: E402
     load_route_plan,
     resolve_field_layout_path,
 )
+from tools.launch_params import effective_parameter  # noqa: E402
 
 
 def _tree(path: Path) -> ast.Module:
@@ -231,18 +232,43 @@ class GatingWiringTests(unittest.TestCase):
 
 
 class CompetitionConfigBindingTests(unittest.TestCase):
-    """比赛配置三处必须同时到位，否则车不会按路线跑。"""
+    """比赛配置三处必须同时到位，否则车不会按路线跑。
 
-    def test_common_config_requires_authorization_for_both_movers(self):
-        text = (CONFIG_DIR / "robot.yaml").read_text(encoding="utf-8")
-        motion = text.split("motion_controller:", 1)[1].split("line_follow_controller:", 1)[0]
-        line = text.split("line_follow_controller:", 1)[1].split("cube_perception:", 1)[0]
-        self.assertIn("require_authorization: true", motion)
-        self.assertIn("require_authorization: true", line)
-        self.assertIn("active_source: line_follow", line)
+    这里断言的是**最终生效值**（层顺序 + 内联覆盖），不是「文件里出现过某个
+    字符串」——文本级断言查不出「共用层打开了门控 → 独立联调图一动不动」这类
+    跨文件语义冲突（2026-09-17 真实踩过）。
+    """
+
+    CONFIG_ROOT = SRC_ROOT / "robogame_bringup" / "config"
+
+    def _effective(self, launch: str, package: str, executable: str, param: str):
+        return effective_parameter(
+            LAUNCH_DIR / launch, package, executable, param, config_root=self.CONFIG_ROOT
+        )
+
+    def test_competition_stack_enforces_single_authority(self):
+        """hardware.launch.py 里两个运动节点都必须开着授权门控。"""
+        for package, executable in (
+            ("motion_control", "motion_controller"),
+            ("motion_control", "line_follow_controller"),
+        ):
+            self.assertIs(
+                self._effective("hardware.launch.py", package, executable, "require_authorization"),
+                True,
+                f"{executable} 在比赛图里必须要求授权",
+            )
+
+    def test_standalone_line_graphs_disable_authorization(self):
+        """没有任务层的图必须关掉门控，否则巡线节点永远等不到授权。"""
+        for launch in ("line_follow_hardware.launch.py", "line_follow_mock.launch.py"):
+            self.assertIs(
+                self._effective(launch, "motion_control", "line_follow_controller", "require_authorization"),
+                False,
+                f"{launch} 没有任务层：必须让巡线节点不要求授权",
+            )
 
     def test_field_config_enables_the_route(self):
-        text = (CONFIG_DIR / "robot_field.yaml").read_text(encoding="utf-8")
+        text = (self.CONFIG_ROOT / "robot_field.yaml").read_text(encoding="utf-8")
         self.assertIn("mission_manager:", text)
         self.assertIn("route_enabled: true", text)
 
@@ -254,10 +280,13 @@ class CompetitionConfigBindingTests(unittest.TestCase):
         mission_block = text.split('executable="mission_manager"', 1)[1].split("),", 1)[0]
         self.assertIn("common", mission_block)
         self.assertIn("field", mission_block)
+        # 巡线节点也必须带 field 层（授权门控在 field 层打开）
+        line_block = text.split('executable="line_follow_controller"', 1)[1].split("),", 1)[0]
+        self.assertIn("field", line_block)
 
     def test_demo_configs_stay_in_legacy_mode(self):
         for name in ("robot_mock.yaml", "single_cube.yaml"):
-            text = (CONFIG_DIR / name).read_text(encoding="utf-8")
+            text = (self.CONFIG_ROOT / name).read_text(encoding="utf-8")
             self.assertNotIn("route_enabled: true", text, name)
 
 

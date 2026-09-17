@@ -25,3 +25,11 @@ mission_manager:
     route_enabled: true
     # 每段独立超时预算：坡道/巡线段较短，20s 足够；现场可按实测收紧。
     state_timeout_s: 20.0
+
+line_follow_controller:
+  ros__parameters:
+    # 比赛环境才打开授权门控：此时有任务层广播唯一授权（谁都不许抢 /cmd_vel）。
+    # 独立巡线联调图刻意不启动任务层，所以那里必须内联覆盖回 false
+    # （见 line_follow_hardware.launch.py 的内联参数与
+    #  tests/test_launch_graph.py 的豁免测试）。
+    require_authorization: true

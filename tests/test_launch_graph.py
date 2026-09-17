@@ -17,6 +17,7 @@ from tools.launch_graph import (
     missing_publishers,
     node_topics,
     parse_launch_nodes,
+    _node_parameter_info,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -96,15 +97,34 @@ class LaunchGraphCompletenessTests(unittest.TestCase):
     def test_standalone_line_launch_justifies_its_active_source_exemption(self):
         """两张独立巡线图有意不启动任务层，因此没有 /mission/active_source。
 
-        这条豁免必须一直成立：它们**不能**开启 require_authorization，否则巡线节点
-        会因为永远收不到授权而一动不动（独立联调与 mock smoke 直接失效）。
+        豁免必须一直成立，而且**按语义检查、不只看文本**：一旦某张图给巡线节点
+        传了 `common` 层，`robot.yaml` 里的 `require_authorization: true` 就会生效
+        → 巡线节点永远等不到授权 → 独立联调一动不动。这时必须在该图内联覆盖为 false。
         """
-        hardware = (LAUNCH_DIR / "line_follow_hardware.launch.py").read_text(encoding="utf-8")
-        self.assertNotIn("require_authorization", hardware)
-        self.assertIn('"active_source": "line_follow"', hardware)
-        mock = (LAUNCH_DIR / "line_follow_mock.launch.py").read_text(encoding="utf-8")
-        self.assertNotIn("require_authorization", mock)
-        self.assertIn('"active_source": "line_follow"', mock)
+        for name in ("line_follow_hardware.launch.py", "line_follow_mock.launch.py"):
+            path = LAUNCH_DIR / name
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('"active_source": "line_follow"', text, name)
+            line_nodes = [
+                layers
+                for package, executable, layers, _inline, _names in _node_parameter_info(path)
+                if (package, executable) == ("motion_control", "line_follow_controller")
+            ]
+            self.assertTrue(line_nodes, f"{name} 里没有巡线节点？")
+            for layers in line_nodes:
+                if "common" in layers:
+                    self.assertRegex(
+                        text,
+                        r"['\"]require_authorization['\"]\s*:\s*False",
+                        f"{name} 给巡线节点传了 common 层，必须内联覆盖 require_authorization: False，"
+                        "否则独立联调时巡线节点永远收不到授权而不动",
+                    )
+                else:
+                    self.assertNotIn(
+                        "require_authorization",
+                        text,
+                        f"{name} 没传 common 层，就不该出现 require_authorization（会误导读者）",
+                    )
 
 
 class LaunchGraphParserTests(unittest.TestCase):

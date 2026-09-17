@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import unittest
 
@@ -364,6 +365,77 @@ class RouteBindingTests(unittest.TestCase):
                 break
         self.assertTrue(done, f"右转未完成：{out.reason}")
         self.assertLessEqual(clock, params.max_turn_s, "不应靠超时结束")
+
+
+class TurnCommandContractTests(unittest.TestCase):
+    """B3：任务层 → 巡线节点的转弯命令（JSON 交接，纯逻辑可验证）。"""
+
+    def test_only_junction_turn_segments_produce_a_command(self):
+        from robogame_core.mission_dispatch import turn_command_for
+
+        plan = _plan()
+        produced = {}
+        for segment in plan.segments:
+            command = turn_command_for(segment)
+            if command is not None:
+                produced[segment.id] = command
+        self.assertEqual(set(produced), {"S01_LINE_START", "S02_LINE_MAIN"})
+        self.assertEqual(produced["S01_LINE_START"]["direction"], TurnDirection.RIGHT.value)
+        self.assertEqual(produced["S02_LINE_MAIN"]["direction"], TurnDirection.LEFT.value)
+        self.assertEqual(produced["S01_LINE_START"]["ref"], "N02")
+        self.assertEqual(produced["S02_LINE_MAIN"]["ref"], "N06")
+
+    def test_command_round_trips_through_json(self):
+        from robogame_core.mission_dispatch import parse_turn_command, turn_command_for
+
+        plan = _plan()
+        for segment in plan.segments:
+            command = turn_command_for(segment)
+            if command is None:
+                continue
+            params = parse_turn_command(json.dumps(command))
+            self.assertIsNotNone(params)
+            self.assertIs(params.direction, segment.exit.turn)
+            self.assertEqual(params.reacquire_samples, segment.exit.settle_samples)
+            self.assertEqual(params.expect_states, tuple(segment.exit.expected_line_states))
+            self.assertLess(params.min_turn_s, params.max_turn_s)
+
+    def test_parsed_command_drives_a_real_turn(self):
+        from robogame_core.mission_dispatch import parse_turn_command, turn_command_for
+
+        plan = _plan()
+        command = turn_command_for(plan.segment("S01_LINE_START"), turn_rate_radps=1.0)
+        params = parse_turn_command(json.dumps(command))
+        turner = JunctionTurner(params)
+        clock = 0.0
+        for _ in range(5):
+            turner.update(line_state=ON, deviation=0.0, now=clock); clock += 0.02
+        turner.update(line_state=JUNCTION, now=clock); clock += 0.02
+        out = turner.update(line_state=JUNCTION, now=clock); clock += 0.02
+        self.assertEqual(out.wz, -params.turn_rate_radps, "右转必须是负角速度")
+        while clock < params.min_turn_s + 0.1:
+            turner.update(line_state=LineSensorState.LOST, now=clock); clock += 0.02
+        done = False
+        for _ in range(40):
+            out = turner.update(line_state=ON, deviation=0.0, now=clock); clock += 0.02
+            if out.done:
+                done = True
+                break
+        self.assertTrue(done, f"按命令参数未能完成转弯：{out.reason}")
+
+    def test_garbage_command_is_rejected_not_guessed(self):
+        from robogame_core.mission_dispatch import parse_turn_command
+
+        for text in ("", "   ", "not json", "{}", '{"direction": "SIDEWAYS"}', "[1,2,3]"):
+            self.assertIsNone(parse_turn_command(text), repr(text))
+
+    def test_missing_field_is_rejected(self):
+        from robogame_core.mission_dispatch import parse_turn_command, turn_command_for
+
+        command = turn_command_for(_plan().segment("S01_LINE_START"))
+        for key in ("direction", "reacquire_samples", "turn_rate_radps", "max_turn_s"):
+            broken = json.dumps({k: v for k, v in command.items() if k != key})
+            self.assertIsNone(parse_turn_command(broken), key)
 
 
 if __name__ == "__main__":
