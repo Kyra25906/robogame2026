@@ -39,3 +39,18 @@ _review_requirements_extract.txt
 _dialogue_doc_work/
 _inspect_four_motor/
 ����ͬ��PIDģ��/
+
+# Keil 器件支持包（厂商二进制，单个 289MB，禁止入库）
+Keil.STM32F4xx_DFP.*.pack
+# STM32 电控 Keil 工程：厂商 CMSIS/HAL 与编译产物不入库，源码另行归档
+Four_Motor_PID_Test_1/
+*.o
+*.crf
+*.axf
+*.lnp
+*.sct
+*.build_log.htm
+MDK-ARM/*/*.map
+MDK-ARM/*/*.lst
+MDK-ARM/*/*.dep
+MDK-ARM/*/*.d
