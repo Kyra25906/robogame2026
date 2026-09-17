@@ -1,7 +1,11 @@
 # 巡线遥测 0x14 接口对齐（算法 ↔ 电控，2026-08-19）
 
-> 状态：**草案，待电控确认**。冻结前不实现固件上送、不写上位机解码（项目红线：不猜测载荷）。
-> 关联：`STM32_SERIAL_PROTOCOL_V1.md`（V1 协议，0x14 尚不存在）、`docs/line_follow/README.md` 与 `CALIBRATION_AND_HARDWARE.md`（上位机巡线算法与标定）、`docs/TODO_AND_ISSUES.md`「巡线链路核对记录」。
+> 状态：**草案，待电控确认**。~~冻结前不实现固件上送、不写上位机解码（项目红线：不猜测载荷）。~~
+> ⚠️ **2026-09-17 更正：本行「未实现」的说法已过期——两侧其实都已实现**（本文仍是待书面确认的草案，但代码已按本草案落地）：
+> - 固件上送：`rpi_protocol.c:144` `RPI_MSG_LINE_TELEMETRY 0x14U`、`:1552` `RPI_SendLineTelemetry()`、`:1665` 在 `RPI_Update` 内周期调用；
+> - 上位机解码：`robogame_core/serial_protocol.py:18` `LINE_TELEMETRY_PAYLOAD = struct.Struct("<I8HB")`、`:29` `MSG_TYPE_LINE_TELEMETRY = 0x14`；`robot_bridge/node.py:1096` 路由并按 `:209/:1109` 发布 `/line_sensor`。
+> 因此本文从「待实现」变为「待**书面冻结**」；真车剩余工作是把 `/line_sensor` 的发布者由 mock 换成上述解码结果。详见 `docs/TODO_AND_ISSUES.md` 的巡线链路核对记录。
+> 关联：~~`STM32_SERIAL_PROTOCOL_V1.md`（V1 协议，0x14 尚不存在）~~ **（2026-09-17 注：0x14 已实现在代码与固件里，但 V1 文档尚未收录，属文档待补）**、`docs/line_follow/README.md` 与 `CALIBRATION_AND_HARDWARE.md`（上位机巡线算法与标定）、`docs/TODO_AND_ISSUES.md`「巡线链路核对记录」。
 > 分工（已定）：巡线 = 上位机决策与控制，**下位机只做八路灰度采集上送**。偏差计算、PD 纠偏、状态机都在上位机 `robogame_core/line_follow.py`（已实现，31 项测试通过）。
 
 ---
@@ -25,7 +29,7 @@
   - 解析 `$A,x1:4096,x2:4096,...#`（12bit 模拟值 0~4095）与 `$D,x1:0,x2:0,...#`（数字 0/1）帧；
   - 已接入 `main.c`（`LineSensor_Init()` / 主循环 `LineSensor_Update()` / UART 回调）与 `stm32f4xx_it.c` UART7 中断；
   - `line_sensor.h` 明说「仅 Keil Watch 观察，不接入任何控制」——**只采集，未上送**。
-- `rpi_protocol.c` 现有消息：0x01/02/03（下行）、0x10/11/12/13（遥测/ACK）、0x20/21/22（机构），**无巡线消息**；`STM32_SERIAL_PROTOCOL_V1.md` 无巡线遥测定义。
+- ~~`rpi_protocol.c` 现有消息：0x01/02/03（下行）、0x10/11/12/13（遥测/ACK）、0x20/21/22（机构），**无巡线消息**~~ ⚠️ **2026-09-17 更正：固件已加入 `0x14 LINE_TELEMETRY`**（`rpi_protocol.c:144` 宏、`:1552` `RPI_SendLineTelemetry()`、`:1665` 周期调用），故不再「无巡线消息」；`STM32_SERIAL_PROTOCOL_V1.md` **仍未收录** 0x14 定义（文档待补，代码已存在）。
 - 上位机 `line_follow.py` 接口：`compute_deviation_weighted(raw_values, threshold)` 吃 **0..1 归一化原始值**，归一化公式 `(raw - white_min)/(black_max - white_min)` 需要每路黑白原始参考值——都由上位机用本遥测通道的数据标定，电控无需上报标定值。
 
 ## 2. 建议的 0x14 载荷定义（21 字节）

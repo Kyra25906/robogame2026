@@ -141,20 +141,32 @@ flags：
 
 ACK只表示“帧已接收且请求合法”，不表示机构动作已经完成。
 
-### 5.8 MECHANISM_COMMAND (`0x20`，9 字节)
+### 5.8 MECHANISM_COMMAND (`0x20`，**12 字节**)
+
+> ⚠️ **2026-09-17 更正**：本节原写「9 字节」，且字段表漏了 `flags` 字节——**照原表实现会与已上线代码不兼容**。
+> 实际布局以代码为准：`robogame_core/serial_protocol.py:19`
+> `MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBBiI")`（= 12 字节），
+> 固件侧同布局见 `rpi_protocol.c`；对齐文档见 `MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md`。
 
 | 偏移 | 长度 | 类型 | 字段 | 说明 |
 |---:|---:|---|---|---|
 | 0 | 2 | u16 | command_id | 机构命令编号，用于匹配反馈 |
 | 2 | 1 | u8 | operation | 动作编号 |
-| 3 | 4 | i32 | parameter | 动作参数 |
-| 7 | 2 | u16 | timeout_ms | STM32端动作超时 |
+| 3 | 1 | u8 | flags | 标志位（原表漏项；代码 `"<HBBiI"` 中第二个 B） |
+| 4 | 4 | i32 | parameter | 动作参数 |
+| 8 | 4 | u32 | timeout_ms | STM32端动作超时（代码为 u32，非 u16） |
 
 operation：`1=GRAB`、`2=RELEASE`、`3=LIFT`、`4=RETREAT`、`5=STOP`。
 
 参数约定：LIFT使用目标高度毫米；RETREAT使用后退距离毫米；其余动作V1必须填0。负值仅允许用于未来明确支持的相对动作，V1的LIFT和RETREAT参数不得为负。
 
-### 5.9 MECHANISM_STATUS (`0x21`，8 字节)
+### 5.9 MECHANISM_STATUS (`0x21`，**10 字节**)
+
+> ⚠️ **2026-09-17 更正**：本节原写「8 字节」，且把 `duration_ms` 写成 u16（2 字节）。
+> **字段顺序与偏移原本是对的**——错误的是总长与最后一个字段的类型。
+> 实际布局以代码为准：`serial_protocol.py:20`
+> `MECHANISM_STATUS_PAYLOAD = struct.Struct("<HBBHI")`（= **10** 字节），
+> 解包顺序 `(command_id, operation, state, error_code, duration_ms)`。
 
 | 偏移 | 长度 | 类型 | 字段 | 说明 |
 |---:|---:|---|---|---|
@@ -162,7 +174,9 @@ operation：`1=GRAB`、`2=RELEASE`、`3=LIFT`、`4=RETREAT`、`5=STOP`。
 | 2 | 1 | u8 | operation | 动作编号 |
 | 3 | 1 | u8 | state | 动作状态 |
 | 4 | 2 | u16 | error_code | 成功时为0 |
-| 6 | 2 | u16 | duration_ms | 从接收到当前状态的耗时 |
+| 6 | 4 | u32 | duration_ms | 从接收到当前状态的耗时（**u32**，原表误写 u16） |
+
+> 最终依据是 `serial_protocol.py:298-310` 的 `encode/decode_mechanism_status`；本表如与代码冲突，以代码为准。
 
 state：`1=ACCEPTED`、`2=RUNNING`、`3=SUCCEEDED`、`4=FAILED`、`5=CANCELLED`。
 
