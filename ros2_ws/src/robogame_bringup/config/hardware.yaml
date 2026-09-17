@@ -8,6 +8,15 @@ robot_bridge:
     mechanism_ack_timeout_s: 0.1
     mechanism_status_timeout_s: 0.3
     mechanism_max_attempts: 3
+    # 机械臂关节值域（ARM_SET）。空串 = 一个关节都没冻结 = /arm/set_joint 一律
+    # 返回 9010。这是默认且刻意的：肩/肘/腕的角度范围与角度→脉宽映射尚未由
+    # 电控与机械冻结（给机械组现场问答表 2026-08-19 C-11），此时下发角度是猜。
+    # 冻结后填 "关节编号:下限:上限;..."（编号同固件 arm.h：0=腰/云盘,1=肩,2=肘,3=腕），
+    # 并必须同时写 arm_joint_ranges_evidence 说明出处，例如：
+    #   arm_joint_ranges: "0:0:90;1:0:180;2:0:180;3:0:180"
+    #   arm_joint_ranges_evidence: "2026-08-2x 电控+机械现场标定（记录编号 …）"
+    arm_joint_ranges: ""
+    arm_joint_ranges_evidence: ""
     # Provisional conservative variances; replace with field measurements.
     odom_pose_xy_variance: 0.25
     odom_pose_yaw_variance: 0.1219

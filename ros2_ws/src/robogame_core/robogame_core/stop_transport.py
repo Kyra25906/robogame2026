@@ -19,6 +19,7 @@ class StopDispatchResult:
     next_sequence: int
     zero_velocity_sent: bool
     emergency_stop_sent: bool
+    sequence_of_zero: int | None = None
 
 
 def dispatch_stop_frames(
@@ -37,6 +38,7 @@ def dispatch_stop_frames(
             encode_velocity(0.0, 0.0, 0.0, mode=0),
         )
     )
+    zero_sequence = sequence if zero_sent else None
     if zero_sent:
         sequence = (sequence + 1) & 0xFFFF
 
@@ -51,4 +53,5 @@ def dispatch_stop_frames(
         next_sequence=sequence,
         zero_velocity_sent=zero_sent,
         emergency_stop_sent=emergency_sent,
+        sequence_of_zero=zero_sequence,
     )

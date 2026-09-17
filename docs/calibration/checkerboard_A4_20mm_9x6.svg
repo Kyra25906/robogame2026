@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 297 210">
+<title>Chessboard calibration target: 9 by 6 inner corners, 20 mm squares</title>
+<desc>A4 landscape. Print actual size, no fit to page. Board 200 by 140 mm. Physical origin is the first inner corner below the TOP LEFT mark.</desc>
+<rect width="297" height="210" fill="white"/>
+<g fill="black" font-family="Arial, sans-serif"><text x="48.5" y="15" font-size="4">CALIBRATION  |  9 x 6 INNER CORNERS  |  SQUARE 20 mm</text><text x="48.5" y="23" font-size="3">A4 LANDSCAPE / ACTUAL SIZE 100% / NO FIT TO PAGE</text><path d="M 41,30 L 44,25 L 47,30 Z"/><text x="49" y="30" font-size="2.6">TOP LEFT</text></g>
+<g id="checkerboard" fill="black" shape-rendering="crispEdges">
+<rect x="48.5" y="35" width="20" height="20"/>
+<rect x="88.5" y="35" width="20" height="20"/>
+<rect x="128.5" y="35" width="20" height="20"/>
+<rect x="168.5" y="35" width="20" height="20"/>
+<rect x="208.5" y="35" width="20" height="20"/>
+<rect x="68.5" y="55" width="20" height="20"/>
+<rect x="108.5" y="55" width="20" height="20"/>
+<rect x="148.5" y="55" width="20" height="20"/>
+<rect x="188.5" y="55" width="20" height="20"/>
+<rect x="228.5" y="55" width="20" height="20"/>
+<rect x="48.5" y="75" width="20" height="20"/>
+<rect x="88.5" y="75" width="20" height="20"/>
+<rect x="128.5" y="75" width="20" height="20"/>
+<rect x="168.5" y="75" width="20" height="20"/>
+<rect x="208.5" y="75" width="20" height="20"/>
+<rect x="68.5" y="95" width="20" height="20"/>
+<rect x="108.5" y="95" width="20" height="20"/>
+<rect x="148.5" y="95" width="20" height="20"/>
+<rect x="188.5" y="95" width="20" height="20"/>
+<rect x="228.5" y="95" width="20" height="20"/>
+<rect x="48.5" y="115" width="20" height="20"/>
+<rect x="88.5" y="115" width="20" height="20"/>
+<rect x="128.5" y="115" width="20" height="20"/>
+<rect x="168.5" y="115" width="20" height="20"/>
+<rect x="208.5" y="115" width="20" height="20"/>
+<rect x="68.5" y="135" width="20" height="20"/>
+<rect x="108.5" y="135" width="20" height="20"/>
+<rect x="148.5" y="135" width="20" height="20"/>
+<rect x="188.5" y="135" width="20" height="20"/>
+<rect x="228.5" y="135" width="20" height="20"/>
+<rect x="48.5" y="155" width="20" height="20"/>
+<rect x="88.5" y="155" width="20" height="20"/>
+<rect x="128.5" y="155" width="20" height="20"/>
+<rect x="168.5" y="155" width="20" height="20"/>
+<rect x="208.5" y="155" width="20" height="20"/>
+</g>
+<g fill="black" font-family="Arial, sans-serif" font-size="3"><text x="48.5" y="184">BOARD: 200 x 140 mm / 10 x 7 squares / 54 inner corners</text><text x="48.5" y="190">Origin: first inner corner near TOP LEFT. +X right, +Y down.</text><text x="48.5" y="200">CHECK LENGTH</text><text x="174" y="200">100 mm</text></g>
+<path d="M 72,199 H 172 M 72,196 V 202 M 172,196 V 202" stroke="black" stroke-width="0.25" fill="none"/>
+</svg>

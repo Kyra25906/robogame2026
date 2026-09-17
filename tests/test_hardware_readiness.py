@@ -1,4 +1,6 @@
 import ast
+import queue
+import threading
 import unittest
 from pathlib import Path
 
@@ -629,7 +631,11 @@ class RobotBridgeCmdVelBehavioralTests(unittest.TestCase):
         bridge.sequence = 0
         bridge.last_command = 0.0
         bridge._cmd_vel_block_warned = False
+        # _on_cmd_vel 的 mock 限幅 gate 需要 mock_mode（78d400f 引入 gate 时
+        # 未同步 setUp，真机行为测试曾因缺该属性必挂）。
+        bridge.mock_mode = False
         bridge._logger = MagicMock()
+        bridge.get_logger = MagicMock(return_value=bridge._logger)
         self.bridge = bridge
         self.Velocity2D = Velocity2D
 
@@ -689,6 +695,116 @@ class RobotBridgeCmdVelBehavioralTests(unittest.TestCase):
         self.bridge._on_cmd_vel(self._cmd_vel_msg(0.0, 0.0, 0.0))
         self.assertAlmostEqual(self.bridge.velocity.vx, 0.0)
         self.assertAlmostEqual(self.bridge.velocity.wz, 0.0)
+
+
+class RobotBridgeCmdVelTxLogTests(unittest.TestCase):
+    """2026-08-19 电控分析请求：发出的 CMD_VEL 必须带时间戳打日志。
+
+    电控侧计数器观测到 CMD_VEL 80 条里 5 条停车（~300ms 顿挫）。日志要能
+    区分来源：cmd_vel（位置控制器转发，含 0 速度）/ timeout_zero（bridge
+    超时插零速）/ status_failsafe / shutdown / chassis_stop。默认关闭
+    （cmd_vel_tx_log=False），开启后只在 write 成功时记录。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._skip_reason = None
+        try:
+            import rclpy  # noqa: F401
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"rclpy unavailable ({exc}); skipping"
+            return
+        try:
+            from robot_bridge.node import RobotBridge, _HANDSHAKE_READY
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"robot_bridge unavailable ({exc}); skipping"
+            return
+        cls.RobotBridge = RobotBridge
+        cls._HANDSHAKE_READY = _HANDSHAKE_READY
+
+    def setUp(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+        from unittest.mock import MagicMock
+        from robogame_core.models import Velocity2D
+
+        bridge = self.RobotBridge.__new__(self.RobotBridge)
+        bridge.serial = _FakeSerial()
+        bridge.sequence = 7
+        bridge._handshake_state = self._HANDSHAKE_READY
+        bridge._communication_ok = True
+        bridge.velocity = Velocity2D(0.0, 0.0, 0.0)
+        bridge._cmd_vel_block_warned = False
+        # _on_cmd_vel 的 mock 限幅 gate 需要 mock_mode；这里走真实（非 mock）路径。
+        bridge.mock_mode = False
+        bridge.cmd_vel_tx_log = True
+        bridge._logger = MagicMock()
+        bridge.get_logger = MagicMock(return_value=bridge._logger)
+        bridge.get_clock = MagicMock()
+        bridge.get_clock.return_value.now.return_value.to_msg.return_value = (
+            _FakeStamp()
+        )
+        self.bridge = bridge
+
+    def test_timeout_zero_is_logged_with_reason_and_sequence(self):
+        self.bridge._send_zero_velocity()
+        info_calls = [
+            call.args[0] for call in self.bridge._logger.info.call_args_list
+        ]
+        self.assertEqual(len(info_calls), 1)
+        line = info_calls[0]
+        self.assertIn("reason=timeout_zero", line)
+        self.assertIn("seq=7", line)
+        self.assertIn("vx=0.000 vy=0.000 wz=0.000", line)
+        self.assertEqual(self.bridge.sequence, 8)
+
+    def test_cmd_vel_forward_is_logged_with_values(self):
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.linear.x = 0.25
+        msg.linear.y = -0.10
+        msg.angular.z = 0.50
+        self.bridge._on_cmd_vel(msg)
+        info_calls = [
+            call.args[0] for call in self.bridge._logger.info.call_args_list
+        ]
+        self.assertEqual(len(info_calls), 1)
+        line = info_calls[0]
+        self.assertIn("reason=cmd_vel", line)
+        self.assertIn("seq=7", line)
+        self.assertIn("vx=0.250 vy=-0.100 wz=0.500", line)
+
+    def test_status_failsafe_is_logged(self):
+        from robogame_core.models import Velocity2D
+
+        self.bridge.mock_mode = False
+        self.bridge.velocity = Velocity2D(0.6, 0.0, 0.2)
+        self.bridge._enter_status_timeout_failsafe()
+        info_calls = [
+            call.args[0] for call in self.bridge._logger.info.call_args_list
+        ]
+        self.assertTrue(
+            any("reason=status_failsafe" in line for line in info_calls),
+            info_calls,
+        )
+
+    def test_logging_disabled_by_default(self):
+        self.bridge.cmd_vel_tx_log = False
+        self.bridge._send_zero_velocity()
+        self.bridge._logger.info.assert_not_called()
+        self.assertEqual(self.bridge.sequence, 8, "write still happens")
+
+    def test_blocked_zero_velocity_is_not_logged(self):
+        self.bridge._communication_ok = False
+        self.bridge._send_zero_velocity()
+        self.bridge._logger.info.assert_not_called()
+        self.assertEqual(self.bridge.sequence, 7, "no write when untrusted")
+
+
+class _FakeStamp:
+    sec = 123
+    nanosec = 456000000
 
 
 class _FakeSerial:
@@ -1000,6 +1116,81 @@ class RobotBridgeTimeoutStopTests(unittest.TestCase):
             (self.bridge.velocity.vx, self.bridge.velocity.vy, self.bridge.velocity.wz),
             (0.0, 0.0, 0.0),
         )
+
+
+class RobotBridgeReaderThreadTests(unittest.TestCase):
+    """G5.5 (2026-08-19): 独立串口读线程。
+
+    树莓派 4B 高负载时 20ms _tick 定时器读取延迟曾直接造成 USB CDC
+    backpressure（odom 丢帧根因）。读线程把「读」与「调度」解耦：
+    - 线程存在时 _drain_rx 从 _rx_queue 取；
+    - 无线程（mock / __new__ 单测）回退同步 _safe_serial_read；
+    - shutdown_transport 停止线程且不破坏 __new__ 对象。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._skip_reason = None
+        try:
+            import rclpy  # noqa: F401
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"rclpy unavailable ({exc}); skipping"
+            return
+        try:
+            from robot_bridge.node import RobotBridge
+        except ModuleNotFoundError as exc:
+            cls._skip_reason = f"robot_bridge unavailable ({exc}); skipping"
+            return
+        cls.RobotBridge = RobotBridge
+
+    def setUp(self):
+        if self._skip_reason:
+            self.skipTest(self._skip_reason)
+        from unittest.mock import MagicMock
+
+        bridge = self.RobotBridge.__new__(self.RobotBridge)
+        bridge.mock_mode = False
+        bridge.serial = None
+        bridge.sequence = 0
+        bridge._logger = MagicMock()
+        bridge.get_logger = MagicMock(return_value=bridge._logger)
+        bridge._reader_stop = threading.Event()
+        bridge._reader_thread = None
+        bridge._rx_queue = queue.SimpleQueue()
+        self.bridge = bridge
+
+    def test_drain_rx_without_thread_falls_back_to_sync_read(self):
+        self.bridge.serial = _FakeSerial(read_data=b"\xaa\xbb")
+        self.assertEqual(self.bridge._drain_rx(), b"\xaa\xbb")
+
+    def test_drain_rx_with_thread_drains_queue_only(self):
+        self.bridge._reader_thread = object()  # 非 None → 走队列路径
+        self.bridge._rx_queue.put(b"\x01")
+        self.bridge._rx_queue.put(b"\x02")
+        self.assertEqual(self.bridge._drain_rx(), b"\x01\x02")
+        self.assertTrue(self.bridge._rx_queue.empty())
+
+    def test_stop_reader_thread_without_thread_is_noop(self):
+        self.bridge._stop_reader_thread()
+        self.assertIsNone(self.bridge._reader_thread)
+
+    def test_shutdown_transport_stops_reader_and_closes_serial(self):
+        from unittest.mock import MagicMock
+
+        serial = _FakeSerial()
+        self.bridge.serial = serial
+        self.bridge._stop_reader_thread = MagicMock()
+        self.bridge.shutdown_transport()
+        self.bridge._stop_reader_thread.assert_called_once_with()
+        self.assertTrue(serial.closed)
+        self.assertIsNone(self.bridge.serial)
+
+    def test_reader_loop_puts_read_bytes_into_queue(self):
+        self.bridge._rx_queue = queue.SimpleQueue()
+        self.bridge.serial = _FakeSerial(read_data=b"\xaa\x55\x01")
+        # 手动驱动一轮读线程逻辑，验证数据进入队列。
+        self.bridge._reader_loop_step()
+        self.assertEqual(self.bridge._rx_queue.get_nowait(), b"\xaa\x55\x01")
 
 
 if __name__ == "__main__":

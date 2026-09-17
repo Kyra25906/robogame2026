@@ -53,9 +53,13 @@
 
 - [x] `P1` 第二位算法同学：与电控确认八路巡线模块硬件状态。⚠️ 2026-08-19 核对：工程已改为 **UART7 串口模块方案**（非 ADC 直读），旧结论「`HAL_ADC_MODULE_ENABLED` 被注释禁用 → 需配 ADC 通道」已被取代；仍待电控确认：模块是否装车、供电/接口电平、实际回传频率。
 - [x] `P1` 第二位算法同学：实现 `robogame_core/line_follow.py` 纯算法模块（八路原始值 → 横向偏差 + 纠偏输出 + `ON_LINE/LEFT/RIGHT/LOST` 状态机）与 `tests/test_line_follow.py` 合成数据单元测试，参考 `navigation.py` 风格。证据：分支 `feature/line_follow` 提交 `6b36e28`，31 项测试全部通过，文档见 `docs/line_follow/README.md` 和 `docs/line_follow/CALIBRATION_AND_HARDWARE.md`。
-- [ ] `P1` 算法一：把巡线作为「路段类型」接入 `motion_control` / `mission_manager` 路线选择（路段链、模式切换、与路点/视觉对准仲裁）。
-- [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。
+- [x] `P1` 软件层面巡线链路（本轮 A 完成，为 B 备料）：`cmd_vel_arbiter` 新增第 4 来源 `line_follow`；新建 `motion_control/line_follow_runner.py`（纯逻辑运行器：失联停车、交叉口直行、LOST 停车，零 ROS 依赖）+ `line_follow_node.py`（订阅 `/line_sensor` + `/robot/status`，安全门控，仲裁后发 `/cmd_vel`，另发 `/line_follow/cmd`、`/line_follow/status` 联调话题）+ `line_sensor_mock.py`（7 种合成 pattern）+ `line_follow_mock.launch.py`（mock 全图）+ `line_follow_mock_smoke.py`（launch 自动验收）。证据：`tests/test_line_follow_runner.py` 22 项 + `tests/test_line_follow_nodes_ast.py` 10 项（含 launch 图完整断言）+ `test_cmd_vel_arbiter.py` 补 2 项，全量 572（505 运行全过，64 skip，3 cv2 环境导入 error 与本次无关）。
+- [ ] `P1` 算法一：把巡线作为「路段类型」接入 `motion_control` / `mission_manager` 路线选择（**下轮 B**：把 `LineFollowRunner` 收编进 motion_controller 模式切换，`active_source` 授权改由 mission_manager 广播）。
+- [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。**2026-08-19 进展**：草案已出 `docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT_2026-08-19.md`（0x14 = `mcu_tick_ms` u32 + 8×u16 模拟值 + flags，50Hz，21 字节 payload），**待电控确认 6 个问题后冻结**；固件上送与上位机 0x14 解码均未实现（红线）。
 - [ ] `P2` 真车贴线联调：低速贴线、出线恢复、交叉口行为验收。
+- [x] `P0` **巡线极性缺陷修复（2026-08-19 独立检测发现）**：`line_sensor_mock` 把黑线读成高原始值（black>white），而 `line_follow_node` 的默认标定是 `white_ref=4095 / black_ref=0`（方向相反）。后果不是「读数不准」而是**语义翻转**：`lost`（出线）被判成 ALL_BLACK **继续前进**、`all_black` 被判成 LOST 停车（两个安全用例互换），`sine` 摆动下 `wz` 恒为 0（一次都不转向），而 `line_follow_mock_smoke` 只断言「出现非零命令」，`vx_base=0.1` 就满足 → **验收假通过**。修复方向取自项目既有约定（`docs/line_follow/CALIBRATION_AND_HARDWARE.md:53-58`、`tools/field_dashboard_core.py:396-406`、0x14 接口文档 §29 三处同向），改 `line_follow_node` 默认值为 `white_ref=0.0 / black_ref=4095.0`（**不是**改 mock：mock 与现场面板本来就是对的）。同时给 smoke 加 `steering_frames > 0` 断言，新增 `tests/test_line_mock_polarity.py`（8 项，AST 读取两处默认值 + 端到端方向复算）把「三方同向」钉住。修复后复算：`lost`→停车、`all_black`→前进、`sine` 转向 **147/150** 帧（原 0/150）。⚠️ 仍未解决：`centered` pattern 在任何标定下都进不了 ON_LINE（`line_sensor_mock.py` 的 `line_half_width=0.28` 使中心两路权重上限仅 0.49 < 阈值 0.5），待与极性一并复标定后处理。
+- [x] `P0` **配置校验闸门补漏（2026-08-19 同上）**：`grasp_alignment.py:176-179` 会在 20Hz 定时器回调里拒绝非法 `min_turn_rate`/`camera_yaw_offset_rad`，但 `config_validation.py` 完全不校验这两个参数 → 一份「校验通过」的 robot.yaml 会让 `manipulator_client` 在第一次对准时抛异常退出。已补：`min_turn_rate` 非负有限、`≤ max_turn_rate`，`camera_yaw_offset_rad` 有限且 |·| ≤ π；`tests/test_config_validation.py` 补 6 项（含一条直接读真实 `robot.yaml` 的绑定断言）。
+- [x] `P0` **mock/真机行为分叉修复（2026-08-19 同上）**：整度校验原先只写在 `encode_arm_set_parameter` 里，而 mock 不编码（只做策略校验）→ `joint=0, angle=45.5` 在 mock 返回**成功/0 并把 45.5° 记进状态**、在真机返回 **9011**，直接推翻代码与文档承诺的「两侧拒绝理由一致」。已把整度要求移入 `validate_arm_target`（判据单点定义，mock 不复制逻辑），新增 `test_mock_rejects_the_same_targets_as_the_real_path`（6 组用例逐一对齐两侧错误码）。
 
 ### 巡线链路核对记录（2026-08-19 只读检查）
 
@@ -65,9 +69,10 @@
   - `rpi_protocol.c` 无巡线消息类型（现有 0x01/02/03/10/11/12/13/20/21/22），`STM32_SERIAL_PROTOCOL_V1.md` 无巡线遥测定义。
 - 树莓派（上位机）：
   - ✅ `robogame_core/line_follow.py` + `tests/test_line_follow.py`（2026-08-19 实跑 31 项全过），commit `55e2ba9`；文档 `docs/line_follow/README.md`、`CALIBRATION_AND_HARDWARE.md`；
-  - ❌ `robot_bridge` 无巡线帧解码、无 `/line_sensor` 话题；`motion_control`/`mission_manager` 零处 `LINE_FOLLOW/line_follow` 引用（`route_segment.py` 仅有 `SegmentKind.LINE_FOLLOW` 枚举，控制逻辑未接）——**数据链路断：算法模块无输入、无输出**。
+  - ✅ 本轮 A 已打通软件链路（2026-08-19）：`motion_control/line_follow_runner.py`（纯逻辑）+ `line_follow_node.py` + `line_sensor_mock.py`，`/line_sensor` 话题已建立（发布者= mock），巡线输出经 `cmd_vel_arbiter` 第 4 来源门控发 `/cmd_vel`，详见下「巡线归属与待办」；
+  - ❌ `robot_bridge` 无 0x14 解码（协议未冻结，红线）；`motion_control` 路段模式切换（下轮 B）与 `mission_manager` 授权广播未接——真车数据入口（0x14 解码替换 mock）仍缺。
 - 场地布局结论：纯贴线走（偏差+PD）只需每路标定常数，不需要场地布局；一旦涉及选路/交叉口/出线恢复/停车，必须有布局+定位（`GENERAL_FIELD_MAP_2026.md`「定位与控制分工」第 2 条：灰度管横向、里程计管进度、路段防走错支路）。
-- 剩余工作（依赖顺序）：① 冻结 V1 巡线遥测帧（类型号+payload，草案建议参照 0x10 风格：`mcu_tick_ms` u32 + 8 路值 + `line_online`）→ ② 固件 `RPI_SendLineTelemetry()` 周期上送 → ③ `robot_bridge` 解码 + `/line_sensor` 话题 → ④ `motion_control` 巡线路段类型接入 → ⑤ 真车贴线联调。
+- 剩余工作（依赖顺序）：① 冻结 V1 巡线遥测帧（0x14 草案待电控确认）→ ② 固件 `RPI_SendLineTelemetry()` 周期上送 → ③ `robot_bridge` 解码 + `/line_sensor` 发布者由 mock 换真适配器 → ④ `motion_control` 巡线路段类型接入（下轮 B）+ mission_manager 授权广播 → ⑤ 真车贴线联调。
 
 8 月 13—18 日每日安排见 `PLAN_2026-08-13_TO_18.md`，现场资料集中在 `field/`。
 

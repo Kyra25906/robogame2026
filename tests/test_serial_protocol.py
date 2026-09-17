@@ -14,6 +14,7 @@ from robogame_core.serial_protocol import (
     STATUS_EMERGENCY_STOP,
     STATUS_IMU_VALID,
     StatusSample,
+    LineTelemetrySample,
     StreamDecoder,
     VERSION,
     decode_ack,
@@ -24,6 +25,7 @@ from robogame_core.serial_protocol import (
     decode_mechanism_status,
     decode_odom,
     decode_status,
+    decode_line_telemetry,
     encode_ack,
     encode_frame,
     encode_heartbeat,
@@ -32,11 +34,24 @@ from robogame_core.serial_protocol import (
     encode_mechanism_status,
     encode_odom,
     encode_status,
+    encode_line_telemetry,
     encode_velocity,
 )
 
 
 class SerialProtocolTests(unittest.TestCase):
+    def test_line_telemetry_round_trip_and_size(self):
+        sample = LineTelemetrySample(0x01020304, (0, 1, 2, 3, 4092, 4093, 4094, 4095), True)
+        payload = encode_line_telemetry(sample)
+        self.assertEqual(len(payload), 21)
+        self.assertEqual(decode_line_telemetry(payload), sample)
+
+    def test_line_telemetry_rejects_reserved_flags(self):
+        payload = bytearray(21)
+        payload[-1] = 0x02
+        with self.assertRaises(ProtocolError):
+            decode_line_telemetry(bytes(payload))
+
     def test_round_trip(self):
         payload = encode_velocity(0.2, -0.1, 0.5)
         frame = decode_frame(encode_frame(1, 42, payload))
@@ -232,6 +247,20 @@ class SerialProtocolTests(unittest.TestCase):
                     MechanismCommand(2, MechanismOperation.LIFT_ABS, 120, 4000)
                 ),
                 "AA55012065000C000200030078000000A00F0000901C",
+            ),
+            (
+                0x20,
+                0x0066,
+                encode_mechanism_command(
+                    MechanismCommand(3, MechanismOperation.ARM_SET, 1045, 3000)
+                ),
+                "AA55012066000C000300070015040000B80B00002302",
+            ),
+            (
+                0x14,
+                5,
+                encode_line_telemetry(LineTelemetrySample(0x01020304, (0, 1, 2, 3, 4092, 4093, 4094, 4095), True)),
+                "AA55011405001500040302010000010002000300FC0FFD0FFE0FFF0F011A3E",
             ),
         )
         for message_type, sequence, payload, expected_hex in vectors:

@@ -8,6 +8,7 @@ import unittest
 
 from robogame_core.cmd_vel_arbiter import (
     SOURCE_ALIGN,
+    SOURCE_LINE_FOLLOW,
     SOURCE_MISSION,
     SOURCE_NAVIGATE,
     ArbiterConfig,
@@ -139,6 +140,27 @@ class CmdVelArbiterTests(unittest.TestCase):
     def test_negative_stale_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "positive"):
             ArbiterConfig(stale_s=-0.1)
+
+    def test_line_follow_source_is_allowed(self):
+        # 巡线是第 4 个合法来源（本轮 A 独立节点，B 阶段收编进 motion_control）
+        arbiter = CmdVelArbiter()
+        arbiter.update(SOURCE_LINE_FOLLOW, Velocity2D(0.1, 0.0, 0.3), now=1.0)
+        command = arbiter.output(
+            active_source=SOURCE_LINE_FOLLOW, now=1.05, emergency_stop=False
+        )
+        self.assertEqual(command.vx, 0.1)
+        self.assertEqual(command.wz, 0.3)
+
+    def test_line_follow_ignored_when_not_active(self):
+        # 授权者是 NAVIGATE 时，巡线命令被忽略（非授权者不得发运动命令）
+        arbiter = CmdVelArbiter()
+        arbiter.update(SOURCE_NAVIGATE, Velocity2D(0.3, 0.0, 0.0), now=1.0)
+        arbiter.update(SOURCE_LINE_FOLLOW, Velocity2D(0.1, 0.0, 0.3), now=1.0)
+        command = arbiter.output(
+            active_source=SOURCE_NAVIGATE, now=1.05, emergency_stop=False
+        )
+        self.assertEqual(command.vx, 0.3)
+        self.assertEqual(command.wz, 0.0)
 
 
 if __name__ == "__main__":

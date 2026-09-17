@@ -19,6 +19,7 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
             import rclpy  # noqa: F401
             from robot_bridge.node import RobotBridge  # noqa: F401
             from robogame_interfaces.srv import ExecuteMechanism  # noqa: F401
+            from robogame_interfaces.srv import SetArmJoint  # noqa: F401
             from robogame_interfaces.srv import SetLiftHeight  # noqa: F401
         except (ImportError, ModuleNotFoundError) as exc:
             cls._skip_reason = f"ROS 2 integration dependencies unavailable: {exc}"
@@ -29,6 +30,9 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
         service_name,
         command=None,
         height_m=None,
+        joint=None,
+        angle_deg=0.0,
+        arm_joint_ranges=None,
         timeout_s=1.0,
         behavior="success",
         secondary_service_name=None,
@@ -60,7 +64,7 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
             encode_mechanism_status,
             encode_status,
         )
-        from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
+        from robogame_interfaces.srv import ExecuteMechanism, SetArmJoint, SetLiftHeight
 
         master_fd, slave_fd = pty.openpty()
         os.set_blocking(master_fd, False)
@@ -168,18 +172,31 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
         bridge = client_node = executor = spin_thread = None
         mcu_thread = threading.Thread(target=fake_mcu, daemon=True)
         try:
-            rclpy.init(
-                args=[
-                    "--ros-args",
+            init_args = [
+                "--ros-args",
+                "-p",
+                "mock_mode:=false",
+                "-p",
+                f"serial_port:={slave_name}",
+            ]
+            if arm_joint_ranges is not None:
+                # 关节值域未冻结时 bridge 会拒绝一切 ARM_SET，这里显式冻结才谈得上
+                # “命令有没有上串口”。
+                init_args += [
                     "-p",
-                    "mock_mode:=false",
+                    f"arm_joint_ranges:={arm_joint_ranges}",
                     "-p",
-                    f"serial_port:={slave_name}",
+                    "arm_joint_ranges_evidence:=mechanism integration test",
                 ]
-            )
+            rclpy.init(args=init_args)
             bridge = RobotBridge()
             client_node = rclpy.create_node("mechanism_integration_client")
-            service_type = SetLiftHeight if height_m is not None else ExecuteMechanism
+            if height_m is not None:
+                service_type = SetLiftHeight
+            elif joint is not None:
+                service_type = SetArmJoint
+            else:
+                service_type = ExecuteMechanism
             client = client_node.create_client(service_type, service_name)
             executor = MultiThreadedExecutor(num_threads=3)
             executor.add_node(bridge)
@@ -199,10 +216,13 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
             self.assertTrue(bridge._communication_ok)
 
             request = service_type.Request()
-            if height_m is None:
-                request.command = command
-            else:
+            if height_m is not None:
                 request.height_m = height_m
+            elif joint is not None:
+                request.joint = joint
+                request.angle_deg = angle_deg
+            else:
+                request.command = command
             request.timeout_s = timeout_s
             future = client.call_async(request)
             secondary_future = None
@@ -292,6 +312,47 @@ class RobotBridgeMechanismIntegrationTests(unittest.TestCase):
         self.assertEqual(command.operation, MechanismOperation.LIFT_ABS)
         self.assertEqual(command.parameter, 123)
         self.assertEqual(command.timeout_ms, 1500)
+
+    def test_arm_set_encodes_the_firmware_joint_id_and_absolute_angle(self):
+        from robogame_core.serial_protocol import MechanismOperation
+
+        response, received, _ = self._run_case(
+            service_name="/arm/set_joint",
+            joint=1,
+            angle_deg=90.0,
+            arm_joint_ranges="1:0:180",
+            timeout_s=1.5,
+        )
+        self.assertTrue(response.success, response.detail)
+        self.assertEqual(len(received), 1)
+        command = received[0][1]
+        self.assertEqual(command.operation, MechanismOperation.ARM_SET)
+        # parameter = joint_id*1000 + angle_deg；关节编号 1=肩，与固件 arm.h 一致。
+        self.assertEqual(command.parameter, 1090)
+        self.assertEqual(command.timeout_ms, 1500)
+
+    def test_unfrozen_arm_joint_is_refused_before_the_serial_line(self):
+        from robogame_core.arm import ARM_ERROR_NOT_FROZEN
+
+        response, received, _ = self._run_case(
+            service_name="/arm/set_joint", joint=1, angle_deg=90.0
+        )
+        self.assertFalse(response.success)
+        self.assertEqual(response.error_code, ARM_ERROR_NOT_FROZEN)
+        self.assertEqual(received, [], "未冻结的关节目标不该出现在串口上")
+
+    def test_gripper_cannot_be_driven_through_arm_set(self):
+        from robogame_core.arm import ARM_ERROR_GRIPPER_POLICY
+
+        response, received, _ = self._run_case(
+            service_name="/arm/set_joint",
+            joint=4,
+            angle_deg=90.0,
+            arm_joint_ranges="4:0:180",
+        )
+        self.assertFalse(response.success)
+        self.assertEqual(response.error_code, ARM_ERROR_GRIPPER_POLICY)
+        self.assertEqual(received, [], "爪子命令不该出现在串口上")
 
     def test_ack_rejection_is_returned_to_ros_client(self):
         response, received, _ = self._run_case(

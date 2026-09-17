@@ -128,7 +128,8 @@ class LaunchGraphParserTests(unittest.TestCase):
         )
         self.assertEqual(subscribed, {"/cmd_vel"})
         self.assertEqual(
-            published, {"/robot/status", "/wheel_odom", "/imu/data"}
+            published,
+            {"/robot/status", "/wheel_odom", "/imu/data", "/line_sensor"},
         )
 
     def test_mission_manager_links_motion_and_manipulator(self):

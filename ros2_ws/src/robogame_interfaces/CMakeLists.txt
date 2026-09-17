@@ -12,11 +12,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CubeDetectionArray.msg"
   "msg/MissionState.msg"
   "msg/CargoState.msg"
+  "msg/LineSensor.msg"
   "srv/ExecuteMechanism.srv"
   "srv/SetLiftHeight.srv"
+  "srv/SetArmJoint.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()
-

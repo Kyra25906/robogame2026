@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from .mission_route import RoutePlan, RouteRunner, SegmentRole
 from .models import Cargo, CubeColor, MissionResult
 
 
@@ -13,6 +14,11 @@ class MissionState(str, Enum):
     WAIT_FOR_COMMUNICATION = "WAIT_FOR_COMMUNICATION"
     SELF_CHECK = "SELF_CHECK"
     WAIT_FOR_PHYSICAL_START = "WAIT_FOR_PHYSICAL_START"
+    # B1 新增：全流程路线模式（启动区→巡线→上坡→取3→下坡→搭建2层）。
+    # 绑定 RoutePlan 后走这条；未绑定（route=None）时仍走下面的旧演示流程。
+    ROUTE_RUNNING = "ROUTE_RUNNING"
+    # --- 以下为旧「单方块/一橙一紫」演示流程，B1 起对完整比赛 run 作废，
+    # --- 但保留供 single_cube 演示链路与既有测试使用（不要删）。
     GO_TO_ORANGE = "GO_TO_ORANGE"
     PICK_ORANGE = "PICK_ORANGE"
     GO_TO_PURPLE = "GO_TO_PURPLE"
@@ -25,6 +31,19 @@ class MissionState(str, Enum):
     SAFE_STOP = "SAFE_STOP"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+
+
+class MissionPhase(str, Enum):
+    """路线模式下的段内阶段（给网页/日志显示「现在在干什么」）。
+
+    IDLE = 未开始或已结束；MOVING = 正在走/正在转；WORKING = 原地作业（抓/放）；
+    VERIFY = 搭建后稳定观察（复用既有 VERIFY_BUILD 计时）。
+    """
+
+    IDLE = "IDLE"
+    MOVING = "MOVING"
+    WORKING = "WORKING"
+    VERIFY = "VERIFY"
 
 
 @dataclass(frozen=True)
@@ -68,6 +87,22 @@ class MissionMachine:
     result: MissionResult = MissionResult.RUNNING
     detail: str = ""
     entered_at: float = field(default_factory=time.monotonic)
+    # B1：绑定 RoutePlan 后走路线模式（ROUTE_RUNNING），否则走旧的演示流程。
+    route: RoutePlan | None = None
+    segment_index: int = -1
+    segment_id: str = ""
+    phase: MissionPhase = MissionPhase.IDLE
+    _route_runner: RouteRunner | None = field(default=None, repr=False)
+
+    @property
+    def route_runner(self) -> RouteRunner | None:
+        """路线运行器（未进入路线模式时为 None）。"""
+        return self._route_runner
+
+    def current_segment(self):
+        """当前段计划（未进入路线模式时为 None）。"""
+        runner = self._route_runner
+        return None if runner is None else runner.current_segment
     def _enter(self, state: MissionState, now: float) -> None:
         self.state = state
         self.entered_at = now
@@ -121,18 +156,115 @@ class MissionMachine:
             return self.fail(MissionResult.COMMUNICATION_ERROR, "hardware heartbeat lost", now)
         if self.state in {MissionState.COMPLETE, MissionState.FAILED, MissionState.SAFE_STOP}:
             return self.state
+        if self.state is MissionState.ROUTE_RUNNING:
+            # B1：路线模式自己管超时（按段计时，不是整条路线一个预算），
+            # 因此放在通用 state_timeout_s 检查之前。
+            return self._tick_route(
+                now=now,
+                action_succeeded=action_succeeded,
+                action_failed=action_failed,
+                failure_result=failure_result,
+                failure_detail=failure_detail,
+            )
         if now - self.entered_at > self.config.state_timeout_s:
             return self._retry_or_fail(MissionResult.TIMEOUT, "state timeout", now)
 
         if self.state is MissionState.SELF_CHECK and action_succeeded:
             self._enter(MissionState.WAIT_FOR_PHYSICAL_START, now)
         elif self.state is MissionState.WAIT_FOR_PHYSICAL_START and physical_start:
-            self._enter(MissionState.GO_TO_ORANGE, now)
+            if self.route is not None:
+                self._enter_route(now)
+            else:
+                self._enter(MissionState.GO_TO_ORANGE, now)
         elif action_failed:
             return self._retry_or_fail(failure_result, failure_detail, now)
         elif action_succeeded:
             self._advance_after_success(now)
         return self.state
+
+    # -- B1: 路线模式 -----------------------------------------------------
+    def _enter_route(self, now: float) -> None:
+        """进入 ROUTE_RUNNING：建运行器、从第一段开始、同步段信息。"""
+        self._enter(MissionState.ROUTE_RUNNING, now)
+        self._route_runner = RouteRunner(self.route)
+        self._route_runner.start()
+        self._sync_route()
+
+    def _sync_route(self) -> None:
+        """把运行器状态同步到对外字段（网页/日志用）。"""
+        runner = self._route_runner
+        if runner is None:
+            self.segment_index = -1
+            self.segment_id = ""
+            self.phase = MissionPhase.IDLE
+            return
+        segment = runner.current_segment
+        self.segment_index = runner.segment_index
+        self.segment_id = segment.id if segment is not None else ""
+        if segment is None:
+            self.phase = MissionPhase.IDLE
+        elif segment.role is SegmentRole.WORK:
+            self.phase = MissionPhase.WORKING
+        else:
+            self.phase = MissionPhase.MOVING
+
+    def _tick_route(
+        self,
+        *,
+        now: float,
+        action_succeeded: bool,
+        action_failed: bool,
+        failure_result: MissionResult,
+        failure_detail: str,
+    ) -> MissionState:
+        runner = self._route_runner
+        if runner is None:
+            return self.fail(MissionResult.MECHANISM_ERROR, "route mode without runner", now)
+
+        # 每段一个超时预算：entered_at 在段切换时刷新（见下面 switched 分支）。
+        if now - self.entered_at > self.config.state_timeout_s:
+            segment_id = self.segment_id or "?"
+            state = self._retry_or_fail(
+                MissionResult.TIMEOUT, f"segment {segment_id} timeout", now
+            )
+            if self.state is MissionState.ROUTE_RUNNING:
+                # 还在重试：清本段累计量，否则已满足的判据会立刻再次触发。
+                runner.observations.reset_segment()
+            return state
+        if action_failed:
+            return self._retry_or_fail(failure_result, failure_detail, now)
+
+        segment = runner.current_segment
+        if action_succeeded and segment is not None and segment.role is SegmentRole.WORK:
+            # WORK 段：一次作业完成（抓一块/放一块）记一次；达到 required_count 才退出。
+            runner.note_work_done()
+
+        switched = runner.tick()
+        if switched:
+            self.entered_at = now  # 下一段重新计时
+        self._sync_route()
+
+        if runner.is_complete:
+            # 3s 稳定观察仍由既有 VERIFY_BUILD 计时兜底（build_stability_s）。
+            self._enter(MissionState.VERIFY_BUILD, now)
+            self.phase = MissionPhase.VERIFY
+            self.detail = "route complete"
+        return self.state
+
+    def route_progress(self) -> dict[str, object]:
+        """路线进度快照（B2 推给网页显示）。"""
+        runner = self._route_runner
+        segment = None if runner is None else runner.current_segment
+        return {
+            "state": self.state.value,
+            "phase": self.phase.value,
+            "segment_index": self.segment_index,
+            "segment_id": self.segment_id,
+            "segment_label": "" if segment is None else segment.label,
+            "segment_count": 0 if self.route is None else len(self.route.segments),
+            "retries": self.retries,
+            "detail": self.detail,
+        }
 
     def _retry_or_fail(self, result: MissionResult, detail: str, now: float) -> MissionState:
         self.retries += 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import queue
 import threading
 import time
 
@@ -17,12 +18,27 @@ from robogame_core.hardware_readiness import (
     receive_timestamp_is_fresh,
     robot_status_communication_ok,
 )
+from robogame_core.arm import (
+    ArmJointNotFrozen,
+    ArmJointTable,
+    ArmJointTarget,
+    ArmTargetRejected,
+    arm_joint_table_with_frozen_ranges,
+    arm_rejection_error_code,
+    default_arm_joint_table,
+    encode_arm_set_parameter,
+    parse_arm_joint_ranges,
+)
 from robogame_core.models import Pose2D, Velocity2D
 from robogame_core.mcu_time import validate_mcu_tick
 from robogame_core.manipulator import MechanismOperation as WorkflowOperation
 from robogame_core.mechanism_transport import (
     MechanismCommandTracker,
     PollAction,
+)
+from robogame_core.mock_arm import (
+    MockArmState,
+    execute_mock_arm_set,
 )
 from robogame_core.mock_mechanism import (
     MockMechanismState,
@@ -39,6 +55,7 @@ from robogame_core.serial_protocol import (
     MSG_TYPE_MECHANISM_STATUS,
     MSG_TYPE_ODOM,
     MSG_TYPE_STATUS,
+    MSG_TYPE_LINE_TELEMETRY,
     ProtocolError,
     STATUS_EMERGENCY_STOP,
     STATUS_GRIPPER_CLOSED,
@@ -55,6 +72,7 @@ from robogame_core.serial_protocol import (
     decode_mechanism_status,
     decode_odom,
     decode_status,
+    decode_line_telemetry,
     encode_frame,
     encode_heartbeat,
     encode_hello,
@@ -62,8 +80,8 @@ from robogame_core.serial_protocol import (
     encode_velocity,
 )
 from robogame_core.stop_transport import dispatch_stop_frames
-from robogame_interfaces.msg import RobotStatus
-from robogame_interfaces.srv import ExecuteMechanism, SetLiftHeight
+from robogame_interfaces.msg import RobotStatus, LineSensor
+from robogame_interfaces.srv import ExecuteMechanism, SetArmJoint, SetLiftHeight
 from sensor_msgs.msg import Imu
 
 
@@ -124,6 +142,11 @@ class RobotBridge(Node):
         self.declare_parameter("mock_grab_success", True)
         self.declare_parameter("mock_release_success", True)
         self.declare_parameter("mock_lift_success", True)
+        self.declare_parameter("mock_arm_success", True)
+        self.declare_parameter("arm_joint_ranges", "")
+        self.declare_parameter("arm_joint_ranges_evidence", "")
+        self.declare_parameter("cmd_vel_tx_log", False)
+        self.cmd_vel_tx_log = bool(self.get_parameter("cmd_vel_tx_log").value)
         self.mock_mode = bool(self.get_parameter("mock_mode").value)
         self.command_timeout = float(self.get_parameter("command_timeout_s").value)
         self.mock_comm_ok_after_s = float(
@@ -156,6 +179,12 @@ class RobotBridge(Node):
             raise ValueError("mechanism transport timeouts must be positive and finite")
         if self.mechanism_max_attempts <= 0:
             raise ValueError("mechanism_max_attempts must be positive")
+        # 机械臂关节冻结表：空配置 = 全部未冻结 = 拒绝一切 ARM_SET（C-11 未冻结
+        # 角度映射前这是唯一诚实的默认）。现场冻结后只改参数，不改代码。
+        self.arm_joint_table = self._build_arm_joint_table()
+        self.get_logger().info(
+            f"arm joint table: {self.arm_joint_table.describe()}"
+        )
         covariance_names = (
             "odom_pose_xy_variance",
             "odom_pose_yaw_variance",
@@ -177,6 +206,7 @@ class RobotBridge(Node):
         self.status_pub = self.create_publisher(RobotStatus, "/robot/status", 10)
         self.odom_pub = self.create_publisher(Odometry, "/wheel_odom", 20)
         self.imu_pub = self.create_publisher(Imu, "/imu/data", 20)
+        self.line_sensor_pub = self.create_publisher(LineSensor, "/line_sensor", 20)
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 20)
         self._mechanism_callback_group = ReentrantCallbackGroup()
         self.create_service(
@@ -207,6 +237,10 @@ class RobotBridge(Node):
             SetLiftHeight, "/lift/set_height", self._lift,
             callback_group=self._mechanism_callback_group,
         )
+        self.create_service(
+            SetArmJoint, "/arm/set_joint", self._arm_set_joint,
+            callback_group=self._mechanism_callback_group,
+        )
         self.velocity = Velocity2D(0.0, 0.0, 0.0)
         self.integrator = OdometryIntegrator(Pose2D(0.0, 0.0, 0.0))
         self.last_command = time.monotonic()
@@ -222,8 +256,9 @@ class RobotBridge(Node):
         self._latest_status = None
         self._latest_odom = None
         self._latest_imu = None
-        self._last_mcu_tick_ms = {"odom": None, "imu": None}
+        self._last_mcu_tick_ms = {"odom": None, "imu": None, "line": None}
         self.mock_mechanism_state = MockMechanismState()
+        self.mock_arm_state = MockArmState()
         # Faithful mock: with a positive boot window the fake firmware starts
         # "handshaking" and only becomes READY once the window elapses, exactly
         # like the real STM32 (HELLO->ACK + first decoded STATUS). A window of
@@ -246,9 +281,100 @@ class RobotBridge(Node):
         self._mechanism_condition = threading.Condition(threading.RLock())
         self._mechanism_tracker: MechanismCommandTracker | None = None
         self._next_mechanism_command_id = 1
+        self._rx_queue: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._reader_thread: threading.Thread | None = None
+        self._reader_stop = threading.Event()
         if not self.mock_mode:
             self._open_serial()
+            self._start_reader_thread()
         self.create_timer(0.02, self._tick)
+
+    def _build_arm_joint_table(self) -> ArmJointTable:
+        """从参数构造机械臂关节冻结表。
+
+        空 `arm_joint_ranges` = 一个关节都不放行（默认）：C-11 尚未冻结肩 / 肘 / 腕
+        的角度范围，此时下发任何角度都是猜。冻结后由现场配置传入
+        `"joint:min:max;..."`，并必须同时给出 `arm_joint_ranges_evidence`。
+        """
+        text = str(self.get_parameter("arm_joint_ranges").value)
+        evidence = str(self.get_parameter("arm_joint_ranges_evidence").value)
+        if not text.strip():
+            return default_arm_joint_table()
+        if not evidence.strip():
+            raise ValueError(
+                "arm_joint_ranges_evidence must be set when arm_joint_ranges is "
+                "set: 冻结角度值域必须能说出出处，C-11 未冻结前不要猜"
+            )
+        return arm_joint_table_with_frozen_ranges(
+            parse_arm_joint_ranges(text), evidence=evidence
+        )
+
+    # -- serial reader thread ------------------------------------------------
+    # 2026-08-19 (G5.5): 串口读取从 20ms _tick 定时器挪到独立线程。树莓派 4B
+    # 高负载（~200% CPU）时 executor/GIL 调度延迟曾直接变成 USB CDC 读取延迟，
+    # 导致 STM32 端 TxState 一直 busy、TX 队列积满静默丢 ODOM 帧（odom 跳变
+    # 根因，见 docs/field/ODOM_DROP_ROOT_CAUSE_2026-08-19.md）。独立线程持续
+    # 取走 USB 数据，读取节奏不再随 CPU 负载抖动。
+
+    def _start_reader_thread(self) -> None:
+        if self.mock_mode or self._reader_thread is not None:
+            return
+        self._reader_stop.clear()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            name="robot_bridge_serial_reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
+
+    def _stop_reader_thread(self) -> None:
+        stop = getattr(self, "_reader_stop", None)
+        if stop is not None:
+            stop.set()
+        thread = getattr(self, "_reader_thread", None)
+        self._reader_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+
+    def _reader_loop_step(self) -> None:
+        """One reader iteration: read available bytes into the queue.
+
+        抽成独立方法便于单测直接驱动单轮逻辑，无需真的起线程。
+        """
+        if self.serial is None:
+            return
+        data = self._safe_serial_read()
+        if data:
+            self._rx_queue.put(data)
+
+    def _reader_loop(self) -> None:
+        while not self._reader_stop.is_set():
+            if self.serial is None:
+                # No serial yet (initial open failed / reconnecting); poll.
+                self._reader_stop.wait(0.01)
+                continue
+            self._reader_loop_step()
+            if self.serial is None:
+                # _safe_serial_read 检测到断线会置 None，重连前继续轮询。
+                continue
+            # Avoid busy-spinning on a quiet link.
+            self._reader_stop.wait(0.001)
+
+    def _drain_rx(self) -> bytes:
+        """Collect bytes read by the reader thread (non-blocking).
+
+        mock 模式与 __new__ 构造的单测对象没有读线程，回退到原同步读取，
+        保持既有行为与测试契约。
+        """
+        if getattr(self, "_reader_thread", None) is None:
+            return self._safe_serial_read()
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunks.append(self._rx_queue.get_nowait())
+            except queue.Empty:
+                break
+        return b"".join(chunks)
 
     def _reset_real_transport_state(self) -> None:
         """Invalidate old session state without restoring any old command."""
@@ -262,7 +388,7 @@ class RobotBridge(Node):
         self._latest_status = None
         self._latest_odom = None
         self._latest_imu = None
-        self._last_mcu_tick_ms = {"odom": None, "imu": None}
+        self._last_mcu_tick_ms = {"odom": None, "imu": None, "line": None}
         self._communication_ok = False
         self._handshake_state = _HANDSHAKE_HANDSHAKING
         self._handshake_last_hello = 0.0
@@ -376,8 +502,12 @@ class RobotBridge(Node):
         self.last_command = time.monotonic()
         if self.serial is not None:
             payload = encode_velocity(self.velocity.vx, self.velocity.vy, self.velocity.wz)
-            if self._safe_serial_write(encode_frame(0x01, self.sequence, payload)):
+            sequence = self.sequence
+            if self._safe_serial_write(encode_frame(0x01, sequence, payload)):
                 self.sequence = (self.sequence + 1) & 0xFFFF
+                self._log_velocity_tx(
+                    "cmd_vel", self.velocity.vx, self.velocity.vy, self.velocity.wz, sequence
+                )
 
     def _send_zero_velocity(self) -> None:
         """Explicitly zero the MCU velocity on command timeout.
@@ -392,10 +522,37 @@ class RobotBridge(Node):
             return
         if self.serial is None:
             return
+        sequence = self.sequence
         if self._safe_serial_write(
-            encode_frame(0x01, self.sequence, encode_velocity(0.0, 0.0, 0.0))
+            encode_frame(0x01, sequence, encode_velocity(0.0, 0.0, 0.0))
         ):
             self.sequence = (self.sequence + 1) & 0xFFFF
+            self._log_velocity_tx("timeout_zero", 0.0, 0.0, 0.0, sequence)
+
+    def _log_velocity_tx(
+        self, reason: str, vx: float, vy: float, wz: float, sequence: int
+    ) -> None:
+        """Record every CMD_VEL frame we put on the wire, with a reason tag.
+
+        2026-08-19 电控分析请求：CMD_VEL 80 条里 5 条停车（~300ms 顿挫）时，
+        需要「发出的 CMD_VEL 带时间戳打日志」来区分来源：
+        - cmd_vel        ：/cmd_vel 回调转发（含位置控制器发的 0 速度）
+        - timeout_zero   ：command_timeout 到期，bridge 主动插零速
+        - status_failsafe：STATUS 超时降级，dispatch_stop_frames
+        - shutdown       ：节点退出主动停车
+        - chassis_stop   ：/chassis/stop 服务
+        每行带 ROS 时间戳、序列号、vx/vy/wz 与 reason，供与电控侧计数器
+        对表。只记录实际写入串口的帧（write 成功），不记录被 gate 拦下的。
+        """
+        if not getattr(self, "cmd_vel_tx_log", False):
+            return
+        stamp = self.get_clock().now().to_msg()
+        self.get_logger().info(
+            f"CMD_VEL TX reason={reason} seq={sequence} "
+            f"vx={vx:.3f} vy={vy:.3f} wz={wz:.3f} "
+            f"t={stamp.sec}.{stamp.nanosec:09d} "
+            f"handshake={self._handshake_state} comm_ok={int(self._communication_ok)}"
+        )
 
     def _send_heartbeat(self, now: float) -> None:
         """Keep the MCU watchdog alive without authorizing any motion.
@@ -432,6 +589,9 @@ class RobotBridge(Node):
         if self.serial is not None:
             result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
             self.sequence = result.next_sequence
+            self._log_velocity_tx(
+                "status_failsafe", 0.0, 0.0, 0.0, result.sequence_of_zero
+            )
             if not result.success:
                 self.get_logger().error(
                     "STATUS-timeout STOP incomplete; MCU watchdog must stop motion"
@@ -445,10 +605,14 @@ class RobotBridge(Node):
         if not self.mock_mode and self.serial is not None:
             result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
             self.sequence = result.next_sequence
+            self._log_velocity_tx(
+                "shutdown", 0.0, 0.0, 0.0, result.sequence_of_zero
+            )
             if not result.success:
                 self.get_logger().error(
                     "shutdown STOP incomplete; MCU watchdog must stop motion"
                 )
+        self._stop_reader_thread()
         if self.serial is not None:
             self.serial.close()
             self.serial = None
@@ -573,6 +737,9 @@ class RobotBridge(Node):
             self.velocity = Velocity2D(0.0, 0.0, 0.0)
             result = dispatch_stop_frames(self._safe_serial_write, self.sequence)
             self.sequence = result.next_sequence
+            self._log_velocity_tx(
+                "chassis_stop", 0.0, 0.0, 0.0, result.sequence_of_zero
+            )
             response.success = result.success
             response.error_code = 0 if result.success else 3001
             response.duration_s = float(time.monotonic() - started)
@@ -704,6 +871,65 @@ class RobotBridge(Node):
         response.detail = result.detail
         return response
 
+    @staticmethod
+    def _reject_arm(response, error_code: int, detail: str, started: float):
+        """统一填一个“本地就拒绝了、根本没上串口”的响应。"""
+        response.success = False
+        response.error_code = error_code
+        response.duration_s = float(time.monotonic() - started)
+        response.detail = detail
+        return response
+
+    def _arm_set_joint(self, request, response):
+        """ARM_SET：把“某关节转到某绝对角度”发成 0x20。
+
+        策略校验（不是爪子 / 已冻结 / 在值域内）在 mock 与 real 两侧共用同一张
+        `self.arm_joint_table` 和同一组错误码（9010/9011/9012），所以两侧拒绝理由
+        一致，只是 mock 不需要串口。
+
+        ⚠️ 纯开环（C-1）：服务成功只代表命令被接受并走完了流程，不代表舵机真的
+        转到了那个角度——机械臂没有位置反馈。
+        """
+        started = time.monotonic()
+        try:
+            target = ArmJointTarget(request.joint, float(request.angle_deg))
+        except ArmTargetRejected as exc:
+            return self._reject_arm(
+                response, arm_rejection_error_code(exc), str(exc), started
+            )
+        if self.mock_mode:
+            result = execute_mock_arm_set(
+                self.mock_arm_state,
+                target,
+                table=self.arm_joint_table,
+                configured_success=bool(
+                    self.get_parameter("mock_arm_success").value
+                ),
+            )
+            self.mock_arm_state = result.state
+            response.success = result.success
+            response.error_code = result.error_code
+            response.duration_s = float(time.monotonic() - started)
+            response.detail = result.detail
+            return response
+        try:
+            parameter = encode_arm_set_parameter(target, table=self.arm_joint_table)
+        except (ArmTargetRejected, ArmJointNotFrozen) as exc:
+            return self._reject_arm(
+                response, arm_rejection_error_code(exc), str(exc), started
+            )
+        (
+            response.success,
+            response.error_code,
+            response.duration_s,
+            response.detail,
+        ) = self._execute_real_mechanism(
+            ProtocolOperation.ARM_SET,
+            parameter=parameter,
+            timeout_s=float(request.timeout_s),
+        )
+        return response
+
     def _run_handshake(self, now: float) -> None:
         """Send periodic HELLO frames and watch for an ACK or STATUS reply.
 
@@ -785,7 +1011,7 @@ class RobotBridge(Node):
         self.last_decoded_odom_rx = None
         self._latest_imu = None
         self.last_decoded_imu_rx = None
-        self._last_mcu_tick_ms = {"odom": None, "imu": None}
+        self._last_mcu_tick_ms = {"odom": None, "imu": None, "line": None}
         if not self.mock_mode:
             self._handshake_state = _HANDSHAKE_HANDSHAKING
             self._handshake_last_hello = 0.0
@@ -867,6 +1093,20 @@ class RobotBridge(Node):
                 return
             self._latest_imu = imu
             self.last_decoded_imu_rx = now
+        elif msg_type == MSG_TYPE_LINE_TELEMETRY:
+            try:
+                line = decode_line_telemetry(frame.payload)
+            except ProtocolError as exc:
+                self.get_logger().warn(f"invalid LINE_TELEMETRY payload rejected: {exc}")
+                return
+            if not self._accept_mcu_tick("line", line.mcu_tick_ms):
+                return
+            msg = LineSensor()
+            msg.stamp = self.get_clock().now().to_msg()
+            msg.mcu_tick_ms = line.mcu_tick_ms
+            msg.channels = list(line.channels)
+            msg.analog_valid = line.analog_valid
+            self.line_sensor_pub.publish(msg)
 
     def _accept_mcu_tick(self, stream: str, current_tick_ms: int) -> bool:
         previous = self._last_mcu_tick_ms[stream]
@@ -896,7 +1136,7 @@ class RobotBridge(Node):
         if self._handshake_state == _HANDSHAKE_HANDSHAKING:
             self._run_handshake(now)
 
-        data = self._safe_serial_read()
+        data = self._drain_rx()
         if data:
             for _frame in self.decoder.feed(data):
                 self._dispatch_frame(_frame, now)

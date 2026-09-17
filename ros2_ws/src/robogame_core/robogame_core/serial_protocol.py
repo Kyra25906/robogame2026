@@ -15,6 +15,7 @@ HEARTBEAT_PAYLOAD = struct.Struct("<I")
 ODOM_PAYLOAD = struct.Struct("<Ifff")
 IMU_PAYLOAD = struct.Struct("<IfB")
 STATUS_PAYLOAD = struct.Struct("<IHHHH")
+LINE_TELEMETRY_PAYLOAD = struct.Struct("<I8HB")
 MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBBiI")
 MECHANISM_STATUS_PAYLOAD = struct.Struct("<HBBHI")
 ACK_PAYLOAD = struct.Struct("<HBB")
@@ -25,6 +26,7 @@ MSG_TYPE_HELLO = 0x03
 MSG_TYPE_ODOM = 0x10
 MSG_TYPE_IMU = 0x11
 MSG_TYPE_STATUS = 0x12
+MSG_TYPE_LINE_TELEMETRY = 0x14
 MSG_TYPE_ACK = 0x13
 MSG_TYPE_MECHANISM_COMMAND = 0x20
 MSG_TYPE_MECHANISM_STATUS = 0x21
@@ -44,11 +46,22 @@ STATUS_KNOWN_MASK = (1 << 10) - 1
 
 
 class MechanismOperation(IntEnum):
+    """0x20 的动作编号。
+
+    `ARM_SET` 取 7 的理由（2026-08-19）：1/2/3/5 已被占用；4 在协议 V1 文档
+    `STM32_SERIAL_PROTOCOL_V1.md` 里留给 RETREAT（树莓派侧未实现，也不打算在
+    真车用），6 已被 HOME 占用。因此机械臂通道取下一个空闲号 7。
+
+    `ARM_SET` 的 `parameter` 编码见 `robogame_core.arm`：
+    `joint_id * 1000 + angle_deg`，关节编号逐项复用固件 `arm.h::Arm_Joint`。
+    """
+
     GRAB = 1
     RELEASE = 2
     LIFT_ABS = 3
     STOP = 5
     HOME = 6
+    ARM_SET = 7
 
 
 class MechanismState(IntEnum):
@@ -96,6 +109,13 @@ class StatusSample:
 
     def has(self, flag: int) -> bool:
         return bool(self.flags & flag)
+
+
+@dataclass(frozen=True)
+class LineTelemetrySample:
+    mcu_tick_ms: int
+    channels: tuple[int, ...]
+    analog_valid: bool
 
 
 @dataclass(frozen=True)
@@ -228,6 +248,27 @@ def decode_status(payload: bytes) -> StatusSample:
     sample = StatusSample(*STATUS_PAYLOAD.unpack(payload))
     _validate_status(sample, ProtocolError)
     return sample
+
+
+def encode_line_telemetry(sample: LineTelemetrySample) -> bytes:
+    if len(sample.channels) != 8:
+        raise ValueError("LINE_TELEMETRY requires 8 channels")
+    values = tuple(_uint(v, 16, "line channel") for v in sample.channels)
+    if any(v > 4095 for v in values):
+        raise ValueError("line channels must be 12-bit values (0..4095)")
+    return LINE_TELEMETRY_PAYLOAD.pack(
+        _uint(sample.mcu_tick_ms, 32, "mcu_tick_ms"), *values, int(sample.analog_valid)
+    )
+
+
+def decode_line_telemetry(payload: bytes) -> LineTelemetrySample:
+    _require_size(payload, LINE_TELEMETRY_PAYLOAD, "LINE_TELEMETRY")
+    tick, *values, flags = LINE_TELEMETRY_PAYLOAD.unpack(payload)
+    if flags & 0xFE:
+        raise ProtocolError("LINE_TELEMETRY reserved flag bits must be zero")
+    if any(v > 4095 for v in values):
+        raise ProtocolError("LINE_TELEMETRY channel exceeds 12-bit range")
+    return LineTelemetrySample(tick, tuple(values), bool(flags & 1))
 
 
 def encode_mechanism_command(command: MechanismCommand) -> bytes:

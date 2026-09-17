@@ -1,0 +1,8 @@
+# 仅在烧录并验证 chassis.h 的 0.8/0.4 m/s 固件后加载。
+# 加载顺序：robot.yaml -> robot_field.yaml -> 本文件。
+# 此文件提高导航上限；网页手动前进上限使用 --max-drive-speed 0.8。
+motion_controller:
+  ros__parameters:
+    max_vx: 0.80
+    max_vy: 0.40
+    max_wz: 1.00

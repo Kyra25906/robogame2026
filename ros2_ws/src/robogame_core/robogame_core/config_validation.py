@@ -67,8 +67,8 @@ def validate_config_bundle(
             "goal_timeout_s", "pose_stale_s", "status_stale_s",
         ]),
         "robot.yaml:manipulator_client": (manipulator, [
-            "target_distance_m", "distance_tolerance_m", "lateral_tolerance_m",
-            "kp_distance", "kp_lateral", "max_speed", "target_stale_s",
+            "target_distance_m", "distance_tolerance_m", "cross_tolerance_m",
+            "kp_distance", "kp_bearing", "max_speed", "max_turn_rate", "target_stale_s",
             "action_timeout_s", "status_stale_s",
             "placement_stable_duration_s", "placement_observation_timeout_s",
         ]),
@@ -94,6 +94,32 @@ def validate_config_bundle(
         error(
             "robot.yaml:robot_bridge.max_mcu_sample_gap_ms",
             "must be a positive integer number of milliseconds",
+        )
+
+    # 转向对准的两个新参数：算法本身会拒绝非法组合（grasp_alignment.py:176-179），
+    # 但它是在 20Hz 定时器回调里无保护调用的——配置校验如果不同步拦住，一份
+    # “校验通过”的 robot.yaml 会让节点在第一次对准时抛异常退出。
+    min_turn_rate = manipulator.get("min_turn_rate")
+    if not _finite_number(min_turn_rate) or min_turn_rate < 0:
+        error(
+            "robot.yaml:manipulator_client.min_turn_rate",
+            "must be a non-negative finite number (0 disables deadband compensation)",
+        )
+    max_turn_rate = manipulator.get("max_turn_rate")
+    if (
+        _finite_number(min_turn_rate)
+        and _finite_number(max_turn_rate)
+        and min_turn_rate > max_turn_rate
+    ):
+        error(
+            "robot.yaml:manipulator_client.min_turn_rate",
+            "cannot exceed max_turn_rate",
+        )
+    yaw_offset = manipulator.get("camera_yaw_offset_rad")
+    if not _finite_number(yaw_offset) or abs(yaw_offset) > math.pi:
+        error(
+            "robot.yaml:manipulator_client.camera_yaw_offset_rad",
+            "must be a finite mounting angle within [-pi, pi] radians",
         )
 
     gap = manipulator.get("placement_max_unavailable_gap_s")

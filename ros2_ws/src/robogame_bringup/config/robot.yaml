@@ -21,6 +21,10 @@ robot_bridge:
     # 250→1000 让偶发 500ms 丢帧不再触发 LOCALIZATION_ERROR 停车（缓解）；
     # 电控根治固件丢帧后应调回 250。
     max_mcu_sample_gap_ms: 1000
+    # 机械臂关节值域（ARM_SET）：空串 = 未冻结 = /arm/set_joint 返回 9010。
+    # 见 robot_bridge/README.md §8 与 docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md §6。
+    arm_joint_ranges: ""
+    arm_joint_ranges_evidence: ""
 
 motion_controller:
   ros__parameters:
@@ -79,10 +83,13 @@ manipulator_client:
   ros__parameters:
     target_distance_m: 0.24
     distance_tolerance_m: 0.025
-    lateral_tolerance_m: 0.018
+    cross_tolerance_m: 0.018
     kp_distance: 0.8
-    kp_lateral: 1.2
+    kp_bearing: 1.2
     max_speed: 0.18
+    max_turn_rate: 0.6
+    min_turn_rate: 0.0
+    camera_yaw_offset_rad: 0.0
     target_stale_s: 0.5
     action_timeout_s: 12.0
     status_stale_s: 0.30

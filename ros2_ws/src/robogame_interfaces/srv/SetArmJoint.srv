@@ -1,0 +1,8 @@
+uint8 joint
+float32 angle_deg
+float32 timeout_s
+---
+bool success
+uint16 error_code
+float32 duration_s
+string detail

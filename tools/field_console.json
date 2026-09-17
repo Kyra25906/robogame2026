@@ -1,0 +1,71 @@
+{
+  "processes": [
+    {
+      "name": "bridge",
+      "group": "base",
+      "color": "cyan",
+      "command": "ros2 run robot_bridge robot_bridge --ros-args --params-file ros2_ws/src/robogame_bringup/config/robot.yaml --params-file ros2_ws/src/robogame_bringup/config/robot_field.yaml"
+    },
+    {
+      "name": "localization",
+      "group": "base",
+      "color": "blue",
+      "command": "ros2 run localization localization_node --ros-args --params-file ros2_ws/src/robogame_bringup/config/robot.yaml"
+    },
+    {
+      "name": "motion",
+      "group": "base",
+      "color": "green",
+      "command": "ros2 run motion_control motion_controller --ros-args --params-file ros2_ws/src/robogame_bringup/config/robot.yaml"
+    },
+    {
+      "name": "arm",
+      "group": "arm",
+      "color": "magenta",
+      "command": "ros2 run manipulator_client manipulator_client --ros-args --params-file ros2_ws/src/robogame_bringup/config/robot.yaml --params-file ros2_ws/src/robogame_bringup/config/robot_field.yaml"
+    },
+    {
+      "name": "line",
+      "group": "line",
+      "color": "yellow",
+      "description": "巡线控制器：订阅 /line_sensor + /robot/status，经门控与仲裁后发布 /cmd_vel。现场面板「状态与巡线」会逐层显示门控结果。",
+      "command": "ros2 run motion_control line_follow_controller --ros-args --params-file ros2_ws/src/robogame_bringup/config/robot.yaml"
+    },
+    {
+      "name": "status_hz",
+      "group": "observe",
+      "color": "cyan",
+      "command": "ros2 topic hz /robot/status"
+    },
+    {
+      "name": "line_hz",
+      "group": "observe",
+      "color": "yellow",
+      "command": "ros2 topic hz /line_sensor"
+    },
+    {
+      "name": "odom_hz",
+      "group": "observe",
+      "color": "blue",
+      "command": "ros2 topic hz /wheel_odom"
+    },
+    {
+      "name": "motion_result",
+      "group": "observe",
+      "color": "green",
+      "command": "ros2 topic echo /motion/result"
+    },
+    {
+      "name": "arm_result",
+      "group": "observe",
+      "color": "magenta",
+      "command": "ros2 topic echo /manipulator/result"
+    },
+    {
+      "name": "line_status",
+      "group": "observe",
+      "color": "yellow",
+      "command": "ros2 topic echo /line_follow/status"
+    }
+  ]
+}

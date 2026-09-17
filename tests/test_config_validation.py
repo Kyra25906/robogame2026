@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 from pathlib import Path
 import re
 import unittest
@@ -8,6 +9,39 @@ from robogame_core.config_validation import validate_config_bundle
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _manipulator_params(yaml_text: str) -> dict:
+    """从 robot*.yaml 文本里取出 manipulator_client 的顶层 ros__parameters。
+
+    本机没有 PyYAML，而且配置文件是 ROS 2 风格（含 `!!python/object` 标签），
+    所以用缩进感知的小解析器：进入 `manipulator_client:`，在其 `ros__parameters:`
+    子块内读取 `key: scalar`。只用于测试断言，不参与任何生产路径。
+    """
+    params: dict = {}
+    in_node = False
+    in_params = False
+    for line in yaml_text.splitlines():
+        stripped = line.split("#", 1)[0].rstrip()
+        if not stripped.strip():
+            continue
+        indent = len(stripped) - len(stripped.lstrip())
+        if indent == 0:
+            in_node = stripped.strip() == "manipulator_client:"
+            in_params = False
+            continue
+        if not in_node:
+            continue
+        if indent == 2 and stripped.strip() == "ros__parameters:":
+            in_params = True
+            continue
+        if in_params and indent >= 4 and ":" in stripped:
+            key, _, value = stripped.strip().partition(":")
+            try:
+                params[key] = float(value.strip())
+            except ValueError:
+                continue
+    return params
 
 
 def _node(**params):
@@ -47,8 +81,10 @@ def valid_bundle():
         ),
         "manipulator_client": _node(
             target_distance_m=0.24, distance_tolerance_m=0.025,
-            lateral_tolerance_m=0.018, kp_distance=0.8, kp_lateral=1.2,
-            max_speed=0.18, target_stale_s=0.5, action_timeout_s=12.0,
+            cross_tolerance_m=0.018, kp_distance=0.8, kp_bearing=1.2,
+            max_speed=0.18, max_turn_rate=0.6,
+            min_turn_rate=0.0, camera_yaw_offset_rad=0.0,
+            target_stale_s=0.5, action_timeout_s=12.0,
             status_stale_s=0.3, placement_stable_duration_s=3.0,
             placement_observation_timeout_s=6.0,
             placement_max_unavailable_gap_s=0.0,
@@ -264,6 +300,85 @@ class ConfigValidationTests(unittest.TestCase):
             issue.level == "ERROR" and "max_mcu_sample_gap_ms" in issue.path
             for issue in issues
         ))
+
+    def test_min_turn_rate_above_max_is_rejected(self):
+        """算法会在 20Hz 回调里抛异常（grasp_alignment.py:178），校验器必须同步拦住。
+
+        否则一份“校验通过”的 robot.yaml 会让 manipulator_client 在第一次对准时
+        异常退出，且没有任何配置层面的报错。
+        """
+        bundle = valid_bundle()
+        manipulator = bundle[0]["manipulator_client"]["ros__parameters"]
+        manipulator["max_turn_rate"] = 0.6
+        manipulator["min_turn_rate"] = 0.9
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "min_turn_rate" in issue.path
+            for issue in issues
+        ))
+
+    def test_negative_min_turn_rate_is_rejected(self):
+        bundle = valid_bundle()
+        bundle[0]["manipulator_client"]["ros__parameters"]["min_turn_rate"] = -0.1
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "min_turn_rate" in issue.path
+            for issue in issues
+        ))
+
+    def test_zero_min_turn_rate_is_allowed(self):
+        """0 是合法值（＝不做死区补偿），不能因为“正数”规则被误拒。"""
+        bundle = valid_bundle()
+        bundle[0]["manipulator_client"]["ros__parameters"]["min_turn_rate"] = 0.0
+        issues = validate(bundle)
+        self.assertEqual(
+            [issue for issue in issues if "min_turn_rate" in issue.path], []
+        )
+
+    def test_non_finite_camera_yaw_offset_is_rejected(self):
+        for bad in (float("nan"), float("inf")):
+            with self.subTest(bad=bad):
+                bundle = valid_bundle()
+                bundle[0]["manipulator_client"]["ros__parameters"][
+                    "camera_yaw_offset_rad"
+                ] = bad
+                issues = validate(bundle)
+                self.assertTrue(any(
+                    issue.level == "ERROR" and "camera_yaw_offset_rad" in issue.path
+                    for issue in issues
+                ))
+
+    def test_out_of_range_camera_yaw_offset_is_rejected(self):
+        bundle = valid_bundle()
+        bundle[0]["manipulator_client"]["ros__parameters"][
+            "camera_yaw_offset_rad"
+        ] = 4.0
+        issues = validate(bundle)
+        self.assertTrue(any(
+            issue.level == "ERROR" and "camera_yaw_offset_rad" in issue.path
+            for issue in issues
+        ))
+
+    def test_turn_parameters_in_the_common_layer_stay_legal(self):
+        """真实 robot.yaml 里的转向参数必须始终合法。
+
+        这是唯一能把“配置层”和“算法约束”绑在一起的测试：以后谁把
+        min_turn_rate 调到超过 max_turn_rate，这里就会红，而不是等到上车
+        第一次对准时节点崩掉。
+
+        只查 robot.yaml（common 层）：robot_field.yaml 是环境层，按设计只放
+        runtime_mode/placement_evidence_policy，不重复算法参数。
+        """
+        path = (
+            PROJECT_ROOT / "ros2_ws/src/robogame_bringup/config/robot.yaml"
+        )
+        params = _manipulator_params(path.read_text(encoding="utf-8"))
+        self.assertIn("max_turn_rate", params)
+        self.assertIn("min_turn_rate", params, "robot.yaml 必须显式写出该参数")
+        self.assertIn("camera_yaw_offset_rad", params)
+        self.assertGreaterEqual(params["min_turn_rate"], 0.0)
+        self.assertLessEqual(params["min_turn_rate"], params["max_turn_rate"])
+        self.assertLessEqual(abs(params["camera_yaw_offset_rad"]), math.pi)
 
     def test_input_can_be_copied_without_hidden_mutation(self):
         bundle = valid_bundle()

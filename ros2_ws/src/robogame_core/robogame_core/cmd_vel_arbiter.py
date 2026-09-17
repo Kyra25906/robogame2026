@@ -26,6 +26,7 @@ from .models import Velocity2D
 SOURCE_NAVIGATE = "motion_control"
 SOURCE_ALIGN = "manipulator_client"
 SOURCE_MISSION = "mission_manager"
+SOURCE_LINE_FOLLOW = "line_follow"
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ class ArbiterConfig:
 
     # 合法来源集合（防止未知来源被误采）
     allowed_sources: frozenset[str] = frozenset(
-        {SOURCE_NAVIGATE, SOURCE_ALIGN, SOURCE_MISSION}
+        {SOURCE_NAVIGATE, SOURCE_ALIGN, SOURCE_MISSION, SOURCE_LINE_FOLLOW}
     )
     # 授权者命令超过此秒数未更新 → 视为过期，输出零速
     stale_s: float = 0.5

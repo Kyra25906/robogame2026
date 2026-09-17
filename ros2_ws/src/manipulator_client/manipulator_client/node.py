@@ -6,6 +6,10 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from robogame_core.hardware_readiness import validate_runtime_evidence_policy
+from robogame_core.grasp_alignment import (
+    calculate_turn_alignment_command,
+    target_in_body_frame,
+)
 from robogame_core.manipulator import (
     CancellationDecision,
     GrabVerificationPolicy,
@@ -18,7 +22,6 @@ from robogame_core.manipulator import (
     StabilityDecision,
     VerificationDecision,
     cancellation_decision,
-    calculate_alignment_command,
     format_mechanism_failure,
     format_service_exception,
     select_place_height,
@@ -40,8 +43,10 @@ class ManipulatorClientNode(Node):
         for name, default in {
             "runtime_mode": "mock",
             "target_distance_m": 0.24, "distance_tolerance_m": 0.025,
-            "lateral_tolerance_m": 0.018, "kp_distance": 0.8, "kp_lateral": 1.2,
-            "max_speed": 0.18, "target_stale_s": 0.5, "action_timeout_s": 12.0,
+            "cross_tolerance_m": 0.018, "kp_distance": 0.8, "kp_bearing": 1.2,
+            "max_speed": 0.18, "max_turn_rate": 0.6, "min_turn_rate": 0.0,
+            "camera_yaw_offset_rad": 0.0,
+            "target_stale_s": 0.5, "action_timeout_s": 12.0,
             "status_stale_s": 0.30, "service_wait_timeout_s": 1.0,
             "grab_verification_policy": "service_only",
             "grab_verification_timeout_s": 1.0,
@@ -525,15 +530,29 @@ class ManipulatorClientNode(Node):
             return
         self.workflow_state = ManipulatorState.ALIGNING
         self._publish_perception_stage("ACQUIRE")
-        alignment = calculate_alignment_command(
-            distance_m=self.target.distance_m,
-            lateral_m=self.target.lateral_m,
+        target_frame = target_in_body_frame(
+            forward_m=self.target.distance_m,
+            lateral_right_m=self.target.lateral_m,
+            camera_yaw_offset_rad=float(self.get_parameter("camera_yaw_offset_rad").value),
+        )
+        if not target_frame.valid:
+            # 看得见但不可用（距离非正）：当没看见处理，停车等下一帧，不拿坏数据去动底盘
+            self.workflow_state = ManipulatorState.WAITING_TARGET
+            self.operation = MechanismOperation.NONE
+            self._publish_perception_stage("SEARCH")
+            self._publish_stop()
+            return
+        alignment = calculate_turn_alignment_command(
+            forward_m=target_frame.forward_m,
+            left_m=target_frame.left_m,
             target_distance_m=float(self.get_parameter("target_distance_m").value),
             distance_tolerance_m=float(self.get_parameter("distance_tolerance_m").value),
-            lateral_tolerance_m=float(self.get_parameter("lateral_tolerance_m").value),
+            cross_tolerance_m=float(self.get_parameter("cross_tolerance_m").value),
             kp_distance=float(self.get_parameter("kp_distance").value),
-            kp_lateral=float(self.get_parameter("kp_lateral").value),
+            kp_bearing=float(self.get_parameter("kp_bearing").value),
             max_speed=float(self.get_parameter("max_speed").value),
+            max_turn_rate=float(self.get_parameter("max_turn_rate").value),
+            min_turn_rate=float(self.get_parameter("min_turn_rate").value),
         )
         if alignment.ready_to_grab:
             self._publish_stop()
@@ -555,7 +574,8 @@ class ManipulatorClientNode(Node):
             self.service_wait_started_at = 0.0
         msg = Twist()
         msg.linear.x = alignment.linear_x
-        msg.linear.y = alignment.linear_y
+        msg.linear.y = 0.0
+        msg.angular.z = alignment.angular_z
         self.cmd_pub.publish(msg)
 
 

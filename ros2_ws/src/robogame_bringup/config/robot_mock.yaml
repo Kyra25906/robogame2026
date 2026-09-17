@@ -5,6 +5,7 @@ robot_bridge:
     mock_grab_success: true
     mock_release_success: true
     mock_lift_success: true
+    mock_arm_success: true
 
 manipulator_client:
   ros__parameters:
