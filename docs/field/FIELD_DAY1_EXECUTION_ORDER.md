@@ -126,7 +126,8 @@ ls -l /dev/robot_mcu 2>/dev/null
 ```bash
 source ~/robogame/ros2_ws/install/setup.bash
 
-# 注意：真实模式靠 robot_field.yaml 覆盖 robot.yaml 的 mock_mode（:3 mock_mode: false）。
+# 注意：真实模式靠 robot_field.yaml 指定：第 3 行 mock_mode: false + 第 9 行 runtime_mode: field。
+# robot.yaml 里没有 mock_mode 这个键（节点默认 mock_mode=True），所以 robot_field.yaml 必须带上。
 # hardware.yaml 是 legacy、已不被任何启动入口加载，不要再拿它当覆盖层。
 ros2 run robot_bridge robot_bridge --ros-args \
   --params-file ~/robogame/ros2_ws/src/robogame_bringup/config/robot.yaml \

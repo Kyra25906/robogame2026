@@ -575,6 +575,8 @@ Keil 看到 ARM CoreSight SW-DP
 /home/rg26/robogame_deploy_2d9514d
 ```
 
+> ⚠️ **路径更正（2026-09-17 复核）**：上面这种 `robogame_deploy_*`（以及 `robogame_*.bundle`）都是**历史部署目录**，只作追溯/回退用。树莓派**当前**的仓库路径是 **`~/robogame`**（即 `/home/rg26/robogame`；用户 `rg26`，主机名 `robogame-t26-rpi4`，Ubuntu Server 24.04 arm64 + ROS 2 Jazzy）。依据：`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:9-10`。今天上机一律用 `~/robogame`，SSH 与网页操作见 `docs/guides/RASPBERRY_PI_SSH_AND_WEB_GUIDE.md`。
+
 已确认：
 
 - bundle SHA-256 校验正确；

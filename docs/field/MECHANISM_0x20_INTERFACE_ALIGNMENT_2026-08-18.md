@@ -141,7 +141,7 @@ MECHANISM_COMMAND_PAYLOAD = struct.Struct("<HBBiI")
 4. 肘的机构是否已装车（固件有通道、机械组说“计划加”）。
 5. 电控是否接受 `ARM_SET = 7`，以及固件侧是否按 6.1 的编号实现。
 
-以上任一项冻结后，只需改 `hardware.yaml` 的 `arm_joint_ranges` / 本文档，不需要改代码。
+以上任一项冻结后，只需改 `robot.yaml:26-27` 的 `arm_joint_ranges` / `arm_joint_ranges_evidence` 并同步本文档，不需要改代码。**不要改 `hardware.yaml`**——它是 legacy、没有任何启动入口加载它（`tools/field_console.json:7`、`launch/hardware.launch.py:13-14` 只加载 `robot.yaml` + `robot_field.yaml`），改那里的 `arm_joint_ranges` 不会生效。
 
 ---
 

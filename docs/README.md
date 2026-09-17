@@ -84,7 +84,7 @@
 
 - 主线 `integration/robogame-t26`，已合并 vision 分支，不再分叉。
 - 软件模拟闭环、取消、四种放置终态已经完成。
-- 258 项测试，0 失败（16 项需 rclpy 的行为测试在 Windows 上 skip，Ubuntu 上全量运行）。
+- 测试数量**不在文档里写死**（每轮都在变：08-13 快照的 `258` 早已过期，阶段 A 记录里已到 399+）。现场取数命令：`D:\python.exe -B tools\run_tests.py`（DSH 沙箱适配的 unittest 包装器，以输出的 `Ran N tests` 为准）；只数测试函数定义可用 `python -c "import pathlib,re;print(sum(len(re.findall(r'def test_',p.read_text(encoding='utf-8'))) for p in pathlib.Path('tests').rglob('*.py')))"`（2026-09-17 实测 992，含 skip）。Windows 上 16 项需 rclpy 的行为测试 skip，Ubuntu 上全量运行；「0 失败」以上述命令的实际输出为准。
 - V1 协议文档与上位机编解码已在当前未提交工作区实现，针对测试 19/19 通过；尚未完成本轮全量回归和 ARM64 验收。
 - 树莓派 `/dev/ttyUSB0` TX/RX 回环已收到 `b'hello'`，只证明 USB 转串口基础收发；真实 STM32 `HELLO→ACK` 仍未验证。
 - 树莓派现有干净部署为 `2d70649`；当前未提交改动不部署，待增加 V1 串口验证入口并全量回归后再建新目录。

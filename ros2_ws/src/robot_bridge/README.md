@@ -28,7 +28,7 @@ ROS2服务 → 安全检查 → 0x20命令 → ACK → 0x21状态 → ROS2结果
 
 ## 3. 机械传输参数
 
-`hardware.yaml` 默认值：
+`robot_bridge` 节点内默认值（`node.py:128-130`；`hardware.yaml` 里也有一份同值副本，但那个文件是 legacy、不被加载）：
 
 | 参数 | 默认值 | 含义 |
 |---|---:|---|
@@ -60,8 +60,10 @@ cd ~/robogame/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 run robot_bridge robot_bridge --ros-args \
-  --params-file src/robogame_bringup/config/hardware.yaml
+  --params-file src/robogame_bringup/config/robot.yaml \
+  --params-file src/robogame_bringup/config/robot_field.yaml
 ```
+（`hardware.yaml` 是 legacy，已不被任何启动入口加载；现场模式靠 `robot_field.yaml` 的 `mock_mode: false` 生效。）
 
 确认串口权限：
 

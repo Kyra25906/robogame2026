@@ -9,9 +9,12 @@
 - `launch/mock_demo.launch.py`：三块目标的全软件模拟演示。
 - `launch/single_cube.launch.py`：一块橙色方块的保底模拟演示。
 - `launch/hardware.launch.py`：使用真实串口和真实相机节点接口的启动入口。
-- `config/robot.yaml`：通用参数、模拟开关、路点、视觉、导航和抓放参数。
+- `config/robot.yaml`：通用参数（公共层）、路点、视觉、导航和抓放参数；**环境开关（`mock_mode`/`runtime_mode`）不在这一层**（写进来会被配置校验判 ERROR，见 `tests/test_config_validation.py:251`）。
 - `config/single_cube.yaml`：覆盖任务数量为 1 橙、0 紫。
-- `config/hardware.yaml`：覆盖 `robot_bridge` 为真实串口模式。
+- `config/robot_field.yaml`：现场层——`robot_bridge` 的 `mock_mode: false`、`serial_port`、`baud_rate`，`manipulator_client.runtime_mode: field`，以及现场视觉焦距。
+- `config/robot_mock.yaml`：模拟层——`mock_mode: true`、`runtime_mode: mock`（`mock_demo` / `single_cube` 启动用它）。
+- `config/robot_speed080.yaml`：可选限速层——把 `motion_controller.max_vx/max_vy` 提到 0.80/0.40，仅在固件已烧录 0.8/0.4 限幅后才叠加。
+- `config/hardware.yaml`：**legacy，已不被任何启动入口加载**（`tools/field_console.json:7` 与 `launch/hardware.launch.py:13-14` 加载的是 `robot.yaml` + `robot_field.yaml`；`tests/test_config_validation.py:258` 只把它的漂移判为 warning）。改这里的参数不会生效。
 - `setup.py`：安装 launch 和 config 文件。
 
 ## 3. 编译
@@ -62,7 +65,7 @@ ros2 topic echo /robot/status
 
 - 长期参数写入 YAML，不要散落在源码里。
 - 每次只调整一类参数，并记录测试结果。
-- `hardware.yaml` 后加载，因此会覆盖 `robot.yaml` 中同名参数。
+- 加载顺序是 `robot.yaml`（公共层）→ `robot_field.yaml`（现场）或 `robot_mock.yaml`（模拟）→ 必要时再叠 `robot_speed080.yaml`；后加载的同名参数生效。**`hardware.yaml` 是 legacy、不被任何启动入口加载，改它不会生效。**
 - 比赛左右侧、路点、HSV、速度、层高和超时都应通过配置切换。
 - 改完先跑单模块，再跑 `single_cube`，最后才跑完整任务。
 

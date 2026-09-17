@@ -11,6 +11,8 @@
 > 非零速度与真实机构动作均未验收。详见 `docs/LEARNING_LOG.md` 的
 > “2026-08-14”章节和 `docs/TODO_AND_ISSUES.md` 的 ISSUE-019/020。
 
+> ⚠️ **路径更正（2026-09-17 复核）：** 树莓派**当前**的仓库路径已经是 **`~/robogame`**（= `/home/rg26/robogame`，用户 `rg26`，主机名 `robogame-t26-rpi4`，ROS 2 Jazzy；2026-08-18 由 GitHub clone `integration/line-follow-t26` 建立，见 `docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:9-10`）。本页下面出现的 `robogame_deploy_*` / `robogame_*.bundle` 目录均为**历史部署**，只作追溯或回退用，不要在那些目录里跑今天的联调。当前 SSH 与网页操作见 `docs/guides/RASPBERRY_PI_SSH_AND_WEB_GUIDE.md`。
+
 ## 1. 本对话职责
 
 本对话只负责：

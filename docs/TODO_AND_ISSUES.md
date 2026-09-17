@@ -10,7 +10,7 @@
 - 一次只选择一个小任务进入开发，避免同时修改过多模块；
 - 生成视频、JSONL 和 HTML 默认位于 `results/`，不提交 Git，重要数据需要另行备份。
 
-最后更新：2026-08-19
+最后更新：2026-09-17（只读复核修正：过期的 `2001` 机构拒绝描述、第三轮复审清单的完成状态、测试计数）
 
 ## 当前状态摘要
 
@@ -100,40 +100,44 @@
 - [x] `C3` 斜坡/高台：新建 `robogame_core/ramp_control.py`（RampProfile / RampController / SlipDecision：坡道限速、打滑检测期望 vs 实测、卡住停车、下坡防冲）。`tests/test_ramp_control.py` 16 项合成数据，全量 446 OK，Ubuntu 446 OK + 构建 0。与 C1 RouteChain 限速同源。IMU pitch 视距补偿为现场依赖后续项。
 - [x] `C6` P2 稳健性（P2-1 + P2-2）：`navigation.py` 新增 `pose_in_own_half()`（本方半场 + 边界 + 有限值，规则 3.2.1 S4 越线拒绝）；新建 `robogame_core/cmd_vel_arbiter.py`（/cmd_vel 多来源仲裁：急停>授权者>其他忽略>过期零速，来源白名单）。`tests/test_cmd_vel_arbiter.py` 14 项，全量 460 OK，Ubuntu 460 OK + 构建 0。P2-4 层高上限待机械确认。
 
-## 2026-08-17 第三轮复审修复清单（方案已出，代码未动）
+## 2026-08-17 第三轮复审修复清单（⚠️ 2026-09-17 复核：绝大部分已完成，勿重复实施）
 
-依据：第三轮复审报告（344 项测试基线）。详细修复方案（根因/行号/验证/依赖）见 `docs/RoboGame2026_第三轮复审修复方案_2026-08-17.md`。以下为可执行清单，代码改动待确认后逐项实施。
+依据：第三轮复审报告（344 项测试基线）。详细修复方案（根因/行号/验证/依赖）见 `docs/RoboGame2026_第三轮复审修复方案_2026-08-17.md`。以下原为可执行清单，**标题里的「方案已出，代码未动」已过期**。
+
+> **开工前必读（2026-09-17 只读复核）**：本清单**不是**待做 backlog。原列 P0 6 项、P1 5 项、P2 5 项中的绝大多数，已由上方「2026-08-18 执行队列阶段 A 完成记录」（A2/A3/A4/A5/B1/C2/C3/C6 各条）实现并带测试。标记约定：`[x]` = 已完成（行内给出代码证据）；`[ ]` = **仍有剩余子项**（行内写明已完成哪部分、仍缺哪部分）。请先读 `[x]` 行的证据再动手，不要重做已完成项。
+>
+> 行号类描述按写入当日（08-17）记录，代码行号此后有漂移，以当前文件为准。
 
 > **执行顺序、二审录像与完赛清单见 `docs/team/算法一执行队列_2026-08-18.md`**（阶段 A–H，含评分项对齐与待拍板决策）。
 > 2026-08-18 修正两处过时假设：视觉工作分辨率 1280×720→**640×480**（焦距 2550→**1275**）；标签为 **AprilTag Tag36h11** 而非 ArUco。
 
-### P0：field 模式必然失败（6 项）
+### P0：field 模式必然失败（原 6 项，2026-09-17 复核：6 项代码改动全部已完成，残留现场项见行内）
 
 - [x] `P0` 启动竞态：`mission.py:80-81` 在 SELF_CHECK 就对 `communication_ok=False` 直接 fail，而 `robot_bridge` 上电 `_communication_ok=False`（`node.py:199/224`），首条 STATUS 必带 False → 立即 FAILED。方案：新增 `WAIT_FOR_COMMUNICATION` 前置状态（或 SELF_CHECK 容忍未就绪）+ 启动等待超时参数，运行时心跳丢失语义不变。**✅ 2026-08-19 已修（A2，见阶段 A 完成记录）**。
-- [ ] `P0` 无相机节点：`hardware.launch.py` 无 usb_cam/v4l2_camera，`/camera/image_raw` 无人发布 → PICK_* 停在 WAITING_TARGET 直到 12s 超时。方案：独立 `camera.launch.py`（**640×480 @ 30fps MJPG，usb_cam**）+ CameraInfo；驱动安装为现场依赖。
-- [ ] `P0` cube_perception 漏传 field 配置 + 焦距值过时：`hardware.launch.py:32` 只传 `common`，实机用 `robot.yaml` 的 700.0。方案：改为 `parameters=[common, field]`，且 `fallback_focal_px` 应为 **1275.0 而非 2550.0**。
+- [x] `P0` 无相机节点：**已完成（B1，2026-09-17 复核）**。`ros2_ws/src/robogame_bringup/launch/camera.launch.py` 已存在（usb_cam 640×480@30fps MJPG + 静态 CameraInfo 焦距 1275.0），并由 `hardware.launch.py:19` include 挂入；`tools/launch_graph.py` 的 `KNOWN_HARDWARE_GAPS` 已置空，`tests/test_launch_graph.py` 钉住该图。**仍属现场依赖**：树莓派装 usb_cam 驱动、真机确认 `/camera/image_raw` 有发布者。
+- [x] `P0` cube_perception 漏传 field 配置 + 焦距值过时：**已完成（A3，2026-09-17 复核）**。`hardware.launch.py:41` 现为 `parameters=[common, field]`；`robot_field.yaml:18` `fallback_focal_px: 1275.0`（`robot.yaml:65` 保留 700.0 作开发兜底，field 层显式覆盖，并有焦距一致性回归测试）。下方「连带」的像素量纲参数仍按原计划留到现场重调。
   - 依据：08-15 性能测试（`docs/field/单相机模拟双相机性能测试_2026-08-15.md`）证明树莓派 4B 在 1280×720 仅 ~13fps、CPU 270%，工作分辨率定 **640×480**；焦距按分辨率线性缩放 `2550×(640/1280)=1275`。**内参无需重标**（fx≈2526.98，RMS 0.82px 依然有效），这是纯数学换算。
   - 连带：`min_area_px`（400）/`min_side_px`（12）为像素量纲，分辨率减半后方块面积变 1/4，需现场重调。
-- [ ] `P0` 真实模式不支持 RETREAT：`manipulator_client/node.py:344-351` 必经 `/chassis/retreat`，真实分支（`robot_bridge/node.py:524-535`）只映射 GRAB/RELEASE/HOME，返回 error_code=9。方案（推荐 A）：field 模式 PLACE 在 RELEASE+验证通过后成功返回，撤退上移 mission 级 `RETREAT → /motion/goal` 导航（状态机与 dispatch 已存在），mock 模式保留原流程。
-- [ ] `P0` retreat_complete 恒 False：`robot_bridge/node.py:961` 无条件读 mock 状态，`complete_mock_retreat` 只在 mock 分支调用。方案：与上项绑定；真实模式禁止 mock 证据泄漏，retreat 完成证据改由运动链提供。
-- [ ] `P0` 稳定性判定必然失败：`placement_evidence_policy: unavailable` + `placement_max_unavailable_gap_s: 0.0` → 观察器必然 INCONCLUSIVE（`manipulator.py:120-148`），而 `INCONCLUSIVE` 不在 `MissionResult`（`models.py:12-20`）→ 被归为 MECHANISM_ERROR。方案：`MissionResult` 增加 `INCONCLUSIVE`，mission_manager 不判死，进入 mission 级 VERIFY_BUILD；保持 unavailable 诚实策略，视觉证据中期接入。
+- [x] `P0` 真实模式不支持 RETREAT：**已完成（A4，2026-09-17 复核）**。`manipulator_client/node.py:318-332` 在 `runtime_mode == "field"` 时，RELEASE + 放置验证通过即成功返回，不再调用机构式 `/chassis/retreat`（真实固件不支持，error_code=9）；mock 模式保留原流程，撤退上移 mission 级 `RETREAT → /motion/goal`。**仍属现场项**：mission 级撤退导航的真车验收。
+- [x] `P0` retreat_complete 恒 False：**已完成（A4，2026-09-17 复核）**。`robot_bridge/node.py:1275-1279` 现在是 `... if self.mock_mode else False`——真实模式不再无条件读 mock 状态，mock 证据不泄漏；真实撤退完成证据改由运动链（mission 级 `/motion/goal`）提供（与上项绑定）。
+- [x] `P0` 稳定性判定必然失败：**已完成（A4，2026-09-17 复核）**。`robogame_core/models.py` 的 `MissionResult` 已有成员 `INCONCLUSIVE`，`mission_manager` 对 INCONCLUSIVE 不判死、进入 mission 级 VERIFY_BUILD（3s 计时兜底），`classify_action_result()` 在 `robogame_core/mission.py` 集中分类（这几个文件 2026-09-17 当天仍在被并行修改，**用符号名检索定位，不要依赖行号**）。`placement_evidence_policy: unavailable` 的诚实策略保持不变（ISSUE-012）。**仍缺**：真实视觉稳定证据接入（G 阶段）。
 
-### P1：规则明确要求、零实现（5 项）
+### P1：规则明确要求、零实现（原 5 项，2026-09-17 复核：模块已实现，剩余为集成/现场项）
 
-- [ ] `P1` 巡线（规则 3.1.8）：`robogame_core/line_follow.py`（八路灰度→横向偏差+纠偏+ON_LINE/LEFT/RIGHT/LOST）+ `tests/test_line_follow.py`；接入路段链（motion_control/mission_manager）；与电控冻结 V1 巡线遥测字节布局（先确认装车/ADC 通道）。
-- [ ] `P1` 视觉标签识别（规则 3.1.8）：**已确认为 AprilTag Tag36h11，id 1–6**（证据：`docs/field/视觉标签样例_图3.10.png`；样式无需再现场确认，位置仍需实测）。用 `cv2.aruco` 的 `DICT_APRILTAG_36h11` 或 `apriltag` 库，PnP 解算（15×15cm 已知尺寸 + 已标定内参），接入 localization 做绝对位姿矫正（消里程计漂移）。检测器与融合逻辑**离线可做**（合成图单测）；依赖 P0-2 相机与标签坐标映射表。
+- [ ] `P1` 巡线（规则 3.1.8）：**模块与测试已完成，勿重写**——`robogame_core/line_follow.py`（八路灰度→横向偏差+纠偏+ON_LINE/LEFT/RIGHT/LOST）+ `tests/test_line_follow.py` 31 项（见上方「巡线归属与待办」）。**仍缺**：① 接入路段链（motion_control/mission_manager 路线选择，即「下轮 B」）；② 0x14 巡线遥测字节布局与电控冻结（草案待确认，固件上送与上位机解码均未实现）。
+- [ ] `P1` 视觉标签识别（规则 3.1.8）：**检测器与 PnP 已完成（C2，勿重写）**——`robogame_core/apriltag_pose.py`（`detect_tags` / `estimate_tag_pose` / `build_observation` / `detect_and_pose`）+ 合成图 14 项单测。仍缺：① 接入 localization 做绝对位姿矫正（消里程计漂移）；② 标签坐标映射表与现场位置实测。**已确认为 AprilTag Tag36h11，id 1–6**（证据：`docs/field/视觉标签样例_图3.10.png`）。⚠️ 仓库样例 `tag_01~06.png` 检测不到标准 AprilTag（疑数字牌），现场需确认样式；PnP 逻辑不受影响。
   - ⚠️ 几何冲突待决策：标签在墙上 40cm 需平视，方块在地面/高台需俯视，同一相机难兼顾 → 见执行队列「待拍板决策 1」。
-- [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：上坡航段建模、IMU pitch 视距/重心补偿、打滑检测、上下坡限速。依赖真实 IMU（当前 imu_valid=false）。
+- [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：**离线部分已完成（C3，勿重写）**——`robogame_core/ramp_control.py`（RampProfile / RampController / SlipDecision：坡道限速、打滑检测、卡住停车、下坡防冲）+ `tests/test_ramp_control.py` 16 项合成数据。**仍缺**：IMU pitch 视距/重心补偿与真车坡道验收，依赖真实 IMU（当前 `imu_valid=false`）。
 - [x] `P1` 倒塌检测（规则 3.2.2 S4）：计时兜底已并入 A4 完成（`MissionResult.INCONCLUSIVE` 不判死 + mission 级 VERIFY_BUILD 3s 计时，`classify_action_result`）。**视觉证据部分对得分不必要**（3s 稳定由裁判判定、不判死已兜住），真正价值在 G3.7（塔倒→重搭决策），并入 G 阶段；可行性依赖「撤退后能否看到塔」实测（Claude 建议 1.6）。
 - [ ] `P1` 实测航点：`robot.yaml:84-87` 占位 waypoint → 现场实测回填 `robot_field.yaml`，补上坡航段。
 
-### P2：稳健性（5 项）
+### P2：稳健性（原 5 项，2026-09-17 复核：3 项已修，2 项仍待确认）
 
-- [ ] `P2` 边界收紧：`robot.yaml:32-35` 覆盖全场 → 本方半场，越线异常处理（规则 3.2.1 S4）。
-- [ ] `P2` /cmd_vel 仲裁：motion_control/manipulator_client/mission_manager 三个发布者无仲裁 → 统一出口或职责时段明确。
+- [x] `P2` 边界收紧：**已完成（C6，2026-09-17 复核）**——`robogame_core/navigation.py:33` 新增 `pose_in_own_half()`（本方半场 + 边界 + 有限值，越线拒绝，规则 3.2.1 S4）。
+- [x] `P2` /cmd_vel 仲裁：**已完成（C6，2026-09-17 复核）**——新建 `robogame_core/cmd_vel_arbiter.py`（急停 > 授权者 > 其他忽略 > 过期零速，来源白名单）+ `tests/test_cmd_vel_arbiter.py` 14 项；巡线已作为第 4 来源接入门控。
 - [ ] `P2` 任务循环：COMPLETE 永久停止（`mission.py:82-83/137-140`）→ 支持多轮（最高 3 座、上不封顶）。
 - [ ] `P2` 层高上限：`place_heights_m: [0.10,0.20,0.30]` + clamp → 与规则/机械确认层数上限。
-- [ ] `P2` 清理 `robot.yaml:11-12` 重复 `max_mcu_sample_gap_ms` 键，及 `robot_bridge/node.py` 重复 `validate_mcu_tick` 导入。
+- [x] `P2` 清理配置重复键：**已完成（A5，2026-09-17 复核）**——`robot.yaml` 的 robot_bridge 段现只剩一处 `max_mcu_sample_gap_ms`（`robot.yaml:23`；`hardware.yaml:27` 属另一节点段）；`robot_bridge/node.py` 的 `validate_mcu_tick` 导入唯一（`node.py:33`，调用点 `node.py:1113`），核实无重复；新增 `tests/test_config_cleanliness.py` 防回归。
 
 ## 已完成的远程准备阶段记录
 
@@ -164,7 +168,7 @@
 - [x] `P1` `localization` 融合时检查 `imu_valid`：false 或数据过期时降级为纯里程计定位。证据：commit `a93d073`，`_imu_usable()` 同时检查 imu_valid 标志和 imu_stale_s 新鲜度（0.2s）。Ubuntu 验证新订阅 /robot/status 已生效，152 测试全过。
 - [x] `P1` `StreamDecoder` 增加 0x10（里程计）、0x11（IMU）、0x12（STATUS）帧解析骨架。证据：commit `8c8fe43`，`_dispatch_frame()` 已可按消息类型路由；实际载荷解析仍等待逐字节布局。
 - [x] `P1` 补齐串口外层协议抗异常测试：覆盖逐字节分片、多帧粘包、帧头跨读取、payload 内帧头、CRC 损坏、截断恢复、错误版本、超长声明、序号回绕、长噪声和编码边界；14/14 通过，未猜测 0x10/0x11/0x12 内部字段。
-- [x] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：缺失串口时 bridge 保持运行且通信不可信，机构以 2001 拒绝、非零 cmd_vel 被握手门控。证据：commit `e49d088` 在 Ubuntu 构建 9 个包，field 无硬件 smoke 输出 PASS，并正常退出。
+- [x] `P1` Ubuntu 复验 field 无硬件失败安全 smoke：缺失串口时 bridge 保持运行且通信不可信，机构以 2001 拒绝、非零 cmd_vel 被握手门控。证据：commit `e49d088` 在 Ubuntu 构建 9 个包，field 无硬件 smoke 输出 PASS，并正常退出。⚠️ **已过期（2026-09-17）**：本行是 08-13 当日的实测记录，「机构以 2001 拒绝」只对当时代码成立；现在的真实拒绝码是 `9003` 等（见 ISSUE-007），且 `field_no_hardware_smoke.py` 仍断言 `2001`，该 smoke 在无硬件场景下**必然失败**（期望 2001，实得 9003），详见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」。
 - [x] `P0` 修正 STATUS 解析骨架的失败安全边界：在 0x12 载荷尚未完成长度、字段和值域校验时，不更新 `last_decoded_status_rx`，也不把占位 `boot_id=0` 当成真实 MCU 状态。证据：新增静态回归测试，防止占位分支重新写入这两个状态入口；硬件安全测试 13/13、全项目 153/153 通过。
 - [ ] `P2` 现场确认 STM32 实际限幅值后回填 `robot.yaml` 注释或参数。
 - [x] `P2` `mechanism_acceptance.py` 终端摘要模式：每次动作和最终结果打印一行关键状态（comm/estop/calibrating/imu_valid/mechanism_fault）；状态缺失统一显示 UNKNOWN，完整证据仍写入 CSV。证据：摘要与硬件安全测试 16/16、全项目 156/156 通过。
@@ -307,7 +311,8 @@
 - 已确认：消息类型（0x01=CMD_VEL, 0x02=HEARTBEAT, 0x10=ODOM, 0x11=IMU, 0x12=STATUS, 0x13=ACK/握手）、字节序（小端）、帧结构（帧头+版本+类型+长度+seq+payload+CRC16-CCITT）、速度命令和反馈通道的频率与单位。
 - 仍待电控给出：STATUS（0x12）各字段的偏移/长度/类型、ODOM（0x10）和 IMU（0x11）的逐字节布局，以及机构命令的独立消息类型和载荷定义。
 - 协议冲突：已确认 `0x02=HEARTBEAT`，但旧机构文档仍把 `0x02` 写成机构命令；真实机构接入前必须由电控和机械共同确认，代码不得猜测复用。
-- 当前保护：`robot_bridge` 在非模拟模式主动拒绝机构服务，错误码为2001。
+- 当前行为（**2026-09-17 修正：旧文「`robot_bridge` 在非模拟模式主动拒绝机构服务，错误码为 2001」已过期**）：非 mock 模式**已实现**机构动作，不再有 `2001` 占位阻塞——`robot_bridge/node.py` 的真实分支映射 `GRAB / RELEASE / HOME`（`node.py:754-766`）、`STOP`（`node.py:733-753`）、`LIFT_ABS`（`node.py:840-860`）、`ARM_SET`（`node.py:883-931`），统一经 `_execute_real_mechanism` 下发 0x20。真实拒绝码是 `9003`（串口/会话/未解码 STATUS 不可用，`node.py:663-669`）、`9001`（软件急停，`node.py:670-671`）、`9006`（固件报机构故障，`node.py:672-673`）、`5`（物理启动未授权，`node.py:674-675`）、`4`（timeout 非法，`node.py:689-690`）、`6`（已有机构命令在执行，`node.py:694-698`）、`9`（未知真实命令，`node.py:761-766`）。**`2001` 已不在任何实现路径中**，代码里只剩 `robogame_bringup/field_no_hardware_smoke.py:75,77` 的断言（该断言本身已过期，见「复核发现：无硬件 smoke 的 2001 断言已与实现不符」）。注意区分：协议文档里的 `2001` 另有含义——「升降未回零」（`docs/树莓派_STM32机械机构通信协议_v1.0.md:261`），与本文旧文的「占位拒绝」不是同一件事。
+- 补充（2026-09-17 复核）：`LIFT_ABS` 是唯一被明确拒绝的动作，且由**固件**返回 `3010`（真车没有升降装置，C-3）——`ros2_ws/src/robot_bridge/README.md:134`、`docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:182-189`、固件 `rpi_protocol.c:217`（`RPI_ERROR_MECH_NO_LIFT = 3010`）。`ARM_SET` 通路已实现，但关节值域尚未冻结（`robot.yaml:26` `arm_joint_ranges: ""`）→ 每次下发都被策略层以 `9010` 拒绝，需先由机械/电控冻结范围。
 - 下一步：保留 StreamDecoder 的 0x10/0x11/0x12 路由骨架，但占位分支不得刷新真实状态新鲜度；等电控给出精确布局后再实现完整校验和状态更新。
 
 ### ISSUE-008：真实通信健康判据过宽
@@ -389,7 +394,12 @@
 ### ISSUE-018：测试数量文档不一致
 
 - 优先级：`P2`；
-- 已完成（2026-08-13）：实测全量 258 项（Windows 16 项 rclpy 行为测试 skip，Ubuntu 上全量运行），`README.md` 已更新为该数。
+- 已完成（2026-08-13）：当日实测全量 258 项（Windows 16 项 rclpy 行为测试 skip，Ubuntu 上全量运行），`README.md` 当时更新为该数。
+- **2026-09-17 复核修正**：`258` 是 08-13 的快照，早已过期，且**不要再把某个具体数字当作「当前数量」写进文档**——测试数每轮都在变（08-13 是 258，阶段 A 记录里已到 399，现在又涨了）。请用命令现场取数，而不是抄文档：
+  - 测试函数定义数（口径 = `tests/` 下所有 `def test_`，含 skip）：`python -c "import pathlib,re;print(sum(len(re.findall(r'def test_',p.read_text(encoding='utf-8'))) for p in pathlib.Path('tests').rglob('*.py')))"`；2026-09-17 实测 **992**（69 个测试文件）。
+  - 实际运行用例数（权威口径）：`D:\python.exe -B tools\run_tests.py`（DSH 沙箱适配的 unittest discover 包装器，见 `tools/run_tests.py:1-20`），以它输出的 `Ran N tests` 为准。
+- 两个口径**不相等**（运行数受 skip、参数化与集合方式影响），引用数字时必须同时写明命令与口径。
+- `docs/README.md:87` 的 `258` 已在 2026-09-17 改为「不固定数字 + 给命令」的写法。
 
 ## 2026-08-13 串口协议与部署准备
 
@@ -421,7 +431,7 @@
 - [ ] `P0` 增加 V1 ODOM/IMU → `/wheel_odom`、`/imu/data` → localization 的ROS端到端测试。
 - [x] `P0` 修正 ODOM与IMU协方差/不可用字段语义，避免默认全零被消费者误解为高精度测量；Ubuntu相关回归121项通过，临时方差仍待实机标定替换。
 - [ ] `P0` 为每次硬件验收增加 ROS发布者来源和残留进程检查，防止 mock 与 real 同名话题污染证据。
-- [ ] `P0` 定义并实现真实 `GRAB/LIFT/RELEASE/RETREAT` 机构协议；当前非mock模式仍主动拒绝，错误码2001。
+- [x] `P0` 定义并实现真实 `GRAB/LIFT/RELEASE/RETREAT` 机构协议（**2026-09-17 复核：上位机侧已实现，旧文「非 mock 模式仍主动拒绝，错误码 2001」已过期**）：`GRAB / RELEASE / HOME / STOP / LIFT_ABS / ARM_SET` 均已在 `robot_bridge/node.py` 真实分支映射到 0x20（`node.py:733-766`、`node.py:840-860`、`node.py:883-931`），协议见 `docs/树莓派_STM32机械机构通信协议_v1.0.md`；`RETREAT` 明确**不属于**机械协议，已上移为底盘运动（见本文件 A4 记录与机构章节）。**仍属现场项**：真实硬件端到端验收（STOP 能否物理停止执行器，见 ISSUE-009）、`LIFT_ABS` 由固件回 `3010`（真车无升降）、`ARM_SET` 待冻结关节值域。
 
 ### 尚未完成：STM32与实车
 
@@ -456,7 +466,7 @@
 
 - [ ] `P0` 底盘运动（10分）：完成真实 ODOM、架空方向/STOP、落地低速和启动区到材料区的重复导航验收。
 - [ ] `P0` 运动决策（20分）：冻结正式场地坐标和路点，用真实定位驱动任务状态机完成连续自主运行。
-- [ ] `P0` 取存操作（20分）：实现真实 `GRAB/LIFT/RELEASE/RETREAT` 协议；当前 field 模式仍以错误码 `2001` 主动拒绝机构动作。
+- [ ] `P0` 取存操作（20分）：真实机构动作**已在软件侧实现**（`GRAB/RELEASE/HOME/STOP/LIFT_ABS/ARM_SET`，见 `robot_bridge/node.py:733-931`，旧文「field 模式仍以错误码 `2001` 主动拒绝」已过期）；**未完成的是得分所要求的实机验收**：真实夹爪/升降单动作、带载抓放、STOP 物理停止与完成证据。
 - [ ] `P0` 建筑搭建（20分）：完成真实放置、撤退，并在机器人脱离后提供连续稳定至少3秒的真实证据。
 - [ ] `P0` 急停（5分，算法配合项）：验证运行中物理急停能切断底盘、夹爪和升降等全部执行器，并单独拍摄证明。
 - [ ] `P1` 附加分（5分）：在主闭环稳定后优化动作连贯性、总耗时和视频表现。
@@ -470,6 +480,8 @@
 - [ ] STM32 实现夹爪/升降底层驱动、非阻塞动作状态机、`0x20/0x21` 处理、命令去重、STOP、心跳中断和急停联动。
 
 #### P0-1A：树莓派机构控制交付清单
+
+> ⚠️ 2026-09-17 复核提示：本节多条 `[ ]` 的实现在仓库中**已经存在**（0x20 编码/0x21 解码/0x22 急停、`MechanismOperation.ARM_SET=7` 见 `robogame_core/serial_protocol.py:51-64`；真实分支处理见 `robot_bridge/node.py:733-931`；黄金帧与集成测试见 `tests/test_serial_protocol.py`、`tests/test_firmware_rpi_protocol.py`、`tests/test_robot_bridge_mechanism_integration.py`）。本节**未逐项复核**（超出本轮文档订正范围），勾选状态可能偏旧——动手前先按源码确认，不要因为「没打勾」就重写已有实现。
 
 ##### 协议层
 
@@ -492,7 +504,7 @@
 
 - [ ] 在 `robot_bridge` 中将回零、夹爪抓取、夹爪释放、升降高度、取消和软件急停服务映射到真实协议。
 - [ ] 只将 `SUCCEEDED` 映射为 ROS 成功；`FAILED/CANCELLED/REJECTED`、ACK/状态超时、断线和 MCU 重启必须返回失败并保留原始错误码。
-- [ ] 移除 field 模式对机构服务的错误码 `2001` 占位阻塞，但只在真实协议客户端 READY 后启用机构动作。
+- [x] 移除 field 模式对机构服务的错误码 `2001` 占位阻塞（**2026-09-17 复核：已完成**——field 模式机构服务已映射真实 0x20 命令，见 `robot_bridge/node.py:733-766` 与 `node.py:840-931`；门控改由 `_real_mechanism_ready()` 承担：只有串口在位、握手 READY、`communication_ok`、有已解码 STATUS、急停/机构故障未置位且 `physical_start` 已授权时才放行，否则返回 `9003/9001/9006/5`，`node.py:662-676`）。
 - [ ] 任务流程固定为“底盘停稳 -> 机构动作 -> 收到终态 -> 下一步”；任一机构步失败时停止后续动作并请求 STOP。
 - [ ] RETREAT 保持由底盘运动实现，不发送机械协议命令；单独冻结距离、速度、停车精度和完成证据。
 
@@ -579,6 +591,15 @@
 - 现状：收到的源码和现场行为高度一致，但压缩包不能证明当前Flash与源码逐字节相同；
 - 风险：上位机commit可固定，STM32固件却可能因重新烧录、不同电脑工程或未保存改动而失去对应关系；
 - 下一步：在HELLO/STATUS或独立诊断消息中增加固件版本、协议版本和构建哈希；每轮实车验收同时记录上位机SHA与固件身份。
+
+### 复核发现：无硬件 smoke 的 2001 断言已与实现不符（2026-09-17 静态复核，未修正）
+
+- 现象：`ros2_ws/src/robogame_bringup/robogame_bringup/field_no_hardware_smoke.py:75` 在 `WAIT_REJECTION` 阶段要求 `response.error_code == 2001`，否则 `_fail()`（同文件 `:77` 的日志也写死 2001）。
+- 依据：全仓库检索 `2001` 的结果里，`robot_bridge` 实现**没有任何路径返回 2001**；field 模式无串口时 `_real_mechanism_ready()` 直接返回 `9003`（`robot_bridge/node.py:663-664`）。因此该 smoke 在它自己的目标场景（无硬件）下**必然失败**：期望 2001，实得 9003。
+- 需要注意的例外（不要把上面写成「永远无法通过」）：固件协议错误码表里 `2001 = 尚未回零`（`docs/树莓派_STM32机械机构通信协议_v1.0.md:261`），而 `_execute_real_mechanism` 会把固件 ACK/状态的 `error_code` 原样透传。所以真接上 STM32 且固件恰好回 2001 时，这个断言**可能碰巧通过**——但那验证的是「未回零」，不是这条 smoke 声称的「无硬件时失败安全」，属于假通过。
+- 影响：现场第一天若按 `docs/` 的说明跑「field 无硬件失败安全 smoke」验收，会得到 FAIL，并可能被误判为「field 模式不安全」，实际是断言过期。
+- 未修正原因：本轮只做文档订正，未改代码；修断言（`2001` → `9003`）需与代码/验收 owner 确认，且可能与现场正在跑的其他改动冲突。
+- 证据边界：以上为**静态复核**（读源码 + 全仓库检索 `2001`），本机没有 ROS 运行时，未实际启动该 smoke 复现。
 
 ### 下一阶段安全顺序
 
