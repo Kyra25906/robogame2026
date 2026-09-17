@@ -660,12 +660,19 @@ def _require_number(mapping: Mapping[str, Any], key: str, where: str) -> float:
     return value
 
 
-def build_route_plan(survey: Mapping[str, Any]) -> RoutePlan:
+def build_route_plan(survey: Mapping[str, Any], *, rounds: int = 1) -> RoutePlan:
     """把 `field_layout.yaml` 的 survey 段编译成自检过的 `RoutePlan`。
 
     本函数只声明「走哪条边、什么朝向、怎么算走完」；坐标一律从 survey 解析，
     不写死——现场重新测量后改 yaml，路线自动跟着走（并由段间连续性自检兜住）。
+
+    `rounds > 1` 时把「取存 + 搭建」这一环重复 `rounds` 趟：每多一趟就在撤退位
+    先横移回主路（S14 返回段），再把取存环克隆一份（id 加 `_R{k}` 后缀）。
+    **默认 1 趟**：到目前为止没有任何真车计时数据，而「第二座建筑放哪里」以及
+    「机构层计数怎么复位」都还没有结论（见 `docs/history/B3_WORK_LOG_2026-09-17.md`）。
     """
+    if rounds < 1:
+        raise RoutePlanError("rounds must be >= 1")
     nodes = _section(survey, "line_nodes")
     edges = _section(survey, "line_edges")
     stops = _section(survey, "stops")
@@ -1003,11 +1010,72 @@ def build_route_plan(survey: Mapping[str, Any]) -> RoutePlan:
 
     return RoutePlan(
         start_pose=pose("W01", stop_yaw("W01")),
-        segments=tuple(segments),
+        segments=tuple(
+            _with_rounds(
+                segments,
+                rounds=rounds,
+                make_return=lambda round_index: _make_return_segment(
+                    round_index,
+                    from_pose=pose("W05", stop_yaw("W05")),
+                    to_pose=pose("N06", AXIS_HEADINGS["y+"]),
+                ),
+            )
+        ),
         refs=refs,
         node_types=node_types,
         edge_kinds=edge_kinds,
         edge_endpoints=edge_endpoints,
+        rounds=rounds,
+    )
+
+
+#: 取存环：从「接近坡道」到「撤退」（S03…S13）。第 2 趟起先走返回段再重复这一环。
+LOOP_FIRST_SEGMENT_INDEX = 2  # S03_RAMP_APPROACH 在单趟路线里的下标
+RETURN_SEGMENT_ID_BASE = "S14_RETURN_TO_LINE"
+
+
+def _with_rounds(segments, *, rounds: int, make_return) -> list:
+    """把取存环克隆 `rounds-1` 次，每趟前插入一段「从撤退位横移回主路」。
+
+    连续性：撤退段 S13 结束时车在 W05、车头朝 +y；返回段（`heading="free"`）
+    横移回 N06 且**保持朝 +y**，于是下一趟的「接近坡道」段（朝 +y、沿 E05）自然接上。
+    """
+    if rounds == 1:
+        return list(segments)
+    loop = segments[LOOP_FIRST_SEGMENT_INDEX:]
+    result = list(segments)
+    for round_index in range(2, rounds + 1):
+        result.append(make_return(round_index))
+        for segment in loop:
+            result.append(dataclasses.replace(
+                segment,
+                id=f"{segment.id}_R{round_index}",
+                label=f"[第 {round_index} 趟] {segment.label}",
+            ))
+    return result
+
+
+def _make_return_segment(round_index: int, *, from_pose, to_pose) -> RouteSegmentPlan:
+    """从撤退位 W05 横移回主路 N06（下一趟的起点）。"""
+    return RouteSegmentPlan(
+        id=f"{RETURN_SEGMENT_ID_BASE}_R{round_index}",
+        role=SegmentRole.SHIFT,
+        label=f"[第 {round_index} 趟] 从撤退位横移回主路 N06",
+        from_ref="W05",
+        to_ref="N06",
+        from_pose=from_pose,
+        to_pose=to_pose,
+        heading="free",
+        max_speed_mps=0.10,
+        exit=ExitCriteria(
+            kind=ExitKind.POSE_TOLERANCE,
+            target_ref="N06",
+            target_pose=to_pose,
+            tolerance_m=0.05,
+            tolerance_rad=0.0872665,
+        ),
+        evidence="estimated",
+        note="横移 0.3 m 回到主路；车头保持 +y（麦轮侧移），所以 heading 记为 free",
     )
 
 

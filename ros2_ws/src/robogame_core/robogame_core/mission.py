@@ -63,9 +63,6 @@ class MissionConfig:
     # B4：比赛总时长上限（秒）。规则 3.2.1：正式比赛 6 分钟，计时结束后动作无效。
     # >0 时，路线执行超过这个时长就**安全停车**（而不是继续跑到自然结束）。
     match_time_limit_s: float = 360.0
-    # B4：多轮循环的最大趟数。1 = 只跑一趟（当前默认，因为「第二座建筑」的
-    # 落点与机构层计数复位还没有现场结论，见 mission_recovery/文档）。
-    max_rounds: int = 1
 
 
 def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
@@ -104,6 +101,8 @@ class MissionMachine:
     phase: MissionPhase = MissionPhase.IDLE
     #: B4：已执行的降级次数（取块失败但有存货 → 去搭建 等），网页/日志可见
     degradations: int = 0
+    #: B4：路线开始时刻（比赛总时钟的起点）
+    route_started_at: float | None = None
     _route_runner: RouteRunner | None = field(default=None, repr=False)
 
     @property
@@ -243,7 +242,16 @@ class MissionMachine:
         self._enter(MissionState.ROUTE_RUNNING, now)
         self._route_runner = RouteRunner(self.route)
         self._route_runner.start()
+        self.route_started_at = now
         self._sync_route()
+
+    def match_remaining_s(self, now: float | None = None) -> float | None:
+        """比赛剩余时间（秒）；未开始或未设上限时返回 None。"""
+        limit = self.config.match_time_limit_s
+        if limit <= 0.0 or self.route_started_at is None:
+            return None
+        now = time.monotonic() if now is None else now
+        return max(0.0, limit - (now - self.route_started_at))
 
     def _sync_route(self) -> None:
         """把运行器状态同步到对外字段（网页/日志用）。"""
@@ -339,6 +347,9 @@ class MissionMachine:
             "segment_count": total,
             "retries": self.retries,
             "degradations": self.degradations,
+            "match_remaining_s": None
+            if self.match_remaining_s() is None
+            else round(self.match_remaining_s(), 1),
             "detail": self.detail,
         }
 
