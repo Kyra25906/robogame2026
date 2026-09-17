@@ -55,7 +55,7 @@
 - [x] `P1` 第二位算法同学：实现 `robogame_core/line_follow.py` 纯算法模块（八路原始值 → 横向偏差 + 纠偏输出 + `ON_LINE/LEFT/RIGHT/LOST` 状态机）与 `tests/test_line_follow.py` 合成数据单元测试，参考 `navigation.py` 风格。证据：分支 `feature/line_follow` 提交 `6b36e28`，31 项测试全部通过，文档见 `docs/line_follow/README.md` 和 `docs/line_follow/CALIBRATION_AND_HARDWARE.md`。
 - [x] `P1` 软件层面巡线链路（本轮 A 完成，为 B 备料）：`cmd_vel_arbiter` 新增第 4 来源 `line_follow`；新建 `motion_control/line_follow_runner.py`（纯逻辑运行器：失联停车、交叉口直行、LOST 停车，零 ROS 依赖）+ `line_follow_node.py`（订阅 `/line_sensor` + `/robot/status`，安全门控，仲裁后发 `/cmd_vel`，另发 `/line_follow/cmd`、`/line_follow/status` 联调话题）+ `line_sensor_mock.py`（7 种合成 pattern）+ `line_follow_mock.launch.py`（mock 全图）+ `line_follow_mock_smoke.py`（launch 自动验收）。证据：`tests/test_line_follow_runner.py` 22 项 + `tests/test_line_follow_nodes_ast.py` 10 项（含 launch 图完整断言）+ `test_cmd_vel_arbiter.py` 补 2 项，全量 572（505 运行全过，64 skip，3 cv2 环境导入 error 与本次无关）。
 - [ ] `P1` 算法一：把巡线作为「路段类型」接入 `motion_control` / `mission_manager` 路线选择（**下轮 B**：把 `LineFollowRunner` 收编进 motion_controller 模式切换，`active_source` 授权改由 mission_manager 广播）。
-- [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。**2026-08-19 进展**：草案已出 `docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT_2026-08-19.md`（0x14 = `mcu_tick_ms` u32 + 8×u16 模拟值 + flags，50Hz，21 字节 payload），**待电控确认 6 个问题后冻结**；固件上送与上位机 0x14 解码均未实现（红线）。
+- [ ] `P1` 算法一 + 电控：冻结 V1「巡线遥测」字段字节布局并实现上送；冻结前不猜测载荷。**2026-08-19 进展**：草案已出 `docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT_2026-08-19.md`（0x14 = `mcu_tick_ms` u32 + 8×u16 模拟值 + flags，50Hz，21 字节 payload），**待电控确认 6 个问题后冻结**；⚠️ **2026-09-17 复核修正：旧文「固件上送与上位机 0x14 解码均未实现（红线）」已过期——两侧都已实现**（固件 `rpi_protocol.c:144/1552/1665`，上位机 `serial_protocol.py:18/29/255-270` + `robot_bridge/node.py:1096,1109`），因此本项现在**只剩「书面冻结字节布局」这一步**，不再阻塞真车巡线数据接入。
 - [ ] `P2` 真车贴线联调：低速贴线、出线恢复、交叉口行为验收。
 - [x] `P0` **巡线极性缺陷修复（2026-08-19 独立检测发现）**：`line_sensor_mock` 把黑线读成高原始值（black>white），而 `line_follow_node` 的默认标定是 `white_ref=4095 / black_ref=0`（方向相反）。后果不是「读数不准」而是**语义翻转**：`lost`（出线）被判成 ALL_BLACK **继续前进**、`all_black` 被判成 LOST 停车（两个安全用例互换），`sine` 摆动下 `wz` 恒为 0（一次都不转向），而 `line_follow_mock_smoke` 只断言「出现非零命令」，`vx_base=0.1` 就满足 → **验收假通过**。修复方向取自项目既有约定（`docs/line_follow/CALIBRATION_AND_HARDWARE.md:53-58`、`tools/field_dashboard_core.py:396-406`、0x14 接口文档 §29 三处同向），改 `line_follow_node` 默认值为 `white_ref=0.0 / black_ref=4095.0`（**不是**改 mock：mock 与现场面板本来就是对的）。同时给 smoke 加 `steering_frames > 0` 断言，新增 `tests/test_line_mock_polarity.py`（8 项，AST 读取两处默认值 + 端到端方向复算）把「三方同向」钉住。修复后复算：`lost`→停车、`all_black`→前进、`sine` 转向 **147/150** 帧（原 0/150）。⚠️ 仍未解决：`centered` pattern 在任何标定下都进不了 ON_LINE（`line_sensor_mock.py` 的 `line_half_width=0.28` 使中心两路权重上限仅 0.49 < 阈值 0.5），待与极性一并复标定后处理。
 - [x] `P0` **配置校验闸门补漏（2026-08-19 同上）**：`grasp_alignment.py:176-179` 会在 20Hz 定时器回调里拒绝非法 `min_turn_rate`/`camera_yaw_offset_rad`，但 `config_validation.py` 完全不校验这两个参数 → 一份「校验通过」的 robot.yaml 会让 `manipulator_client` 在第一次对准时抛异常退出。已补：`min_turn_rate` 非负有限、`≤ max_turn_rate`，`camera_yaw_offset_rad` 有限且 |·| ≤ π；`tests/test_config_validation.py` 补 6 项（含一条直接读真实 `robot.yaml` 的绑定断言）。
@@ -66,13 +66,13 @@
 - 下位机（STM32，`Four_Motor_PID_Test (3)/`，⚠️ 该目录未跟踪 Git）：
   - `line_sensor.c/h`：UART7（PE8=TX / PE7=RX，115200）驱动，发 `$0,1,1#` 使能模块，解析 `$D,x1:0..#`（数字）/`$A,x1:4096..#`（12bit 模拟）帧，输出 `line_digital[8]`/`line_analog[8]`/`line_online`/`line_frame_count`；
   - 已接入 `main.c`（Init、主循环 `LineSensor_Update()`、UART 回调）与 `stm32f4xx_it.c` UART7 中断；`line_sensor.h` 明说「仅 Keil Watch 观察，不接入任何控制」——**只采集、不上送**；
-  - `rpi_protocol.c` 无巡线消息类型（现有 0x01/02/03/10/11/12/13/20/21/22），`STM32_SERIAL_PROTOCOL_V1.md` 无巡线遥测定义。
+  - ~~`rpi_protocol.c` 无巡线消息类型~~（**2026-09-17 修正：已过期**，`rpi_protocol.c:144` 已有 `RPI_MSG_LINE_TELEMETRY 0x14U`、`:1552` 有 `RPI_SendLineTelemetry()`、`:1665` 在 `RPI_Update` 内周期上送）；`STM32_SERIAL_PROTOCOL_V1.md` **仍未收录** 0x14 定义（文档待补，但代码已存在）。
 - 树莓派（上位机）：
   - ✅ `robogame_core/line_follow.py` + `tests/test_line_follow.py`（2026-08-19 实跑 31 项全过），commit `55e2ba9`；文档 `docs/line_follow/README.md`、`CALIBRATION_AND_HARDWARE.md`；
   - ✅ 本轮 A 已打通软件链路（2026-08-19）：`motion_control/line_follow_runner.py`（纯逻辑）+ `line_follow_node.py` + `line_sensor_mock.py`，`/line_sensor` 话题已建立（发布者= mock），巡线输出经 `cmd_vel_arbiter` 第 4 来源门控发 `/cmd_vel`，详见下「巡线归属与待办」；
-  - ❌ `robot_bridge` 无 0x14 解码（协议未冻结，红线）；`motion_control` 路段模式切换（下轮 B）与 `mission_manager` 授权广播未接——真车数据入口（0x14 解码替换 mock）仍缺。
+  - ✅ **2026-09-17 复核修正：旧文「❌ `robot_bridge` 无 0x14 解码」已过期，解码已实现。** 上位机侧：`robogame_core/serial_protocol.py:18` `LINE_TELEMETRY_PAYLOAD = struct.Struct("<I8HB")`、`:29` `MSG_TYPE_LINE_TELEMETRY = 0x14`、`:255-270` 编解码含 12bit/保留位校验；`robot_bridge/node.py:1096` 路由 0x14 并按 `:209` `self.line_sensor_pub` 发布 `/line_sensor`。**仍缺**：`motion_control` 路段模式切换（下轮 B）与 `mission_manager` 授权广播；以及把 `/line_sensor` 的发布者从 mock 换成真适配器（真车验收）。
 - 场地布局结论：纯贴线走（偏差+PD）只需每路标定常数，不需要场地布局；一旦涉及选路/交叉口/出线恢复/停车，必须有布局+定位（`GENERAL_FIELD_MAP_2026.md`「定位与控制分工」第 2 条：灰度管横向、里程计管进度、路段防走错支路）。
-- 剩余工作（依赖顺序）：① 冻结 V1 巡线遥测帧（0x14 草案待电控确认）→ ② 固件 `RPI_SendLineTelemetry()` 周期上送 → ③ `robot_bridge` 解码 + `/line_sensor` 发布者由 mock 换真适配器 → ④ `motion_control` 巡线路段类型接入（下轮 B）+ mission_manager 授权广播 → ⑤ 真车贴线联调。
+- 剩余工作（依赖顺序，**2026-09-17 复核修正**）：~~① 冻结 V1 巡线遥测帧~~、~~② 固件 `RPI_SendLineTelemetry()` 周期上送~~、~~③ `robot_bridge` 解码~~ **三项均已实现**（固件：`rpi_protocol.c:1552` 定义、`:1665` 在 `RPI_Update` 内周期调用、`:144` 类型宏，且已编译进固件映像；上位机：见上条）。剩余：① `/line_sensor` 发布者由 mock 换真适配器（真车）→ ② `motion_control` 巡线路段类型接入（下轮 B）+ mission_manager 授权广播 → ③ 真车贴线联调。**协议字节布局仍建议与电控书面确认一次**（实现已存在，但「已实现」不等于「已冻结」）。
 
 8 月 13—18 日每日安排见 `PLAN_2026-08-13_TO_18.md`，现场资料集中在 `field/`。
 
@@ -124,7 +124,7 @@
 
 ### P1：规则明确要求、零实现（原 5 项，2026-09-17 复核：模块已实现，剩余为集成/现场项）
 
-- [ ] `P1` 巡线（规则 3.1.8）：**模块与测试已完成，勿重写**——`robogame_core/line_follow.py`（八路灰度→横向偏差+纠偏+ON_LINE/LEFT/RIGHT/LOST）+ `tests/test_line_follow.py` 31 项（见上方「巡线归属与待办」）。**仍缺**：① 接入路段链（motion_control/mission_manager 路线选择，即「下轮 B」）；② 0x14 巡线遥测字节布局与电控冻结（草案待确认，固件上送与上位机解码均未实现）。
+- [ ] `P1` 巡线（规则 3.1.8）：**模块与测试已完成，勿重写**——`robogame_core/line_follow.py`（八路灰度→横向偏差+纠偏+ON_LINE/LEFT/RIGHT/LOST）+ `tests/test_line_follow.py` 31 项（见上方「巡线归属与待办」）。**仍缺**：① 接入路段链（motion_control/mission_manager 路线选择，即「下轮 B」）；② ~~0x14 巡线遥测字节布局与电控冻结（草案待确认，固件上送与上位机解码均未实现）~~ → **2026-09-17 修正：固件上送与上位机解码均已实现**，仅剩「与电控书面确认布局」的流程项，不再是代码阻塞。
 - [ ] `P1` 视觉标签识别（规则 3.1.8）：**检测器与 PnP 已完成（C2，勿重写）**——`robogame_core/apriltag_pose.py`（`detect_tags` / `estimate_tag_pose` / `build_observation` / `detect_and_pose`）+ 合成图 14 项单测。仍缺：① 接入 localization 做绝对位姿矫正（消里程计漂移）；② 标签坐标映射表与现场位置实测。**已确认为 AprilTag Tag36h11，id 1–6**（证据：`docs/field/视觉标签样例_图3.10.png`）。⚠️ 仓库样例 `tag_01~06.png` 检测不到标准 AprilTag（疑数字牌），现场需确认样式；PnP 逻辑不受影响。
   - ⚠️ 几何冲突待决策：标签在墙上 40cm 需平视，方块在地面/高台需俯视，同一相机难兼顾 → 见执行队列「待拍板决策 1」。
 - [ ] `P1` 斜坡/高台（规则 3.1.5/3.1.6/3.1.7）：**离线部分已完成（C3，勿重写）**——`robogame_core/ramp_control.py`（RampProfile / RampController / SlipDecision：坡道限速、打滑检测、卡住停车、下坡防冲）+ `tests/test_ramp_control.py` 16 项合成数据。**仍缺**：IMU pitch 视距/重心补偿与真车坡道验收，依赖真实 IMU（当前 `imu_valid=false`）。
