@@ -29,6 +29,9 @@ def generate_launch_description():
         Node(package="robot_bridge", executable="robot_bridge", parameters=[common, mock]),
         Node(package="localization", executable="localization_node", parameters=[common]),
         Node(package="motion_control", executable="motion_controller", parameters=[common]),
+        # B2：mission_manager 现在订阅 /line_follow/status 与 /pose（路线模式用），
+        # 所以图里必须有巡线节点提供它；未授权时它保持沉默，不会和 motion_controller 抢 /cmd_vel。
+        Node(package="motion_control", executable="line_follow_controller", parameters=[common]),
         Node(package="cube_perception", executable="mock_perception"),
         Node(package="manipulator_client", executable="manipulator_client", parameters=[common, mock]),
         Node(package="mission_manager", executable="mission_manager", parameters=[common]),

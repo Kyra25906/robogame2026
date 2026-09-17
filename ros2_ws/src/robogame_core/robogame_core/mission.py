@@ -99,6 +99,7 @@ class MissionMachine:
         """路线运行器（未进入路线模式时为 None）。"""
         return self._route_runner
 
+    @property
     def current_segment(self):
         """当前段计划（未进入路线模式时为 None）。"""
         runner = self._route_runner
@@ -255,13 +256,23 @@ class MissionMachine:
         """路线进度快照（B2 推给网页显示）。"""
         runner = self._route_runner
         segment = None if runner is None else runner.current_segment
+        total = 0 if self.route is None else len(self.route.segments)
+        # 注意：C1 的 RouteChain 走完最后一段时把状态置 COMPLETE，但 current_index
+        # 停在最后一段（不 +1）。所以「已完成段数」要单独算，别用 index 糊过去。
+        if runner is None:
+            completed = 0
+        elif runner.is_complete:
+            completed = total
+        else:
+            completed = max(runner.segment_index, 0)
         return {
             "state": self.state.value,
             "phase": self.phase.value,
             "segment_index": self.segment_index,
+            "segments_completed": completed,
             "segment_id": self.segment_id,
             "segment_label": "" if segment is None else segment.label,
-            "segment_count": 0 if self.route is None else len(self.route.segments),
+            "segment_count": total,
             "retries": self.retries,
             "detail": self.detail,
         }

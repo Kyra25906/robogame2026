@@ -16,3 +16,12 @@ cube_perception:
     # （fx≈2526.98, RMS 0.82px 依然有效，这是纯数学换算）。
     # 连带：min_area_px/min_side_px 为像素量纲，分辨率减半后需现场重调（B4）。
     fallback_focal_px: 1275.0
+
+mission_manager:
+  ros__parameters:
+    # B2：真车走 B1 的全流程路线（启动区→巡线右转→上坡→取 3 块→下坡→搭建 2 层）。
+    # 路线坐标来自 field_layout.yaml（现场实测），路径由 hardware.launch.py 传入；
+    # 路线加载失败或自检不过 → 任务判失败并保持停车，绝不退回演示流程。
+    route_enabled: true
+    # 每段独立超时预算：坡道/巡线段较短，20s 足够；现场可按实测收紧。
+    state_timeout_s: 20.0

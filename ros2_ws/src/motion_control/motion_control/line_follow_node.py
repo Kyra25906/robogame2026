@@ -9,8 +9,10 @@
 - `/line_follow/status` —— 状态字符串（状态机/偏差/失联标志，联调观察）
 
 本轮 A 的定位（见 docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT）：
-- 真实 0x14 巡线遥测未冻结，先用 mock 数据源（line_sensor_mock）联调；
-- 协议冻结后，把 `/line_sensor` 的发布者换成 robot_bridge 解码节点即可，
+- 0x14 巡线遥测**两侧均已实现**（固件 `rpi_protocol.c:1552` 周期上送；上位机
+  `robogame_core/serial_protocol.py:29` 解码、`robot_bridge/node.py:1096` 路由并
+  发布 `/line_sensor`）；本节点当前仍用 mock 数据源（line_sensor_mock）联调；
+- 真车验收时把 `/line_sensor` 的发布者从 mock 切到 robot_bridge 解码结果即可，
   本节点与 LineFollowRunner 不用改；
 - 下轮 B 会把 LineFollowRunner 收编进 motion_controller 路段模式，
   `active_source` 授权改由 mission_manager 广播驱动。
@@ -59,6 +61,11 @@ class LineFollowNode(Node):
             "cmd_stale_s": 0.5,
             "status_stale_s": 0.3,
             "active_source": SOURCE_LINE_FOLLOW,
+            # B2：是否要求 /mission/active_source 授权才允许驱动底盘。
+            # 默认 False = 独立巡线联调（没有任务管理器时也能跑）；
+            # 比赛配置（robot.yaml）置 True，由 mission_manager 广播唯一授权。
+            "require_authorization": False,
+            "authorization_stale_s": 0.5,
             # 黑白标定基准（现场面板「黑白标定」按钮推送）。
             # 约定（全项目统一，见 docs/line_follow/CALIBRATION_AND_HARDWARE.md:53-58）：
             #   normalized = (raw - white_ref) / (black_ref - white_ref)
@@ -96,6 +103,17 @@ class LineFollowNode(Node):
             stale_s=float(self.get_parameter("cmd_stale_s").value),
         ))
         self.active_source = str(self.get_parameter("active_source").value)
+        # B2：任务层广播的授权（唯一有权驱动底盘的来源）。没收到过消息时保持
+        # 参数默认值，这样独立巡线联调（无 mission_manager）行为不变。
+        self.require_authorization = bool(
+            self.get_parameter("require_authorization").value
+        )
+        self.authorization_stale_s = float(
+            self.get_parameter("authorization_stale_s").value
+        )
+        self.granted_source: str | None = None
+        self.granted_time = 0.0
+        self.was_driving = False
         self.status_stale_s = float(
             self.get_parameter("status_stale_s").value
         )
@@ -118,6 +136,9 @@ class LineFollowNode(Node):
         )
         self.create_subscription(
             RobotStatus, "/robot/status", self._on_robot_status, 10
+        )
+        self.create_subscription(
+            String, "/mission/active_source", self._on_authorization, 10
         )
         self.create_timer(0.02, self._tick)
 
@@ -210,6 +231,26 @@ class LineFollowNode(Node):
     def _on_robot_status(self, msg: RobotStatus) -> None:
         self.robot_status = msg
         self.robot_status_time = time.monotonic()
+
+    def _on_authorization(self, msg: String) -> None:
+        """任务层广播的底盘授权（唯一来源）。"""
+        self.granted_source = str(msg.data).strip()
+        self.granted_time = time.monotonic()
+
+    def _authorized_source(self, now: float) -> str:
+        """本节点输出时使用哪个授权来源。
+
+        - 未开启 `require_authorization`：用参数 `active_source`（独立联调行为不变）；
+        - 开启但没有（或过期）授权消息：返回 `""` → 仲裁找不到该来源 → 输出零速。
+          这是 fail-safe：授权断流时车停下，而不是按旧授权继续跑。
+        """
+        if not self.require_authorization:
+            return self.active_source
+        if self.granted_source is None:
+            return ""
+        if (now - self.granted_time) > self.authorization_stale_s:
+            return ""
+        return self.granted_source
 
     def _on_line_sensor(self, msg: LineSensor) -> None:
         if not msg.analog_valid:
@@ -334,6 +375,10 @@ class LineFollowNode(Node):
             "mechanism_fault": mechanism_fault,
             "reading_stale": reading_stale,
             "active_source": self.active_source,
+            # B2：授权信息与安全门控分开报告——「没授权停车」不是故障，
+            # 但现场排障时必须能一眼看出是授权没给还是安全门控拦了。
+            "authorization_required": bool(self.require_authorization),
+            "authorized_source": self._authorized_source(now),
             "invalid_frames": self.invalid_frames,
             "blocked": blocked,
             "reasons": reasons,
@@ -375,7 +420,8 @@ class LineFollowNode(Node):
         )
         self.status_pub.publish(status_msg)
 
-        # 仲裁门控 /cmd_vel
+        # 仲裁门控 /cmd_vel（先安全、再授权；两者都不放行时输出零速）
+        authorized = self._authorized_source(now)
         blocked = self._safety_blocked()
         if not blocked and not out.reading_stale:
             self.arbiter.update(
@@ -383,15 +429,28 @@ class LineFollowNode(Node):
                 Velocity2D(float(out.vx), 0.0, float(out.wz)),
                 now=now,
             )
-        cmd = self.arbiter.output(
-            active_source=self.active_source,
-            now=now,
-            emergency_stop=blocked,
-        )
+        if authorized in self.arbiter.config.allowed_sources:
+            cmd = self.arbiter.output(
+                active_source=authorized,
+                now=now,
+                emergency_stop=blocked,
+            )
+        else:
+            # 未授权 / 授权断流：仲裁器不接受未知来源，这里显式输出零速。
+            cmd = Velocity2D(0.0, 0.0, 0.0)
         twist = Twist()
         twist.linear.x = cmd.vx
         twist.linear.y = cmd.vy
         twist.angular.z = cmd.wz
+        moving = abs(cmd.vx) > 1e-9 or abs(cmd.wz) > 1e-9
+        if authorized not in self.arbiter.config.allowed_sources and not self.was_driving:
+            # 从未在驱动 / 已经归零过：保持沉默。持续发零速会与真正在驱动的
+            # 其他节点抢 /cmd_vel（谁后发谁赢），把对方的运动打断。
+            return
+        if not moving:
+            self.was_driving = False
+        else:
+            self.was_driving = True
         self.cmd_pub.publish(twist)
 
 

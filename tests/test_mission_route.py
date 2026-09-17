@@ -48,6 +48,7 @@ from robogame_core.mission_route import (
     SegmentRole,
     SpeedLimits,
     TurnDirection,
+    WorkKind,
     build_route_plan,
     compile_route,
     evaluate_exit,
@@ -233,19 +234,44 @@ class RouteDataTests(unittest.TestCase):
         self.assertGreater(abs(float(stops["W04"]["x"]) - float(nodes["N05"]["x"])), 0.2)
 
     def test_segments_are_pose_continuous(self):
+        """段间位置必须严格连续；航向只在转向边界按登记角度变化。
+
+        语义：`to_pose` 是**到达**姿态（行进方向），所以右转边界上
+        「上一段末航向(+y) → 下一段起航向(+x)」差 90° 是正确的，不是矛盾。
+        角度用 1e-4 容差：yaml 里 yaw 只写到 4 位小数。
+        """
         route = plan()
         for previous, current in zip(route.segments, route.segments[1:]):
             self.assertAlmostEqual(previous.to_pose.x, current.from_pose.x, places=9)
             self.assertAlmostEqual(previous.to_pose.y, current.from_pose.y, places=9)
-            self.assertAlmostEqual(
-                math.atan2(
-                    math.sin(previous.to_pose.yaw - current.from_pose.yaw),
-                    math.cos(previous.to_pose.yaw - current.from_pose.yaw),
-                ),
-                0.0,
-                places=9,
-                msg=f"{previous.id} -> {current.id} 航向不连续",
+            delta = math.atan2(
+                math.sin(current.from_pose.yaw - previous.to_pose.yaw),
+                math.cos(current.from_pose.yaw - previous.to_pose.yaw),
             )
+            if previous.exit.kind is ExitKind.JUNCTION_TURN:
+                expected = {
+                    TurnDirection.RIGHT: -math.pi / 2.0,
+                    TurnDirection.LEFT: math.pi / 2.0,
+                    TurnDirection.STRAIGHT: 0.0,
+                }[previous.exit.turn]
+            else:
+                expected = 0.0
+            self.assertAlmostEqual(
+                delta, expected, delta=1e-4, msg=f"{previous.id} -> {current.id} 航向变化不符"
+            )
+
+    def test_declared_turns_match_measured_geometry(self):
+        """登记的右转/左转必须与实测几何一致（计划写了右转、数据是左转就该红）。"""
+        route = plan()
+        turns = {spec.segment_id: spec for spec in route.turn_registry()}
+        self.assertIs(turns["S01_LINE_START"].direction, TurnDirection.RIGHT)
+        self.assertIs(turns["S02_LINE_MAIN"].direction, TurnDirection.LEFT)
+        with self.assertRaises(RoutePlanError):
+            _exit_variant("S01_LINE_START", turn=TurnDirection.LEFT)
+        with self.assertRaises(RoutePlanError):
+            _exit_variant("S01_LINE_START", target_yaw_rad=AXIS_HEADINGS["y+"])
+        with self.assertRaises(RoutePlanError):
+            _exit_variant("S02_LINE_MAIN", turn=TurnDirection.RIGHT)
 
     def test_line_and_ramp_segments_use_real_survey_edges(self):
         """巡线/坡道段必须挂在实测黑线拓扑上，且段类型与边的 kind 一致。"""
@@ -346,10 +372,14 @@ class RouteDataTests(unittest.TestCase):
             set(rows[0]),
             {
                 "index", "id", "role", "kind", "label", "from", "to",
-                "heading", "max_speed_mps", "exit", "exit_ref", "evidence",
+                "heading", "max_speed_mps", "exit", "exit_ref", "evidence", "work",
             },
         )
         self.assertEqual(rows[5]["exit"], ExitKind.WORK_DONE.value)
+        # B2：WORK 段必须声明作业类型（取/放），网页与分发都靠它
+        self.assertEqual(rows[5]["work"], WorkKind.PICK.value)
+        self.assertEqual(rows[11]["work"], WorkKind.PLACE.value)
+        self.assertIsNone(rows[0]["work"])
 
     def test_cargo_plan_matches_confirmed_decision(self):
         """现场确认：3 橙、只停 W02、搭 2 层（底 2 + 顶 1）。"""
@@ -746,8 +776,9 @@ class RouteRunnerTests(unittest.TestCase):
         runner.reset()
         self.assertFalse(runner.is_complete)
         self.assertEqual(runner.segment_index, -1)
-        with self.assertRaises(ValueError):
-            runner.tick()
+        # C1 语义：未 start 时 tick 只返回 False（不抛异常），也不推进
+        self.assertFalse(runner.tick())
+        self.assertEqual(runner.segment_index, -1)
         runner.start()
         self.assertEqual(runner.current_segment.id, route.segment_ids[0])
 
@@ -802,7 +833,9 @@ class MissionRouteModeTests(unittest.TestCase):
         self.assertEqual(seen, set(route.segment_ids), "有段没被执行到")
         self.assertIs(machine.state, MissionState.VERIFY_BUILD)
         self.assertIs(machine.phase, MissionPhase.VERIFY)
-        self.assertEqual(machine.segment_index, len(route.segments))
+        # C1 语义：走完最后一段时 current_index 停在最后一段（不 +1）
+        self.assertEqual(machine.segment_index, len(route.segments) - 1)
+        self.assertEqual(machine.route_progress()["segments_completed"], len(route.segments))
         machine.tick(action_succeeded=True)
         self.assertIs(machine.state, MissionState.COMPLETE)
         self.assertIs(machine.result, MissionResult.SUCCESS)
@@ -868,6 +901,7 @@ class MissionRouteModeTests(unittest.TestCase):
         self.assertEqual(progress["segment_index"], 0)
         self.assertEqual(progress["segment_id"], "S01_LINE_START")
         self.assertEqual(progress["segment_count"], 13)
+        self.assertEqual(progress["segments_completed"], 0)
         self.assertEqual(progress["phase"], MissionPhase.MOVING.value)
         self.assertIn("segment_label", progress)
 

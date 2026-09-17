@@ -138,6 +138,13 @@ class TurnDirection(str, Enum):
     STRAIGHT = "STRAIGHT"  # 直行通过（只登记，不转向）
 
 
+class WorkKind(str, Enum):
+    """WORK 段的作业类型（B2：决定给 manipulator_client 发什么命令）。"""
+
+    PICK = "PICK"  # 取块入本体框
+    PLACE = "PLACE"  # 放置到搭建区
+
+
 class ExitKind(str, Enum):
     """本段「算走完了」的判据类型。"""
 
@@ -159,6 +166,13 @@ POSE_DEPENDENT_EXITS = frozenset(
         ExitKind.YAW_TARGET,
     }
 )
+
+#: 转向方向 -> 航向变化量（弧度）。车头朝 +y(π/2) 右转后朝 +x(0)，变化 -π/2。
+TURN_YAW_DELTA: Mapping[TurnDirection, float] = {
+    TurnDirection.RIGHT: -math.pi / 2.0,
+    TurnDirection.LEFT: math.pi / 2.0,
+    TurnDirection.STRAIGHT: 0.0,
+}
 
 #: 依赖巡线传感器的判据
 LINE_DEPENDENT_EXITS = frozenset({ExitKind.JUNCTION_TURN, ExitKind.LINE_END})
@@ -319,12 +333,19 @@ class RouteSegmentPlan:
     passthrough_refs: tuple[str, ...] = ()
     evidence: str = "estimated"
     note: str = ""
+    #: WORK 段的作业类型（取 / 放）；非 WORK 段必须为 None
+    work: WorkKind | None = None
 
     def __post_init__(self) -> None:
         if not self.id or not self.label:
             raise RoutePlanError("segment requires id and label")
         if not isinstance(self.role, SegmentRole):
             raise RoutePlanError(f"{self.id}: role must be SegmentRole")
+        if self.role is SegmentRole.WORK:
+            if not isinstance(self.work, WorkKind):
+                raise RoutePlanError(f"{self.id}: WORK segment must declare work kind (PICK/PLACE)")
+        elif self.work is not None:
+            raise RoutePlanError(f"{self.id}: only WORK segments may declare a work kind")
         if self.heading not in HEADINGS:
             raise RoutePlanError(f"{self.id}: unknown heading {self.heading!r}")
         if self.evidence not in EVIDENCE_LEVELS:
@@ -402,17 +423,50 @@ class RoutePlan:
         previous: RouteSegmentPlan | None = None
         for segment in self.segments:
             if previous is not None:
-                if not _same_pose(previous.to_pose, segment.from_pose):
+                if not _same_xy(previous.to_pose, segment.from_pose):
                     raise RoutePlanError(
                         f"route is not continuous between {previous.id} and {segment.id}: "
                         f"{previous.to_pose} -> {segment.from_pose}"
                     )
+                self._check_yaw_continuity(previous, segment)
             previous = segment
 
         if not _same_pose(self.start_pose, self.segments[0].from_pose):
             raise RoutePlanError("start_pose must equal first segment from_pose")
 
     # -- 自检细节 ---------------------------------------------------------
+    def _check_yaw_continuity(self, previous: RouteSegmentPlan, current: RouteSegmentPlan) -> None:
+        """航向连续性：普通边界必须同向；转向边界必须正好转出登记的角度。
+
+        为什么不能一刀切要求「上一段末航向 == 下一段起航向」：转向段（如 S01 以
+        +y 到达 N02、S02 以 +x 出发）在边界上航向**本来就该**差 90°。反过来，
+        把「计划写了右转、实测几何是左转」这种矛盾查出来，才是这条检查的价值。
+        """
+        delta = angle_diff(current.from_pose.yaw, previous.to_pose.yaw)
+        turn = previous.exit.turn if previous.exit.kind is ExitKind.JUNCTION_TURN else None
+        if turn is None:
+            if abs(delta) > YAW_TOLERANCE_RAD:
+                raise RoutePlanError(
+                    f"heading discontinuity between {previous.id} and {current.id}: "
+                    f"{previous.to_pose.yaw:.4f} -> {current.from_pose.yaw:.4f} without a registered turn"
+                )
+            return
+        if turn is TurnDirection.AROUND:
+            if abs(abs(delta) - math.pi) > YAW_TOLERANCE_RAD:
+                raise RoutePlanError(
+                    f"{previous.id}: AROUND turn must change heading by 180°, measured {math.degrees(delta):.1f}°"
+                )
+        elif abs(angle_diff(delta, TURN_YAW_DELTA[turn])) > YAW_TOLERANCE_RAD:
+            raise RoutePlanError(
+                f"{previous.id}: declared {turn.value} turn does not match measured heading change "
+                f"({math.degrees(delta):.1f}°)"
+            )
+        target = previous.exit.target_yaw_rad
+        if target is not None and abs(angle_diff(current.from_pose.yaw, target)) > YAW_TOLERANCE_RAD:
+            raise RoutePlanError(
+                f"{previous.id}: declared target_yaw_rad {target:.4f} does not match next segment "
+                f"departure heading {current.from_pose.yaw:.4f}"
+            )
     def _check_refs(self, segment: RouteSegmentPlan) -> None:
         for ref in (segment.from_ref, segment.to_ref):
             if ref not in self.refs:
@@ -456,13 +510,13 @@ class RoutePlan:
         if math.hypot(dx, dy) < 1e-9:
             raise RoutePlanError(f"{segment.id}: heading {segment.heading} declared but segment does not move")
         actual = math.atan2(dy, dx)
-        if abs(angle_diff(actual, want)) > 1e-6:
+        if abs(angle_diff(actual, want)) > POSITION_TOLERANCE_M:
             raise RoutePlanError(
                 f"{segment.id}: heading {segment.heading} does not match measured geometry "
                 f"(dx={dx:.4f}, dy={dy:.4f})"
             )
         # 段末车头朝向必须与声明朝向一致（末段由目标位姿给出，见 build_route_plan）
-        if abs(angle_diff(segment.to_pose.yaw, want)) > 1e-6:
+        if abs(angle_diff(segment.to_pose.yaw, want)) > YAW_TOLERANCE_RAD:
             raise RoutePlanError(
                 f"{segment.id}: to_pose yaw {segment.to_pose.yaw:.4f} does not match heading {segment.heading}"
             )
@@ -550,17 +604,18 @@ class RoutePlan:
                     "exit": segment.exit.kind.value,
                     "exit_ref": segment.exit.at_ref or segment.exit.target_ref,
                     "evidence": segment.evidence,
+                    "work": None if segment.work is None else segment.work.value,
                 }
             )
         return rows
 
 
-def _same_xy(a: Pose2D, b: Pose2D, tol: float = 1e-6) -> bool:
+def _same_xy(a: Pose2D, b: Pose2D, tol: float = POSITION_TOLERANCE_M) -> bool:
     return abs(a.x - b.x) <= tol and abs(a.y - b.y) <= tol
 
 
-def _same_pose(a: Pose2D, b: Pose2D, tol: float = 1e-6) -> bool:
-    return _same_xy(a, b, tol) and abs(angle_diff(a.yaw, b.yaw)) <= tol
+def _same_pose(a: Pose2D, b: Pose2D, tol: float = POSITION_TOLERANCE_M) -> bool:
+    return _same_xy(a, b, tol) and abs(angle_diff(a.yaw, b.yaw)) <= YAW_TOLERANCE_RAD
 
 
 # ----------------------------------------------------------------------------
@@ -772,6 +827,7 @@ def build_route_plan(survey: Mapping[str, Any]) -> RoutePlan:
             to_pose=pose("W02", stop_yaw("W02")),
             exit=ExitCriteria(kind=ExitKind.WORK_DONE, target_ref="W02", required_count=3),
             evidence="measured",
+            work=WorkKind.PICK,
             note="槽距约 0.15m：需 3 次抓取 + 槽间微移，微移方式（里程计/视觉）B3 现场定",
         )
     )
@@ -898,6 +954,7 @@ def build_route_plan(survey: Mapping[str, Any]) -> RoutePlan:
             to_pose=pose("W04", stop_yaw("W04")),
             exit=ExitCriteria(kind=ExitKind.WORK_DONE, target_ref="W04", required_count=3),
             evidence="measured",
+            work=WorkKind.PLACE,
             note="搭建区高 10cm，车不上台，只在外沿放置；3s 稳定观察仍由 mission 级 VERIFY_BUILD 兜底",
         )
     )

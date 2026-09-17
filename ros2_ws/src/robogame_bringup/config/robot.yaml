@@ -50,10 +50,34 @@ motion_controller:
     # 跳变后应调回 0.25。
     pose_stale_s: 1.5
     status_stale_s: 0.30
+    # B2（无人干预自主完赛）：底盘只能由 /mission/active_source 授权的那一个来源驱动。
+    # 授权断流/过期/给了别的来源 → 本节点停车。独立调试时置 false 即可绕过。
+    require_authorization: true
+    authorization_stale_s: 0.5
     min_x: -0.2
     max_x: 7.4
     min_y: -0.2
     max_y: 5.0
+
+line_follow_controller:
+  ros__parameters:
+    # B2：巡线节点与 motion_controller 共用同一个授权话题，避免两个节点抢 /cmd_vel。
+    # 黑白基准仍是「方向默认值」，具体数值必须现场用面板标定后推送
+    # （见 docs/line_follow/CALIBRATION_AND_HARDWARE.md）。
+    active_source: line_follow
+    require_authorization: true
+    authorization_stale_s: 0.5
+    kp: 1.0
+    kd: 0.1
+    vx_base: 0.2
+    threshold: 0.5
+    edge_threshold: 0.3
+    lost_threshold: 5
+    intersection_threshold: 6
+    dt_s: 0.02
+    max_reading_gap_s: 0.25
+    cmd_stale_s: 0.5
+    status_stale_s: 0.3
 
 cube_perception:
   ros__parameters:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -44,6 +45,15 @@ class Pose2D:
     x: float
     y: float
     yaw: float
+
+
+def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
+    """四元数 → 平面偏航角（弧度，逆时针为正）。
+
+    `/pose`（nav_msgs/Odometry）只给四元数，任务级与运动级都需要同一个换算，
+    所以放在核心模块里单点定义（`motion_control` 与 `mission_manager` 共用）。
+    """
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
 @dataclass(frozen=True)

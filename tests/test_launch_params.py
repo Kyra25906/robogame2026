@@ -148,7 +148,9 @@ class LaunchParameterParserTests(unittest.TestCase):
     def test_env_yaml_top_level_keys(self):
         self.assertEqual(
             _yaml_top_level_keys(CONFIG_DIR / "robot_field.yaml"),
-            {"robot_bridge", "manipulator_client", "cube_perception"},
+            # B2：field 层新增 mission_manager（route_enabled）——因此
+            # hardware.launch.py 必须给 mission_manager 传 field 层（规则 B）。
+            {"robot_bridge", "manipulator_client", "cube_perception", "mission_manager"},
         )
         self.assertEqual(
             _yaml_top_level_keys(CONFIG_DIR / "robot_mock.yaml"),

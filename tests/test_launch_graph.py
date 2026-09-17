@@ -28,6 +28,17 @@ LAUNCH_DIR = SRC_ROOT / "robogame_bringup" / "launch"
 # 若未来再出现缺口，此测试会红并强制更新登记。
 KNOWN_HARDWARE_GAPS = set()
 
+#: 各 launch 允许的「已解释缺口」。默认是空集：新缺口一律让测试红。
+ALLOWED_GAPS = {
+    "hardware.launch.py": KNOWN_HARDWARE_GAPS,
+    # 独立巡线联调图（真车 / mock 两张）：刻意不启动 mission_manager（没有任务层
+    # 就没有授权广播），所以 /mission/active_source 没有发布者。豁免必须一直成立：
+    # 这两张图都不能开启 require_authorization，否则巡线节点永远收不到授权而不动
+    # （mock 那张还有 line_follow_mock_smoke 会直接失败）。
+    "line_follow_hardware.launch.py": {"/mission/active_source"},
+    "line_follow_mock.launch.py": {"/mission/active_source"},
+}
+
 
 class LaunchGraphCompletenessTests(unittest.TestCase):
     """每个被订阅的话题都有发布者（除显式登记的已知缺口）。"""
@@ -71,13 +82,29 @@ class LaunchGraphCompletenessTests(unittest.TestCase):
         self.assertEqual(gaps, {}, f"camera.launch.py has gaps: {gaps}")
 
     def test_all_launch_graphs_have_no_unregistered_gaps(self):
-        # 除 hardware 的 P0-2 登记外，任何 launch 图都不允许出现新缺口。
+        # 除已登记的豁免外，任何 launch 图都不允许出现新缺口。
         all_gaps = analyze_all_launches(SRC_ROOT)
         for launch, gaps in sorted(all_gaps.items()):
             if launch == "hardware.launch.py":
                 self.assertEqual(set(gaps), KNOWN_HARDWARE_GAPS, launch)
             else:
-                self.assertEqual(gaps, {}, f"{launch} has unregistered gaps: {gaps}")
+                allowed = ALLOWED_GAPS.get(launch, set())
+                self.assertEqual(
+                    set(gaps), allowed, f"{launch} has unregistered gaps: {gaps}"
+                )
+
+    def test_standalone_line_launch_justifies_its_active_source_exemption(self):
+        """两张独立巡线图有意不启动任务层，因此没有 /mission/active_source。
+
+        这条豁免必须一直成立：它们**不能**开启 require_authorization，否则巡线节点
+        会因为永远收不到授权而一动不动（独立联调与 mock smoke 直接失效）。
+        """
+        hardware = (LAUNCH_DIR / "line_follow_hardware.launch.py").read_text(encoding="utf-8")
+        self.assertNotIn("require_authorization", hardware)
+        self.assertIn('"active_source": "line_follow"', hardware)
+        mock = (LAUNCH_DIR / "line_follow_mock.launch.py").read_text(encoding="utf-8")
+        self.assertNotIn("require_authorization", mock)
+        self.assertIn('"active_source": "line_follow"', mock)
 
 
 class LaunchGraphParserTests(unittest.TestCase):
@@ -107,6 +134,8 @@ class LaunchGraphParserTests(unittest.TestCase):
             ("robot_bridge", "robot_bridge"),
             ("localization", "localization_node"),
             ("motion_control", "motion_controller"),
+            # B2：mission_manager 订阅 /line_follow/status，图里必须有巡线节点
+            ("motion_control", "line_follow_controller"),
             ("cube_perception", "mock_perception"),
             ("manipulator_client", "manipulator_client"),
             ("mission_manager", "mission_manager"),
@@ -137,10 +166,18 @@ class LaunchGraphParserTests(unittest.TestCase):
             SRC_ROOT / "mission_manager" / "mission_manager" / "node.py"
         )
         self.assertEqual(
-            subscribed, {"/robot/status", "/motion/result", "/manipulator/result"}
+            subscribed,
+            {
+                "/robot/status", "/motion/result", "/manipulator/result",
+                # B2 路线模式新增：巡线状态（段退出判据）与位姿（段内位移/航向）
+                "/line_follow/status", "/pose",
+            },
         )
         self.assertIn("/motion/goal", published)
         self.assertIn("/manipulator/command", published)
+        # B2：唯一底盘授权话题 + 段进度（网页读取）
+        self.assertIn("/mission/active_source", published)
+        self.assertIn("/mission/route", published)
 
 
 if __name__ == "__main__":

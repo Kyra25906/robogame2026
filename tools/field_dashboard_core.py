@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 import json
 import math
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any
@@ -501,3 +503,110 @@ class SessionArchive:
         safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in process)
         with self._lock, (self.raw_path / f"{safe}.log").open("a", encoding="utf-8") as stream:
             stream.write(f"{datetime.now().astimezone().isoformat()} {line}\n")
+
+
+# ---------------------------------------------------------------------------
+# B1：全流程路线只读摘要（给网页显示「这趟要跑哪 13 段、每段怎么算走完」）
+# ---------------------------------------------------------------------------
+
+#: 场地图（survey 段 = 黑线节点/边/停车点，现场实测）
+FIELD_LAYOUT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ros2_ws/src/robogame_bringup/config/field_layout.yaml"
+)
+
+#: 机器人公共配置（用于核对「计划要搭 2 层」与 manipulator_client 的放置高度）
+ROBOT_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ros2_ws/src/robogame_bringup/config/robot.yaml"
+)
+
+_SURVEY_SECTIONS = ("line_nodes", "line_edges", "stops")
+
+
+def load_survey(layout_path: Path | None = None) -> dict[str, dict]:
+    """读场地图 survey 段。
+
+    实现放在 `robogame_core.route_loader`（ROS 节点、网页面板、测试共用同一份，
+    避免「网页显示的场地」与「车实际跑的场地」来自两个解析器）。
+    """
+    from robogame_core.route_loader import load_survey as _load_survey
+
+    return _load_survey(layout_path if layout_path is not None else FIELD_LAYOUT_PATH)
+
+
+def configured_place_heights(config_path: Path | None = None) -> list[float]:
+    """从 robot.yaml 读 `manipulator_client.place_heights_m`（手写解析，容忍无 PyYAML）。"""
+    path = ROBOT_CONFIG_PATH if config_path is None else config_path
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^\s*place_heights_m:\s*\[([^\]]*)\]", text, re.MULTILINE)
+    if not match:
+        return []
+    return [float(item) for item in match.group(1).split(",") if item.strip()]
+
+
+def build_route_payload(
+    layout_path: Path | None = None, *, config_path: Path | None = None
+) -> dict[str, Any]:
+    """B1 全流程路线的只读摘要（网页面板用）。
+
+    任何一步失败都返回 `available: False` + 原因，**不猜**：路线数据是「要开真车」
+    的东西，读不到/自检不过时必须显式暴露，而不是显示一份看起来正常的表。
+    """
+    try:
+        from robogame_core.mission_dispatch import placement_heights_issue
+        from robogame_core.mission_route import build_route_plan
+    except ImportError as exc:  # robogame_core 未安装/未 source 工作空间
+        return {"available": False, "reason": f"robogame_core 未就绪：{exc}"}
+    try:
+        survey = load_survey(layout_path)
+        plan = build_route_plan(survey)
+    except Exception as exc:  # 缺文件/结构变化/自检失败
+        return {"available": False, "reason": f"路线数据不可用：{exc}"}
+    placement_warning = None
+    try:
+        configured = configured_place_heights(config_path)
+        if configured:
+            placement_warning = placement_heights_issue(plan.cargo_plan, configured)
+    except Exception as exc:  # 读不到配置不算致命，但要说明为什么没有这项检查
+        placement_warning = f"未能核对放置高度：{exc}"
+    return {
+        "available": True,
+        "version": plan.version,
+        "source_note": plan.source_note,
+        "start": {"x": plan.start_pose.x, "y": plan.start_pose.y, "yaw": plan.start_pose.yaw},
+        "segments": plan.summary(),
+        "placement_warning": placement_warning,
+        "turns": [
+            {
+                "segment_id": spec.segment_id,
+                "ref": spec.ref,
+                "direction": spec.direction.value,
+                "target_yaw_rad": spec.target_yaw_rad,
+                "passthrough_junctions": spec.passthrough_junctions,
+            }
+            for spec in plan.turn_registry()
+        ],
+        "passthrough": [
+            {"segment_id": segment_id, "ref": ref}
+            for segment_id, ref in plan.passthrough_registry()
+        ],
+        "cargo": {
+            "orange": plan.cargo_plan.orange,
+            "purple": plan.cargo_plan.purple,
+            "layers": plan.cargo_plan.layers,
+            "layout": plan.cargo_plan.layout,
+            "note": plan.cargo_plan.note,
+        },
+        "speed_limits": {
+            "max_vx": plan.speed_limits.max_vx,
+            "max_vy": plan.speed_limits.max_vy,
+            "max_wz": plan.speed_limits.max_wz,
+        },
+    }
+
+
+@lru_cache(maxsize=4)
+def route_payload(layout_path: Path | None = None) -> dict[str, Any]:
+    """`build_route_payload` 的缓存包装（路线是静态数据，snapshot 每秒都会被取）。"""
+    return build_route_payload(layout_path)

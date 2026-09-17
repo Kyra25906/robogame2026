@@ -30,6 +30,8 @@ def generate_launch_description():
         Node(package="robot_bridge", executable="robot_bridge", parameters=[common, mock]),
         Node(package="localization", executable="localization_node", parameters=[common]),
         Node(package="motion_control", executable="motion_controller", parameters=[common]),
+        # B2：同上——mission_manager 在路线模式下消费 /line_follow/status。
+        Node(package="motion_control", executable="line_follow_controller", parameters=[common]),
         Node(package="cube_perception", executable="mock_perception"),
         Node(package="manipulator_client", executable="manipulator_client", parameters=[common, mock]),
         Node(package="mission_manager", executable="mission_manager", parameters=[common, single]),

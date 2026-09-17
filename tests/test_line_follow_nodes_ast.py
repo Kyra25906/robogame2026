@@ -162,11 +162,16 @@ class LineFollowLaunchGraphTests(unittest.TestCase):
         self.assertIn(("robogame_bringup", "line_follow_mock_smoke"), mapping)
 
     def test_line_follow_mock_graph_is_complete(self):
+        # B2：巡线节点新增订阅 /mission/active_source（授权门控），而本图刻意
+        # 不启动 mission_manager（独立联调，授权默认关闭）——所以只允许这一条
+        # 已解释缺口；其他任何缺口仍然红。豁免成立条件见
+        # tests/test_launch_graph.py::test_standalone_line_launch_justifies_its_active_source_exemption
         gaps = missing_publishers(
             LAUNCH_DIR / "line_follow_mock.launch.py", SRC_ROOT
         )
         self.assertEqual(
-            gaps, {}, f"line_follow_mock launch graph has gaps: {gaps}"
+            set(gaps), {"/mission/active_source"},
+            f"line_follow_mock launch graph gaps changed: {gaps}",
         )
 
     def test_launch_contains_all_four_nodes(self):

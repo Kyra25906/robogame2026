@@ -23,7 +23,7 @@ try:
     from field_dashboard_core import (
         LINE_TICK_GAP_MS,
         DashboardState, LineCalibration, SessionArchive, SafetyStatus,
-        action_blockers, clamp_drive, line_chain_health,
+        action_blockers, clamp_drive, line_chain_health, route_payload,
     )
     from grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
 except ImportError:  # 允许测试以 tools.field_dashboard 导入
@@ -32,7 +32,7 @@ except ImportError:  # 允许测试以 tools.field_dashboard 导入
     from tools.field_dashboard_core import (
         LINE_TICK_GAP_MS,
         DashboardState, LineCalibration, SessionArchive, SafetyStatus,
-        action_blockers, clamp_drive, line_chain_health,
+        action_blockers, clamp_drive, line_chain_health, route_payload,
     )
     from tools.grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
 
@@ -122,6 +122,9 @@ class RosFacade:
         self.node.create_subscription(String, "/line_follow/status", lambda msg: self._text("line_status", msg.data), 20)
         self.node.create_subscription(String, "/motion/result", lambda msg: self._text("motion_result", msg.data), 10)
         self.node.create_subscription(String, "/manipulator/result", lambda msg: self._text("manipulator_result", msg.data), 10)
+        # B2：任务层段进度（JSON：当前段/阶段/作业计数/授权来源/路线错误）。
+        # 网页用它显示「车现在在第几段、下一步是什么」，这是无人干预自主完赛的观察窗。
+        self.node.create_subscription(String, "/mission/route", lambda msg: self._text("mission_route", msg.data), 10)
         try:
             from robogame_interfaces.msg import CubeDetectionArray
         except ImportError:
@@ -579,6 +582,8 @@ class DashboardController:
         result["mechanism_services"] = self.ros.service_status() if self.ros else {}
         result["grasp"] = self.grasp_panel()
         result["line_calibration"] = self.line_calibration_snapshot()
+        # B1：全流程路线只读摘要（静态数据，缓存；自检不过时 available=false + 原因）
+        result["route"] = route_payload()
         return result
 
     def line_calibration_snapshot(self) -> dict:

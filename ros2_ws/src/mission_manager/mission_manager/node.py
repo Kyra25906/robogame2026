@@ -1,9 +1,33 @@
+"""任务管理器：把比赛路线（B1 的 RoutePlan）变成真实话题上的命令。
+
+## 两种模式
+
+- **路线模式**（`route_enabled: true`）：走 B1 的 13 段全流程（启动区→巡线右转→
+  上坡→取 3 块→下坡→搭建 2 层→撤退）。本文件负责：
+  1. 喂观测：`/line_follow/status`（巡线状态）、`/pose`（位姿与段内位移）；
+  2. 授权：把当前段决定的来源发到 `/mission/active_source`（唯一授权话题）；
+  3. 分发：平移/原地转向段发 `/motion/goal`；作业段发 `/manipulator/command`；
+  4. 观测：`/mission/route`（String，JSON）给网页显示段进度。
+- **演示模式**（`route_enabled: false`，默认）：保持原有「一橙一紫」流程不变，
+  也不发授权话题（避免影响既有 mock/single_cube 链路）。
+
+## 为什么授权要由任务层广播
+
+`/cmd_vel` 有多个发布者（motion_control / line_follow / manipulator_client），
+靠时序隐式互斥就是「谁后发谁赢」。任务层最清楚「这一时刻谁该动」，所以由它给出
+唯一授权；各运动节点自己遵守（见 `mission_dispatch` 的授权表）。授权只能**禁止**
+运动，永远不会放行危险运动——急停/通信丢失/机构故障仍由各节点自己的安全门控优先处理。
+"""
+
 from __future__ import annotations
 
+import json
+import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose2D, Twist
+from geometry_msgs.msg import Pose2D as Pose2DMsg, Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robogame_core.mission import (
     MissionConfig,
@@ -11,6 +35,14 @@ from robogame_core.mission import (
     MissionState,
     classify_action_result,
 )
+from robogame_core.mission_dispatch import (
+    SOURCE_NONE,
+    decide,
+    parse_line_status,
+)
+from robogame_core.mission_route import SegmentRole
+from robogame_core.models import MissionResult, Pose2D, yaw_from_quaternion
+from robogame_core.route_loader import load_route_plan, resolve_field_layout_path
 from robogame_interfaces.msg import CargoState, MissionState as MissionStateMsg, RobotStatus
 from std_msgs.msg import String
 
@@ -24,6 +56,9 @@ class MissionManagerNode(Node):
             "startup_wait_timeout_s": 15.0,
             "orange_waypoint": [1.0, 0.5, 0.0], "purple_waypoint": [1.5, 1.0, 0.0],
             "build_waypoint": [0.5, 1.5, 1.57], "retreat_waypoint": [0.5, 1.2, 1.57],
+            # --- B2 路线模式 ---
+            "route_enabled": False,
+            "field_layout_path": "",
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -35,17 +70,61 @@ class MissionManagerNode(Node):
             build_stability_s=float(self.get_parameter("build_stability_s").value),
             startup_wait_timeout_s=float(self.get_parameter("startup_wait_timeout_s").value),
         ))
+        self.route_enabled = bool(self.get_parameter("route_enabled").value)
+        self.route_error = ""
+        self.cargo_plan = None
+        self.placement_warning = ""
+        if self.route_enabled:
+            self._load_route()
+
         self.status: RobotStatus | None = None
         self.last_dispatched: MissionState | None = None
+        self.last_line_status_time = 0.0
+        self.line_status_timeout_s = 0.5
+        self.segment_distance_m = 0.0
+        self.previous_pose: Pose2D | None = None
+        self.published_work_index = -1
+        self.published_segment_id = ""
+
         self.state_pub = self.create_publisher(MissionStateMsg, "/mission/state", 10)
         self.cargo_pub = self.create_publisher(CargoState, "/mission/cargo", 10)
-        self.goal_pub = self.create_publisher(Pose2D, "/motion/goal", 10)
+        self.goal_pub = self.create_publisher(Pose2DMsg, "/motion/goal", 10)
         self.manip_pub = self.create_publisher(String, "/manipulator/command", 10)
         self.stop_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        # B2：唯一授权话题 + 段进度（网页读取）
+        self.authority_pub = self.create_publisher(String, "/mission/active_source", 10)
+        self.route_pub = self.create_publisher(String, "/mission/route", 10)
         self.create_subscription(RobotStatus, "/robot/status", self._on_status, 10)
         self.create_subscription(String, "/motion/result", self._on_action_result, 10)
         self.create_subscription(String, "/manipulator/result", self._on_action_result, 10)
+        self.create_subscription(String, "/line_follow/status", self._on_line_status, 10)
+        self.create_subscription(Odometry, "/pose", self._on_pose, 20)
         self.create_timer(0.05, self._tick)
+
+    # ------------------------------------------------------------------
+    # 启动期：加载路线
+    # ------------------------------------------------------------------
+
+    def _load_route(self) -> None:
+        path = resolve_field_layout_path(str(self.get_parameter("field_layout_path").value))
+        try:
+            plan = load_route_plan(path)
+        except Exception as exc:  # 缺文件 / 结构变化 / 自检失败
+            self.route_error = f"{exc}"
+            self.get_logger().error(
+                f"路线不可用（route_enabled=true）：{self.route_error}；"
+                "任务将判失败并保持停车，不会退回演示流程"
+            )
+            return
+        self.machine.route = plan
+        self.cargo_plan = plan.cargo_plan
+        self.get_logger().info(
+            f"已加载比赛路线 {plan.version}：{len(plan.segments)} 段，来源 {path}"
+        )
+
+    # ------------------------------------------------------------------
+    # 回调
+    # ------------------------------------------------------------------
 
     def _on_status(self, msg: RobotStatus) -> None:
         self.status = msg
@@ -57,13 +136,43 @@ class MissionManagerNode(Node):
             # 计时兜底，而不是被当作 MECHANISM_ERROR 判死。
             self.machine.tick(action_succeeded=True)
         else:
+            # 作业失败：允许重发同一条作业命令（重试语义由 state 机控制）
+            self.published_work_index = -1
             self.machine.tick(action_failed=True, failure_result=failure_result,
                               failure_detail=detail)
         self.last_dispatched = None
 
-    def _waypoint(self, name: str) -> Pose2D:
+    def _on_line_status(self, msg: String) -> None:
+        parsed = parse_line_status(msg.data)
+        self.last_line_status_time = time.monotonic()
+        runner = self.machine.route_runner
+        if runner is not None:
+            runner.observe_line(parsed.state)
+            runner.mark_stale(parsed.stale)
+
+    def _on_pose(self, msg: Odometry) -> None:
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        pose = Pose2D(p.x, p.y, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+        if not all(math.isfinite(v) for v in (pose.x, pose.y, pose.yaw)):
+            return
+        if self.previous_pose is not None and self.machine.state is MissionState.ROUTE_RUNNING:
+            # 段内位移：用位姿增量累加（不走直线也按路径长度算）
+            self.segment_distance_m += math.hypot(
+                pose.x - self.previous_pose.x, pose.y - self.previous_pose.y
+            )
+        self.previous_pose = pose
+        runner = self.machine.route_runner
+        if runner is not None:
+            runner.observe_pose(pose)
+            runner.observe_distance(self.segment_distance_m)
+
+    # ------------------------------------------------------------------
+    # 演示模式分发（原样保留）
+    # ------------------------------------------------------------------
+
+    def _waypoint(self, name: str) -> Pose2DMsg:
         values = list(self.get_parameter(name).value)
-        return Pose2D(x=values[0], y=values[1], theta=values[2])
+        return Pose2DMsg(x=values[0], y=values[1], theta=values[2])
 
     def _dispatch(self) -> None:
         state = self.machine.state
@@ -84,10 +193,88 @@ class MissionManagerNode(Node):
             self.stop_pub.publish(Twist())
         self.last_dispatched = state
 
+    # ------------------------------------------------------------------
+    # 路线模式分发
+    # ------------------------------------------------------------------
+
+    def _release_authority(self) -> None:
+        """释放底盘授权（谁都不许动）。终态与异常都走这里。"""
+        self.authority_pub.publish(String(data=SOURCE_NONE))
+
+    def _dispatch_route(self) -> None:
+        """按当前段下发授权 / 目标 / 作业命令。"""
+        runner = self.machine.route_runner
+        segment = self.machine.current_segment
+        if runner is None or self.cargo_plan is None:
+            return
+        if segment is None:
+            return
+        if segment.id != self.published_segment_id:
+            self.published_segment_id = segment.id
+            self.published_work_index = -1
+            self.segment_distance_m = 0.0
+            self.previous_pose = None
+            self.get_logger().info(f"进入段 {segment.id}：{segment.label}")
+        decision = decide(segment, self.cargo_plan, max(runner.observations.work_count, 0))
+        # 顺序：先给目标（若有），再授权——两个顺序都安全，因为未授权的运动节点只会发零速
+        if decision.goal is not None:
+            self.goal_pub.publish(
+                Pose2DMsg(x=decision.goal.x, y=decision.goal.y, theta=decision.goal.yaw)
+            )
+        self.authority_pub.publish(String(data=decision.active_source))
+        if segment.role is SegmentRole.WORK and decision.work_command is not None:
+            index = runner.observations.work_count
+            if index != self.published_work_index:
+                self.manip_pub.publish(String(data=decision.work_command))
+                self.published_work_index = index
+                self.get_logger().info(
+                    f"{segment.id}：第 {index + 1} 次作业 → {decision.work_command}"
+                )
+
+    def _publish_route_status(self) -> None:
+        progress = self.machine.route_progress()
+        segment = self.machine.current_segment
+        runner = self.machine.route_runner
+        plan = self.machine.route
+        next_segment = None
+        if plan is not None and runner is not None and not runner.is_complete:
+            index = runner.segment_index + 1
+            if 0 <= index < len(plan.segments):
+                next_segment = plan.segments[index].id
+        active_source = None
+        if segment is not None and self.cargo_plan is not None:
+            active_source = decide(segment, self.cargo_plan, 0).active_source
+        payload = {
+            **progress,
+            "route_version": None if plan is None else plan.version,
+            "next_segment_id": next_segment,
+            "work_count": 0 if runner is None else runner.observations.work_count,
+            "work_required": None if segment is None else segment.exit.required_count,
+            "active_source": active_source,
+            "route_error": self.route_error,
+        }
+        self.route_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+
+    # ------------------------------------------------------------------
+    # 主循环
+    # ------------------------------------------------------------------
+
     def _tick(self) -> None:
         now = time.monotonic()
         if self.status is None:
             return
+        if self.route_error and self.machine.state not in {
+            MissionState.FAILED, MissionState.SAFE_STOP, MissionState.COMPLETE
+        }:
+            # 路线模式但路线不可用：判失败并保持停车（绝不退回演示流程）
+            self.machine.fail(MissionResult.MECHANISM_ERROR, f"route unavailable: {self.route_error}", now)
+        if (
+            self.machine.state is MissionState.ROUTE_RUNNING
+            and now - self.last_line_status_time > self.line_status_timeout_s
+        ):
+            runner = self.machine.route_runner
+            if runner is not None:
+                runner.mark_stale(True)  # 巡线状态断流：不许推进任何段
         if self.machine.state is MissionState.WAIT_FOR_COMMUNICATION:
             # A2 / P0-1: 上电握手期 communication_ok=False 正常——等待不判死；
             # 通信就绪后同一 tick 内可继续走 SELF_CHECK（mechanism 就绪即前进）。
@@ -110,7 +297,19 @@ class MissionManagerNode(Node):
         else:
             self.machine.tick(now=now, communication_ok=self.status.communication_ok,
                               emergency_stop=self.status.emergency_stop)
-        self._dispatch()
+
+        if self.machine.state is MissionState.ROUTE_RUNNING:
+            self._dispatch_route()
+            self._publish_route_status()
+        elif self.route_enabled and self.machine.state in {
+            MissionState.COMPLETE, MissionState.FAILED, MissionState.SAFE_STOP
+        }:
+            self._release_authority()
+            self._dispatch()  # 终态零速
+            self._publish_route_status()
+        else:
+            self._dispatch()
+
         stamp = self.get_clock().now().to_msg()
         state = MissionStateMsg(stamp=stamp, state=self.machine.state.value,
                                 result=self.machine.result.value, retry_count=self.machine.retries,
