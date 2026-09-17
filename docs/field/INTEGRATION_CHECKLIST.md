@@ -28,6 +28,8 @@
 - [ ] ~~Positive `vx`, `vy`, and `wz` match the agreed coordinate system.~~ ✏️ **已改写：正 `vx`、正 `wz` 方向正确，且 `vy` 恒为 0。**
   - 依据：真车**没有可用的横移**（左右平移偏差过大）→ 软件**禁止输出横移 VY（恒 0）**，导航与视觉对准从"横移纠偏"改为"**转向对准 + 直线接近**"（问答表 C-6 `给机械组现场问答表_2026-08-19.md:40`；设计稿 `真车对接设计稿_2026-08-19.md:25,113`）。
   - 历史上只证明过**架空**时 vy 四轮转向组合正确（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:24`）——**架空方向正确 ≠ 落地可用**，不得据此下发 vy。
+  - ⚠️ **"VY 恒 0"目前靠约定与仲裁器忽略，不是靠校验拦住的（2026-09-17 复核）**：`robot.yaml` 现在写的是 `max_vy: 0.30`（**非 0**），而 `robogame_core/config_validation.py:64` 只把 `max_vy` 列为"必须存在的键"，**没有"必须为 0"的约束**。实际不出横移是因为 ALIGN 的横向命令被仲裁器**刻意忽略**（`tests/test_cmd_vel_arbiter.py:93` 断言 `command.vy == 0.0`），且 `grasp_alignment` 明确不提供横向接近轴。
+    → **行为上是对的，但缺一道结构性防线**：若日后把导航/对准的 `ky` 调非零、或新增横向位移段，`max_vy: 0.30` 会**放行**，而真车横移恰恰是"偏差过大不可用"的那一项。建议把 `max_vy` 改成 `0.0`，或在 `config_validation` 加一条"真车配置不得为非零横移"的检查。**在加上之前，现场不要假设"vx/wz 以外的横移会被自动拦下"。**
 - [ ] ~~Grab, release, lift, and stop commands return explicit results.~~ ✏️ **已改写：`GRAB` / `RELEASE` / `STOP` 返回明确结果；`LIFT` 的期望结果是失败码 `3010`。**
   - 依据：真车**没有升降装置** → 真车模式**禁用 LIFT**，任务改为**单层地面放置**，三层高度参数暂缓冻结（问答表 C-3 `给机械组现场问答表_2026-08-19.md:37`；设计稿 `真车对接设计稿_2026-08-19.md:48`；设计稿 `:114` 互锁第 4 条"LIFT 禁用"）。
   - `/lift/set_height` **期望返回 `3010`**（固件 `RPI_ERROR_MECH_NO_LIFT = 3010`：`rpi_protocol.c:217`，下发处 `:775`；`docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:182,189` 明确"真车无升降装置 → 回 FAILED + 3010，不假装接受后超时"）。`FIELD_DASHBOARD.md:119` 把"`/lift/set_height` 应返回 `3010`"当作**通过**判据。
