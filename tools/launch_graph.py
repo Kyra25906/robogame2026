@@ -412,6 +412,12 @@ PRODUCTION_LAUNCHES: tuple[str, ...] = (
     "hardware.launch.py",
     "mock_demo.launch.py",
     "single_cube.launch.py",
+    # 巡线真车入口：必须纳入校验。它原先完全不传 params 文件，两个节点退回
+    # 节点默认值（serial_port=/dev/ttyACM0、command_timeout_s=0.15、
+    # max_mcu_sample_gap_ms=250），会静默回退 2026-08-18 修好的零速顿挫与
+    # LOCALIZATION_ERROR 停车；而 line_follow_mock.launch.py 是 smoke 脚手架
+    # （内联参数 + smoke 退出即关机），按原规则继续跳过。
+    "line_follow_hardware.launch.py",
 )
 
 # 需要配置层约束的核心 ROS 节点（robogame_bringup 的 guard/smoke 脚本除外）。
@@ -530,7 +536,8 @@ def parameter_layer_issues(
     """断言生产 launch 里每个节点都拿到它需要的全部配置层（A0.3 / 杀 P0-3）。
 
     规则（全部由 launch 源码 + env yaml 事实驱动，不硬编码节点清单）：
-    A. 核心节点必须带 ``common`` 基座层（内联自包含的节点除外）；
+    A. 核心节点必须带 ``common`` 基座层（内联参数**不能**替代它：内联只覆盖写到的
+       键，其余键会退回节点硬编码默认值）；
     B. 某层变量（mock/field/single）对应的 yaml 里有该节点段落时，该节点
        必须带这一层——P0-3（cube_perception 漏传 field）即此类；
     C. 核心节点不允许完全没有参数（除非登记在 PARAMETER_FREE_NODES）；
@@ -556,7 +563,11 @@ def parameter_layer_issues(
                 launch_path.name, node, "no parameters at all (missing common layer)"
             ))
             continue
-        if "common" not in layer_names and not has_inline:
+        # 内联参数不能替代 common 层：内联只覆盖它写到的键，其余键会退回**节点硬编码
+        # 默认值**（robot_bridge: serial_port=/dev/ttyACM0、command_timeout_s=0.15、
+        # max_mcu_sample_gap_ms=250），正是 P0-3 与巡线真车入口那类静默回退。
+        # 真实的 mock_demo / single_cube / hardware 都显式带了 common。
+        if "common" not in layer_names:
             issues.append(ParameterLayerIssue(
                 launch_path.name, node, "missing common layer"
             ))

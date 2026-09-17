@@ -103,6 +103,29 @@ class LaunchParameterLayerRealLaunchesTests(unittest.TestCase):
         issues = parameter_layer_issues(LAUNCH_DIR / "single_cube.launch.py", SRC_ROOT)
         self.assertEqual(issues, [], f"single_cube.launch.py issues: {issues}")
 
+    def test_line_follow_hardware_launch_has_complete_parameter_layers(self):
+        # 回归：该 launch 原先完全不传 params 文件，两个节点退回节点默认值
+        # （serial_port=/dev/ttyACM0、command_timeout_s=0.15、
+        # max_mcu_sample_gap_ms=250），会静默回退 2026-08-18 真车联调修好的
+        # 零速插入顿挫与 LOCALIZATION_ERROR 停车。它是巡线真车入口，必须有配置层。
+        issues = parameter_layer_issues(
+            LAUNCH_DIR / "line_follow_hardware.launch.py", SRC_ROOT
+        )
+        self.assertEqual(issues, [], f"line_follow_hardware.launch.py issues: {issues}")
+
+    def test_line_follow_hardware_bridge_gets_common_and_field(self):
+        # robot_bridge 必须同时拿到 common(robot.yaml) 与 field(robot_field.yaml)：
+        # serial_port 的 by-id 路径只在 robot_field.yaml 里。
+        for package, executable, layers, _inline, _names in _node_parameter_info(
+            LAUNCH_DIR / "line_follow_hardware.launch.py"
+        ):
+            if (package, executable) == ("robot_bridge", "robot_bridge"):
+                self.assertIn("common", layers)
+                self.assertIn("field", layers)
+                break
+        else:  # pragma: no cover - 解析器漏了该节点则测试失败
+            self.fail("robot_bridge not found in line_follow_hardware.launch.py")
+
     def test_cube_perception_in_hardware_gets_common_and_field(self):
         # A3 / P0-3 的显式回归：hardware 里 cube_perception 必须拿到
         # [common, field]（原漏传 field，实机用 700.0 焦距）。
