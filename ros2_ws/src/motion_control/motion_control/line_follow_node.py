@@ -29,6 +29,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
+from robogame_core.authorization import AuthorizationState
 from robogame_core.cmd_vel_arbiter import (
     SOURCE_LINE_FOLLOW,
     ArbiterConfig,

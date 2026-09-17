@@ -208,13 +208,22 @@ class GatingWiringTests(unittest.TestCase):
         # 未授权分支必须 return，不许继续往下走控制律
         self.assertIn("return", text)
 
-    def test_motion_control_authorization_requires_our_own_source(self):
-        function = _function(self.motion, "_authorized")
-        text = ast.unparse(function)
-        self.assertIn("require_authorization", text)
-        self.assertIn("granted_source", text)
-        self.assertIn("authorization_stale_s", text)
-        self.assertIn("SOURCE_NAVIGATE", text)
+    def test_authorization_rules_live_in_the_shared_module(self):
+        """三个运动节点必须共用同一份授权规则（分叉 = 某个节点可能不受约束）。
+
+        规则实现已下沉到 `robogame_core.authorization`（见集成审计发现的
+        authority_not_enforced：manipulator_client 原来看都不看授权）。
+        """
+        for tree, label, source in (
+            (self.motion, "motion_control", "SOURCE_NAVIGATE"),
+            (self.line, "line_follow", None),
+        ):
+            text = ast.unparse(tree)
+            self.assertIn("AuthorizationState", text, label)
+            self.assertIn("require_authorization", text, label)
+            self.assertIn("authorization_stale_s", text, label)
+            if source is not None:
+                self.assertIn(source, ast.unparse(_function(tree, "_authorized")), label)
 
     def test_line_follow_stays_silent_when_unauthorized(self):
         function = _function(self.line, "_publish")

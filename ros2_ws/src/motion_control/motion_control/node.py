@@ -7,6 +7,7 @@ import rclpy
 from geometry_msgs.msg import Pose2D as Pose2DMsg, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from robogame_core.authorization import AuthorizationState
 from robogame_core.cmd_vel_arbiter import SOURCE_NAVIGATE
 from robogame_core.models import Pose2D, Velocity2D, control_safety_result, yaw_from_quaternion
 from robogame_core.navigation import (
@@ -69,11 +70,12 @@ class MotionControllerNode(Node):
         self.invalid_pose_reported = False
         self.robot_status: RobotStatus | None = None
         self.robot_status_time = 0.0
-        # B2：任务层授权（唯一有权驱动底盘的来源）
-        self.require_authorization = bool(self.get_parameter("require_authorization").value)
-        self.authorization_stale_s = float(self.get_parameter("authorization_stale_s").value)
-        self.granted_source: str | None = None
-        self.granted_time = 0.0
+        # B2/B4：任务层授权（唯一有权驱动底盘的来源）。规则见
+        # robogame_core.authorization（三个运动节点共用一份）。
+        self.authorization = AuthorizationState(
+            require=bool(self.get_parameter("require_authorization").value),
+            stale_s=float(self.get_parameter("authorization_stale_s").value),
+        )
         self.was_driving = False
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 20)
         self.result_pub = self.create_publisher(String, "/motion/result", 10)
@@ -85,23 +87,16 @@ class MotionControllerNode(Node):
 
     def _on_authorization(self, msg: String) -> None:
         """任务层广播的底盘授权（唯一来源）。"""
-        self.granted_source = str(msg.data).strip()
-        self.granted_time = time.monotonic()
+        self.authorization.grant(str(msg.data), time.monotonic())
 
     def _authorized(self, now: float) -> bool:
         """本节点此刻是否被授权驱动底盘。
 
         `require_authorization=false`（默认，独立调试）→ 永远放行；
         开启后：没有授权消息、授权过期、或授权给了别的来源 → 不放行（fail-safe：
-        授权断流时车停下，而不是按旧授权继续跑）。
+        授权断流时车停下，而不是按旧授权继续跑）。规则见 robogame_core.authorization。
         """
-        if not self.require_authorization:
-            return True
-        if self.granted_source is None:
-            return False
-        if (now - self.granted_time) > self.authorization_stale_s:
-            return False
-        return self.granted_source == SOURCE_NAVIGATE
+        return self.authorization.allows(SOURCE_NAVIGATE, now)
 
     def _status_failure(self):
         status = self.robot_status

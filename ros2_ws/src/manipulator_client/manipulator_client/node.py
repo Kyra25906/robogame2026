@@ -5,6 +5,8 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from robogame_core.authorization import AuthorizationState
+from robogame_core.cmd_vel_arbiter import SOURCE_ALIGN
 from robogame_core.hardware_readiness import validate_runtime_evidence_policy
 from robogame_core.grasp_alignment import (
     calculate_turn_alignment_command,
@@ -57,14 +59,26 @@ class ManipulatorClientNode(Node):
             "placement_observation_timeout_s": 6.0,
             "placement_max_unavailable_gap_s": 0.0,
             "place_heights_m": [0.10, 0.20, 0.30],
+            # B4：底盘授权门控。默认 false = 独立联调（没有任务层时也能对准）；
+            # 比赛配置里打开（作业段的底盘授权来自任务层，见 integrational_audit）。
+            "require_authorization": False,
+            "authorization_stale_s": 0.5,
         }.items():
             self.declare_parameter(name, default)
+        self.authorization = AuthorizationState(
+            require=bool(self.get_parameter("require_authorization").value),
+            stale_s=float(self.get_parameter("authorization_stale_s").value),
+        )
+        self.was_driving = False
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 20)
         self.result_pub = self.create_publisher(String, "/manipulator/result", 10)
         self.stage_pub = self.create_publisher(String, "/perception/stage", 10)
         self.create_subscription(CubeDetectionArray, "/cubes", self._on_cubes, 10)
         self.create_subscription(String, "/manipulator/command", self._on_command, 10)
         self.create_subscription(RobotStatus, "/robot/status", self._on_robot_status, 10)
+        self.create_subscription(
+            String, "/mission/active_source", self._on_authorization, 10
+        )
         self.grab = self.create_client(ExecuteMechanism, "/gripper/grab")
         self.release = self.create_client(ExecuteMechanism, "/gripper/release")
         self.retreat = self.create_client(ExecuteMechanism, "/chassis/retreat")
@@ -245,6 +259,15 @@ class ManipulatorClientNode(Node):
 
     def _publish_stop(self) -> None:
         self.cmd_pub.publish(Twist())
+        self.was_driving = False
+
+    def _on_authorization(self, msg: String) -> None:
+        """任务层广播的底盘授权（唯一来源）。规则见 robogame_core.authorization。"""
+        self.authorization.grant(str(msg.data), time.monotonic())
+
+    def _authorized(self, now: float) -> bool:
+        """本节点此刻是否被授权驱动底盘（作业段由任务层授权给 manipulator_client）。"""
+        return self.authorization.allows(SOURCE_ALIGN, now)
 
     def _request_stop(self) -> None:
         request = ExecuteMechanism.Request()
@@ -572,11 +595,20 @@ class ManipulatorClientNode(Node):
             self.workflow_state = ManipulatorState.ALIGNING
             self.operation = MechanismOperation.NONE
             self.service_wait_started_at = 0.0
+        if not self._authorized(time.monotonic()):
+            # B4：作业段的底盘授权是任务层给的；没拿到就不许对准（否则视觉对准
+            # 会在别的节点正在巡线时抢 /cmd_vel）。见 tools/integration_audit.py
+            # 的 authority_not_enforced 检查：本节点原先完全没看授权。
+            if self.was_driving:
+                self._publish_stop()
+                self.was_driving = False
+            return
         msg = Twist()
         msg.linear.x = alignment.linear_x
         msg.linear.y = 0.0
         msg.angular.z = alignment.angular_z
         self.cmd_pub.publish(msg)
+        self.was_driving = bool(alignment.linear_x or alignment.angular_z)
 
 
 def main(args=None) -> None:

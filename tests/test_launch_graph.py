@@ -43,6 +43,11 @@ ALLOWED_GAPS = {
     "line_follow_mock.launch.py": {
         "/mission/active_source", "/mission/turn", "/mission/line",
     },
+    # 机构独立 smoke 图：同样刻意不启动任务层，而 manipulator_client 现在也订阅
+    # `/mission/active_source`（B4 集成审计发现的 authority_not_enforced：路线会把
+    # 作业段的底盘授权给它，它却原来不看授权）。该图里 require_authorization 保持
+    # 默认 false，因此不会因为收不到授权而不动。
+    "manipulator_mock_smoke.launch.py": {"/mission/active_source"},
 }
 
 
@@ -64,10 +69,15 @@ class LaunchGraphCompletenessTests(unittest.TestCase):
         self.assertEqual(gaps, {}, f"field smoke launch graph has gaps: {gaps}")
 
     def test_manipulator_mock_smoke_graph_is_complete(self):
+        # B4：manipulator_client 新增订阅 /mission/active_source（授权门控），
+        # 而本图刻意不启动任务层 → 允许这一条已解释缺口；其他缺口仍然红。
         gaps = missing_publishers(
             LAUNCH_DIR / "manipulator_mock_smoke.launch.py", SRC_ROOT
         )
-        self.assertEqual(gaps, {}, f"manipulator smoke launch graph has gaps: {gaps}")
+        self.assertEqual(
+            set(gaps), {"/mission/active_source"},
+            f"manipulator smoke launch graph gaps changed: {gaps}",
+        )
 
     def test_hardware_graph_gaps_match_known_p02_registration(self):
         # P0-2 已由 B1 修复：hardware.launch.py 的相机话题现在有发布者，
