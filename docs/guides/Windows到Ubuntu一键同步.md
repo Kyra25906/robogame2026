@@ -23,7 +23,7 @@
 → 保存 CSV 和 robot_bridge 日志
 ```
 
-脚本不再依赖 `/home/panwenhui/robogame` 或 `/home/panwenhui/robogame2026`。两个旧目录都不会被覆盖；全新的验收仓库按提交号命名，例如：
+本节的验收脚本（`tools/sync_accept_ubuntu.ps1`）不使用 `/home/panwenhui/robogame` 或 `/home/panwenhui/robogame2026`：它的默认远端基目录是 `/home/panwenhui/robogame_acceptance`（`tools/sync_accept_ubuntu.ps1:6`），所以两个旧目录都不会被覆盖；全新的验收仓库按提交号命名，例如：
 
 ```text
 /home/panwenhui/robogame_acceptance_fc8150e
@@ -59,7 +59,7 @@
 在 Windows PowerShell 中进入项目：
 
 ```powershell
-cd "C:\Users\dahli\Documents\Codex\2026-07-13\xu"
+# 在项目根目录（即包含 tools\setup_ubuntu_key.ps1 的目录，当前就是 robogame_algorithm）中执行
 powershell -ExecutionPolicy Bypass -File .\tools\setup_ubuntu_key.ps1
 ```
 
@@ -87,6 +87,12 @@ tools\sync_to_ubuntu.cmd
 ```
 
 脚本会自动：打包源码、上传、覆盖 Ubuntu 对应源码、ROS2 编译、运行自动测试。
+
+> ⚠️ 这条备用链路和上面的验收链路**不一样**：`tools/sync_to_ubuntu.ps1:5` 的 `RemoteProject` 默认值仍是 `/home/panwenhui/robogame`，也就是它会直接覆盖那个目录。Ubuntu 上的仓库不在这个路径时，必须显式指定，不要照抄默认值：
+
+```powershell
+.\tools\sync_to_ubuntu.cmd -RemoteProject /home/<用户名>/<仓库目录>
+```
 
 ## 常用选项
 

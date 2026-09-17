@@ -2,7 +2,7 @@
 
 ## 1. 功能边界
 
-`robot_bridge` 负责在 ROS2 与 STM32 串口协议 V1 之间转换命令和状态。当前树莓派侧已经实现机械命令状态机，但这不代表真实机械臂已经可动；在 STM32 支持 `0x20/0x21` 前，只能使用 PTY 模拟验收。
+`robot_bridge` 负责在 ROS2 与 STM32 串口协议 V1 之间转换命令和状态。树莓派侧已实现机械命令状态机，STM32 侧也已实现 0x20/0x21 通道（2026-08-19，见 §8）；但这不代表真实机械臂已经可动——`LIFT_ABS` 会被固件以 `3010` 拒绝，真实夹取仍须按 §6 安全门逐项满足后才可在真车联调。不接真实 STM32 时，可用 PTY 模拟验收（§9）。
 
 机械命令链路：
 
@@ -173,8 +173,8 @@ ros2 service call /arm/set_joint robogame_interfaces/srv/SetArmJoint \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ros2_ws/install_mechanism_test/setup.bash
+source ros2_ws/install/setup.bash
 python3 -m unittest tests.test_robot_bridge_mechanism_integration -v
 ```
 
-PTY套件覆盖正常操作、ACK/状态超时、重试、错误终态、急停、MCU重启、命令互斥、STOP抢占以及串口断线重连。真实机械臂联调必须等STM32实现并经过单独授权。
+PTY套件覆盖正常操作、ACK/状态超时、重试、错误终态、急停、MCU重启、命令互斥、STOP抢占以及串口断线重连。固件侧 0x20/0x21 已实现（§8），真实机械臂联调现在只等真车硬件就位并经过单独授权。

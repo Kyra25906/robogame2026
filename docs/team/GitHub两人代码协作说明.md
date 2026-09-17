@@ -31,8 +31,10 @@ https://github.com/你的用户名/robogame2026.git
 
 ### 2.2 在 Windows 初始化并提交
 
+> ⚠️ 本节是**从零建库**的步骤，只在还没有仓库时执行。`C:\Users\dahli\Documents\robogame_algorithm` 现在**已经是 git 仓库**（origin 指向 `github.com/Kyra25906/robogame2026.git`），在那里再跑 `git init` 是多余的；已有仓库的日常开发只需 `git status` / `git switch`，不要重新 `git init`。
+
 ```powershell
-cd "C:\Users\dahli\Documents\Codex\2026-07-13\xu"
+cd "C:\Users\dahli\Documents\robogame_algorithm"
 
 git init -b main
 git config user.name "你的姓名或GitHub名称"

@@ -32,15 +32,15 @@
 
 | 概念 | 一句话解释 | 在本项目中 |
 |---|---|---|
-| 波特率 (baud rate) | 每秒传多少位，收发双方必须一致 | `robot.yaml` 中 `baud_rate: 115200` |
-| UART/USB 转串口 | 树莓派没有原生串口，靠 USB 模拟 | 设备路径 `/dev/ttyACM0` |
+| 波特率 (baud rate) | 每秒传多少位，收发双方必须一致 | `robot_field.yaml:5` 的 `baud_rate: 115200`（现场层；`robot.yaml` 里没有这一项） |
+| UART/USB 转串口 | 树莓派没有原生串口，靠 USB 模拟 | 设备路径用 by-id 稳定符号链接（`robot_field.yaml:4`）；`/dev/ttyACM0` 会随插拔变号，不要写死 |
 | 全双工 | 可以同时收发，互不干扰 | 上位机发命令、下位机回状态可以同时进行 |
 | 流控制 | 防止发送太快对方来不及处理 | 本项目未使用，靠协议自身帧定界 |
 
 ### 对应代码
 
-- `robot_bridge/node.py` 第 94-107 行：`_open_serial()` 打开串口
-- `robot_bridge/node.py` 第 301-302 行：`_tick()` 中从串口读数据
+- `robot_bridge/node.py` 第 399-414 行：`_open_serial()` 打开串口
+- `robot_bridge/node.py` 第 339-361 行：独立读线程 `_reader_loop_step()` / `_reader_loop()` 持续把串口字节放进队列（2026-08-19 起读取已从 `_tick()` 定时器挪到独立线程）；`_tick()` 里用第 363-377 行的 `_drain_rx()` 取走（调用点第 1139 行）
 
 ### 学完后能回答
 
@@ -76,9 +76,9 @@
 
 ### 对应代码
 
-- `robogame_core/serial_protocol.py` 第 41-50 行：`encode_frame()` 打包一帧
-- `robogame_core/serial_protocol.py` 第 52-70 行：`decode_frame()` 解包一帧
-- `robogame_core/serial_protocol.py` 第 81-112 行：`StreamDecoder` 从字节流中切帧
+- `robogame_core/serial_protocol.py` 第 148-157 行：`encode_frame()` 打包一帧
+- `robogame_core/serial_protocol.py` 第 160-176 行：`decode_frame()` 解包一帧
+- `robogame_core/serial_protocol.py` 第 370-401 行：`StreamDecoder` 从字节流中切帧
 
 ### 学完后能回答
 

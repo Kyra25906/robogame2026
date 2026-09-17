@@ -41,7 +41,7 @@ mission_manager → manipulator_client → 夹爪/升降服务 → 机械机构
 - 机械提供夹爪和升降的行程、限位、完成证据、故障判据和安全行为。
 - `robot_bridge`负责 ROS 2 与真实串口协议之间的转换。
 
-三方不能单独猜测单位、方向、载荷或完成条件。详细接口、未冻结字段和确认清单见[算法给电控与机械的接口说明](docs/field/算法给电控与机械的接口说明.md)，串口字节定义见[MCU协议](docs/field/MCU_PROTOCOL.md)。
+三方不能单独猜测单位、方向、载荷或完成条件。详细接口、未冻结字段和确认清单见[算法给电控与机械的接口说明](docs/field/算法给电控与机械的接口说明.md)，串口字节定义见[STM32 串口协议 V1](docs/field/STM32_SERIAL_PROTOCOL_V1.md)（旧的 `docs/field/MCU_PROTOCOL.md` 已删除，消息编号过期，勿再引用）。
 
 ## 当前状态
 
@@ -70,8 +70,11 @@ mission_manager → manipulator_client → 夹爪/升降服务 → 机械机构
 | 角色或任务 | 文档 |
 |---|---|
 | 第一次安装、编译和运行 | [快速开始](docs/guides/GETTING_STARTED.md) |
+| **现场联调（到现场先读这个）** | [树莓派 SSH + 网页操作指南](docs/guides/RASPBERRY_PI_SSH_AND_WEB_GUIDE.md) |
+| 现场上车前/中/后对照执行 | [现场上车 Checklist](docs/field/FIELD_SESSION_CHECKLIST.md) |
+| 真车对接唯一执行文档 | [真车对接设计稿 2026-08-19](docs/field/真车对接设计稿_2026-08-19.md) |
 | 电控/机械与算法共同确认接口 | [算法给电控与机械的接口说明](docs/field/算法给电控与机械的接口说明.md) |
-| MCU串口实现 | [MCU协议](docs/field/MCU_PROTOCOL.md) |
+| MCU串口实现 | [STM32 串口协议 V1](docs/field/STM32_SERIAL_PROTOCOL_V1.md) |
 | 整车逐级联调 | [集成检查清单](docs/field/INTEGRATION_CHECKLIST.md) |
 | 视觉开发与验收 | [视觉专题说明](docs/vision/VISION_MODULE.md) |
 | 两位算法同学职责边界 | [两人算法最终分工](docs/team/两人算法最终分工.md) |

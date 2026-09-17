@@ -1,34 +1,112 @@
 # Integration and acceptance checklist
 
+> ## ⚠️ 2026-09-17 复核：本清单部分判据已被真车事实作废——先读这段
+>
+> - **复核日期**：2026-09-17（对全文件逐条核对真车事实）。
+> - **本文件的性质**：7 月模拟阶段写的"周门"验收表（Week 1~4）。**它不是当前的真车执行文档**。多条判据与 2026-08-19 与机械组**当面确认**的硬件事实（C-1~C-18）直接冲突；照做会浪费现场时间，其中"升降 / 叠层"类判据还建立在**真车不存在的机构**上，按它执行会做出错误的动作假设。
+> - **当前执行文档**：`docs/field/真车对接设计稿_2026-08-19.md`（自称"真车对接的**唯一执行文档**"）。原始确认记录：`docs/field/给机械组现场问答表_2026-08-19.md`（C-1~C-18）。
+> - **本次处理原则**：**不删除任何原判据**（保留历史）；只加删除线 + 状态标记 + 写明替代判据与证据出处。标记含义：
+>   - 🔴 **BLOCKED** = 判据正确但目前不可达，写明阻塞原因与解除条件（不删除）。
+>   - ⛔ **N/A** = 判据依赖真车不存在的机构/能力，**不适用**，保留为未来升级目标。
+>   - ✏️ **已改写** = 原判据作废，后面给出替代判据。
+>   - ✅ = 2026-09-17 复核后仍然有效，无需修改。
+>   - ⚠️ = 判据保留，但证据方式或数字需修正。
+> - **2026-08-19 冻结参数**（问答表 O-02-1/O-02-3/O-03-2/O-03-1/M-01-1/M-01-3）：轮径 **128 mm**、减速比 **1:36**、轴距 **475 mm**、轮距 **465 mm**、方块 **100±5 mm EVA** 无倒角；机械臂 **3 DOF**（云盘/肩/腕，计划加肘 4 DOF）**无任何位置反馈**；云盘 **360°**（实际工作弧约 90°，右侧↔车尾）。
+> - **三条真车铁律**：① **没有升降** → 真车禁用 LIFT，只做**单层地面放置**；② **不能横移** → **VY 恒 0**；③ **臂纯开环、无位置反馈**（C-1）→ 完成判据只能是"时间到/超时"，成功证据只能靠**相机复核**，不能修正末端精度。**任何"验证某关节到达目标角度"式的判据在本车不可满足**，必须改写成目视/人工确认。
+> - **证据边界**：本次复核只核对仓库内文档与固件**源码**。"车上 MCU 当前烧录的固件版本"**未核实**（见下方 ✏️ 250 ms 项）；S-2 转车精度、相机视野、抓取容差窗口**均未实测**（设计稿第 7 节）。
+
 ## Week 1 gate
 
 - [ ] Hardware emergency stop independently verified.
+  - ✅ **2026-09-17 复核：仍然有效，无需修改。** `FIELD_DASHBOARD.md:36` 同样把"架空车轮、机构卸载，独立验证物理急停"放在安全使用顺序第 1 条。
 - [ ] Serial connection runs for 30 minutes without a parser or heartbeat failure.
-- [ ] MCU stops within 150 ms after command loss.
-- [ ] Positive `vx`, `vy`, and `wz` match the agreed coordinate system.
-- [ ] Grab, release, lift, and stop commands return explicit results.
+  - ⚠️ 判据保留，但**当前已知会失败，且原因不在 parser**：固件 ODOM/STATUS 共用 8 深 USB TX 队列、队满静默丢帧，长跑会出现 `rejected ODOM` 与 `/pose` 断流（根因见 `docs/field/ODOM_DROP_ROOT_CAUSE_2026-08-19.md:16-29,60-62`）。
+  - 替代判据：记录 `error_code`（4001）与 `rejected ODOM` 条数，把"软件 parser 失败"与"固件丢帧"分开——两者都表现为串口异常，但只有前者是我们的 bug。
+- [ ] ~~MCU stops within 150 ms after command loss.~~ ✏️ **已改写：MCU 在命令丢失后 ≤250 ms 内停车。**
+  - 依据：固件看门狗已从 150 ms **放宽到 250 ms**——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，注释 `:112`"放宽到 250ms 为 USB 调度 / 树莓派负载留余量（治标）"；电控 2026-08-18 晚已同意（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）。
+  - ⚠️ **未核实**：真车 MCU 当前烧录的是否就是这份 250 ms 固件。现场按"实测值记录、≤250 ms 通过"执行，不要预设 150 ms。
+- [ ] ~~Positive `vx`, `vy`, and `wz` match the agreed coordinate system.~~ ✏️ **已改写：正 `vx`、正 `wz` 方向正确，且 `vy` 恒为 0。**
+  - 依据：真车**没有可用的横移**（左右平移偏差过大）→ 软件**禁止输出横移 VY（恒 0）**，导航与视觉对准从"横移纠偏"改为"**转向对准 + 直线接近**"（问答表 C-6 `给机械组现场问答表_2026-08-19.md:40`；设计稿 `真车对接设计稿_2026-08-19.md:25,113`）。
+  - 历史上只证明过**架空**时 vy 四轮转向组合正确（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:24`）——**架空方向正确 ≠ 落地可用**，不得据此下发 vy。
+- [ ] ~~Grab, release, lift, and stop commands return explicit results.~~ ✏️ **已改写：`GRAB` / `RELEASE` / `STOP` 返回明确结果；`LIFT` 的期望结果是失败码 `3010`。**
+  - 依据：真车**没有升降装置** → 真车模式**禁用 LIFT**，任务改为**单层地面放置**，三层高度参数暂缓冻结（问答表 C-3 `给机械组现场问答表_2026-08-19.md:37`；设计稿 `真车对接设计稿_2026-08-19.md:48`；设计稿 `:114` 互锁第 4 条"LIFT 禁用"）。
+  - `/lift/set_height` **期望返回 `3010`**（固件 `RPI_ERROR_MECH_NO_LIFT = 3010`：`rpi_protocol.c:217`，下发处 `:775`；`docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:182,189` 明确"真车无升降装置 → 回 FAILED + 3010，不假装接受后超时"）。`FIELD_DASHBOARD.md:119` 把"`/lift/set_height` 应返回 `3010`"当作**通过**判据。
+  - 替代判据：`GRAB`/`RELEASE`/`STOP` 服务返回 success 且 `gripper_closed` 随之翻转；`LIFT_ABS` 返回 `FAILED` + `error_code=3010` = 通过。注意 `gripper_closed` 是固件**按命令推算**的标志、不是位置传感器（`FIELD_DASHBOARD.md:145-148`）。
 
 ## Week 2 gate
 
-- [ ] 8 of 10 navigation trials finish within 5 cm and 5 degrees.
+- [ ] 🔴 **BLOCKED** — 8 of 10 navigation trials finish within 5 cm and 5 degrees.
+  - **阻塞原因**：里程计存在**未修复的 ~10× 尺度误差**——命令 1 m 实际只走 ~10 cm（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:87`，怀疑固件轮径/编码器换算参数错一个数量级），E3 落地标定因此受阻（`RULE_COVERAGE.md:24`"E3 标定受阻（里程计 10 倍偏差待电控）"；`FIELD_SESSION_CHECKLIST.md:73` 也在等"固件 odom 修好 + 轮径确认"）。
+  - **为什么必须标 BLOCKED**：尺度误差修复前 5 cm / 5° 门**数学上不可达**（10× 尺度下 1 m 目标偏约 90 cm）。照此执行只会得出"导航失败"的错误结论。
+  - 附带证据（**固件换算常数与 08-19 冻结值不一致**，需电控确认，属同一根因域）：轮半径 `CHASSIS_WHEEL_RADIUS_M 0.06f`（=120 mm 直径）vs 冻结 **128 mm**（`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Inc/chassis.h:53`）；半轴距 0.2425 m（轴距 485 mm）、半轮距 0.2375 m（轮距 475 mm）vs 冻结 **475 / 465 mm**（`chassis.h:54-55`）；编码器 1404 计数/轮圈按 **27:1** 减速比（`Core/Inc/encoder.h:11-14`）vs 冻结 **1:36**，且 PPR 仍未确认（问答表 `:23`"仍未确认：O-02-2 编码器每圈脉冲数 PPR"）。
+  - 另：航向判据还依赖 IMU/转向精度，而 `imu_valid` 可能为 false、原地转 90° 精度**未实测**（S-2，设计稿 `:53-54,199`）——5° 门同样缺基线。
+  - **解除条件**：① 电控确认 PPR / 减速比 / 轮径，并修 odom 丢帧（`ODOM_DROP_ROOT_CAUSE_2026-08-19.md`）；② 跑完 E3 落地标定并回填 `robot_field.yaml`。在此之前只做方向与低速功能验证，**不做 cm 级精度验收**。
+  - **不删除**：这是最终目标，只是现在不能当现场门。
 - [ ] Orange and purple recall each reach 90% on recorded validation data.
-- [ ] Visual alignment succeeds in 18 of 20 randomized placements.
+  - ✅ **2026-09-17 复核：仍然有效。** 判据针对**离线录制数据**上的检测召回，不依赖真车机构、里程计或横移，不被 08-19 的机械确认推翻。
+- [ ] ~~Visual alignment succeeds in 18 of 20 randomized placements.~~ ✏️ **暂缓执行：对准方案尚未定稿，"对准成功"的定义本身要重写。**
+  - 依据：① 横移纠偏已作废，对准只能是"**转向对准 + 直线接近**"（C-6）；② 方案在 **S-3 对角线视觉伺服（首选）** 与 **S-1 转车 90° 开环** 之间未定，取决于 S-2 实测转 90° 误差是否 ≤±2°（设计稿 `:132,171-173,184`）；③ 几何结论：普通前向相机**看不到**垂直正右侧抓取点（夹角 ≈49°，需 ≥100~120° 视场或偏转安装，设计稿 `:157`）——所以"对准"的含义取决于相机视野实测结果。
+  - 替代：先跑设计稿第 7 节"上车测试清单 1~3"（转车精度、相机视野、抓取容差窗口，约 40 分钟），拿到数字后再重写本项的成功判据与样本数。
 - [ ] Each color is grabbed successfully in at least 8 of 10 trials.
+  - ⚠️ 判据保留，但**成功证据方式必须改**：本车 `cube_present` **恒为 0**（没有任何方块存在传感器），`grab_verification_policy = cube_present / gripper_and_cube` 在真车**永远无法通过**（只会超时）；真车抓取只能用 `service_only` + **相机复核**（`MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:198-201`；`FIELD_DASHBOARD.md:149-150`）。
+  - 抓取位置在**车右侧**，且**抓取期间底盘必须锁死**（C-5/C-8，设计稿 `:101,112`）；抓取容差窗口（偏多少还能抓住）**待上车实测**（设计稿 `:134`）。
 
 ## Week 3 decision gate
 
 - [ ] Grab succeeds 27/30.
-- [ ] Single placement succeeds 18/20 and remains stable after 3 seconds.
+  - ✅ **目标不变（保留）**。补充判据：成功证据 = 服务返回 success + **相机复核**（无反馈，C-1 问答表 `:35`）；"时间到/超时"是唯一完成判据，**不得**写成"关节到达目标角度"。
+- [ ] ~~Single placement succeeds 18/20 and remains stable after 3 seconds.~~ ✏️ **已改写：单层地面放置 18/20，释放后 3 秒不倒塌。**
+  - 依据：无升降 → **只有单层地面放置**，`place_heights_m` 退化为单层地面值（设计稿 `:85`）。"3 秒不倒塌"对应规则 3.2.2 S4"脱离后 3s 不倒塌"（`RULE_COVERAGE.md:60`）——该条**仍然有效**。
+  - 另：`RELEASE` **不能**以"爪打开"为完成判据（EVA 轻软、可能被爪带起粘连）→ 释放 = 释放命令（大角度张开）+ 停留时间 + **相机复核方块已离开**（C-15/C-16，问答表 `:49-50`）。
 - [ ] Full single-cube loop succeeds at least 8/10.
+  - ✅ 目标不变，但**"单方块闭环"的定义已更新**（无升降，且多了"入库/出库"两个物理动作）：巡线 → 车停（材料区在正前方）→ 相机对准 → **右侧抓取（底盘锁死）** → **云盘转 90° 入库车尾框** → 行驶（爪收回安全姿势）→ **出库** → **车尾单层地面搭建** → 转车 180° 回头验证 → 撤退（设计稿 `:64-73`；新增状态 `APPROACH_ALIGN / STOW / UNSTOW` `:79-83`）。
 - [ ] Communication loss, stale vision, and mechanism failure stop safely.
+  - ⚠️ 判据保留，但 **"mechanism failure"子项真车无法自然触发**：固件 STATUS `bit6 MECHANISM_FAULT` **目前恒为 0**（本车没有电流/限位/编码器级的机构故障检测），且自动动作超时**故意不被报成机构故障**——否则上位机会锁死在 `MECHANISM_ERROR: 9006`、必须按 PB2 物理重新授权（`MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:202-204`）。该子项只能用**故障注入**验证（`FAULT_INJECTION_TEST_CARD.md` 卡片五）。
+  - "通信丢失"子项仍有效，但注意固件看门狗已是 **250 ms**（见 Week 1 修正）。
 
 If any item fails, freeze the roof-tower branch and make the single-cube loop reach 9/10.
 
+> ✏️ **2026-09-17 复核**：**roof-tower 分支在现硬件下根本不存在**（无升降，无法叠层），所以本句退化为**唯一可执行指令**：**放弃叠层，把单方块闭环做到 9/10**。这与 Week 3 已要求的 8/10 是同一目标上的加严，不冲突。
+
 ## Week 4 roof-tower gate
 
-- [ ] Three-cube carriage succeeds 8/10 without drops.
-- [ ] Two orange layers remain stable 8/10.
-- [ ] Purple roof placement remains stable 7/10.
-- [ ] Full roof tower succeeds 6/10.
+> ⛔ **2026-09-17 复核：整节 NOT-APPLICABLE（不适用）——真车没有升降装置，无法叠层。**
+> 依据：问答表 C-3"**目前没有升降装置** → 真车模式**禁用 LIFT**；任务改为**单层地面放置**；三层高度参数暂缓冻结"（`给机械组现场问答表_2026-08-19.md:37`）；设计稿同样写明"升降：**没有** → 真车禁用 LIFT，单层地面放置"（`真车对接设计稿_2026-08-19.md:48`）。
+> 规则层面"层数计分"（第 2 层 1 分…屋顶 ×1.5）**依然存在**（`RULE_COVERAGE.md:59`），但**本车无法执行**。以下四项**保留为未来硬件升级（加装升降）后的目标，不删除**；现在**不得作为现场门**，更不得为了"够到第二层"而临时抬升/垫高车身或让臂做超出冻结范围的动作。
+
+- [ ] ⛔ Three-cube carriage succeeds 8/10 without drops.
+  - 说明：载货上限"最多 3 块、至多 1 紫"是**规则约束**（3.2.1 载货约束，`RULE_COVERAGE.md:50`），与升降无关；"3 块搬运"本身无升降也能做。但搬运流程现在依赖**入库（STOW）/出库（UNSTOW）**两个新动作，而它们**尚未实现、尚未验收**（设计稿 `:79-83`，状态机新增项）→ 仍标 N/A，等单方块闭环 + 入库/出库验收通过后再启用本项。
+- [ ] ⛔ Two orange layers remain stable 8/10.
+  - **需要升降把第二层叠上去，硬件不存在。** 现硬件只能做到单层地面放置。
+- [ ] ⛔ Purple roof placement remains stable 7/10.
+  - 同上——"屋顶"是最上层，必须叠层才能得到；无升降即无屋顶。
+- [ ] ⛔ Full roof tower succeeds 6/10.
+  - 同上——整座塔 = 多层叠加，硬件前提不成立。
 - [ ] Cargo counts never advance after a failed grab or drop.
+  - ✅ **保留（软件记账，与硬件无关）**：`Cargo.can_add`（`models.py:66`，total<3 + purple<1）+ mission PLACE 记账（`RULE_COVERAGE.md:50`）。
+  - 补充：真车**没有方块传感器、掉块检测仍未实现**（`RULE_COVERAGE.md:52` G3.1），所以"抓取/放置失败"的判定只能来自服务结果 + 超时 + 相机复核——计数回滚逻辑正确，但**输入来源受限**，现场须靠人工核对次数。
+
+---
+
+## 2026-09-17 附加：现场该照哪份文档走（避免照错清单）
+
+| 文档 | 状态 | 结论 |
+|---|---|---|
+| `docs/field/真车对接设计稿_2026-08-19.md` | ✅ **当前执行文档（唯一执行文档）** | 真车流程、状态机、动作互锁、参数冻结/待实测表、上车测试清单**以它为准** |
+| `docs/field/给机械组现场问答表_2026-08-19.md` | ✅ 原始确认记录（C-1~C-18） | 与设计稿表述冲突时，以问答表**原始条目**为准 |
+| 本文件（`INTEGRATION_CHECKLIST.md`） | ⚠️ 部分作废 | 只作为"周门"历史目标；在真车上执行任何一条前，先看上面的标记与替代判据 |
+| `docs/field/FIELD_SESSION_CHECKLIST.md` | ✅ 操作类清单（上车前/中/后），**与 08-19 事实不冲突，可照做** | **唯一过期点**：`:73` E3 计划写"直行 1m/**横移 1m**/转 360° ×10"——**横移已不可用**（C-6）→ 改为"直行 1m + 原地转 360°"（横移项删除） |
+| `docs/field/FIELD_DAY1_EXECUTION_ORDER.md` | ❌ **已过期（最后更新 2026-08-08），仍自称"现场第一天执行清单"** | 真车已于 08-18/08-19 完成对接，**不要按它执行第一天**。与 08-19 确认冲突处：要求测**升降有效行程 / 三层放置高度**（`:47-51,73,80`，C-3 无升降）、要求测**夹爪张开与闭合毫米数**（`:45-46`，C-2 已确认软件不需要这些数）、要求测**左移/右移方向并落地使用**（`:264-278,303-304`，C-6 已确认横移不可用）、称失联停车为 **300 ms**（`:312`，固件实际 250 ms）。仍有效的部分：通信检查、STOP 优先、拔 USB 失联停车、相机采图、数据打包（这些与 `FIELD_SESSION_CHECKLIST.md` 重叠，以后者为准）。 |
+| `docs/field/FAULT_INJECTION_TEST_CARD.md` | ⚠️ 可用，但两处需修正 | 卡片一（状态过期）、二（服务不可用）、四（硬件急停）、六（动作超时）、七（视觉丢失）**仍有效**；**修正 ①**：多处把"升降"当作存在的机构（`:89,148,187,267,287`），真车无升降（LIFT→`3010`）；**修正 ②**：`:76` 写"电控的 150ms 失联停车"应为 **250 ms**；卡片三"真车触发"建议的"请求超出机械极限的高度"应改为"下发 LIFT（应得 3010）"；卡片五的 `mechanism_fault` 真车**恒 0**，只能注入验证，不能指望真车自然出现。 |
+| `docs/guides/GETTING_STARTED.md:50`（测试 lift 服务）、`README.md:63`（升降零点与三层高度）、`docs/field/TIME_BUDGET.csv`（LIFT 第 2/3 层行） | ⚠️ 过期表述 | 真车无升降。模拟环境里的 roof-tower 演示（`GETTING_STARTED.md:19`）**不受影响**——那是无硬件模拟，不是真车目标。 |
+
+**一个必须点明的矛盾**：三份文档对"失联停车时间"给出**三个不同的数**——本文件原写 150 ms、`FIELD_DAY1_EXECUTION_ORDER.md:312` 写 300 ms、`FAULT_INJECTION_TEST_CARD.md:76` 写 150 ms。以固件源码为准：**250 ms**（`rpi_protocol.c:116`），现场仍须实测确认车上烧录版本。
+
+## 2026-09-17 复核：本次**未能验证**的项（不得当作已确认）
+
+- **车上 MCU 当前烧录的固件版本**：仓库固件源码是 250 ms 看门狗 + `3010`，但无法从仓库确认车上那一片就是这份（设计稿请求单第 5 条"固件版本 + 构建哈希上报"仍未落实）。
+- **S-2 转车 90° 实际误差、相机能否覆盖右侧抓取点、抓取容差窗口**：三项都**未实测**（设计稿 `:128-141`、第 7 节；第 10 节明确"在此之前不写死任何相机方案和抓取流程参数"）。
+- **抓取/释放动作耗时**：机械臂目前只能遥控手动控制，自动通道（`arm.c`）未就绪，耗时无法标定（C-17，问答表 `:51`）。
+- **方块质量**（M-01-2）、**肩/腕角度范围**（C-11）、**PPR**（O-02-2）、**安全收回姿态**：均未确认（问答表 `:23,45`；设计稿 `:128-141`）。
+- **本清单"周门"的历史达成情况**：仓库内没有 Week 1~4 各项的现场通过记录，因此本文只标注"哪条被事实作废"，**不主张任何一条曾经通过**。
 

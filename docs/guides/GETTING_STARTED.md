@@ -2,7 +2,7 @@
 
 ## Supported baseline
 
-- Ubuntu 22.04 with ROS 2 Humble, or Ubuntu 24.04 with ROS 2 Jazzy.
+- Ubuntu 24.04 with ROS 2 Jazzy. This is the only supported target: every package README, the Raspberry Pi and the Ubuntu VM use `/opt/ros/jazzy`. (An earlier revision of this page also offered Ubuntu 22.04 + Humble; nothing in the repo is validated on Humble.)
 - Python 3, `python3-opencv`, `cv_bridge`, and `pyserial`.
 - USB UVC camera and a USB virtual serial link to the MCU.
 
@@ -29,8 +29,13 @@ Run the single-cube fallback profile:
 ros2 launch robogame_bringup single_cube.launch.py
 ```
 
-Do not run `hardware.launch.py` until the MCU frame mapping in
-`docs/field/MCU_PROTOCOL.md` has been implemented and bench-tested with the wheels raised.
+`hardware.launch.py` drives the real MCU, so treat it as a hardware operation: keep
+the wheels off the ground and the mechanisms unloaded. The V1 frame mapping now lives
+in `docs/field/STM32_SERIAL_PROTOCOL_V1.md` and is implemented in
+`ros2_ws/src/robogame_core/robogame_core/serial_protocol.py` (the old
+`docs/field/MCU_PROTOCOL.md` was deleted — its message IDs are obsolete, do not cite it).
+It has been run on the real car once, on 2026-08-18: HELLO→ACK→READY was validated
+(`type=0x13`), which covers the handshake only — not the mechanism command payloads.
 
 ## Core tests without ROS
 
