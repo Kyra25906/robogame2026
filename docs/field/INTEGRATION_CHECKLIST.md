@@ -102,7 +102,12 @@ If any item fails, freeze the roof-tower branch and make the single-cube loop re
 | `docs/field/FAULT_INJECTION_TEST_CARD.md` | ⚠️ 可用，但两处需修正 | 卡片一（状态过期）、二（服务不可用）、四（硬件急停）、六（动作超时）、七（视觉丢失）**仍有效**；**修正 ①**：多处把"升降"当作存在的机构（`:89,148,187,267,287`），真车无升降（LIFT→`3010`）；**修正 ②**：`:76` 写"电控的 150ms 失联停车"应为 **250 ms**；卡片三"真车触发"建议的"请求超出机械极限的高度"应改为"下发 LIFT（应得 3010）"；卡片五的 `mechanism_fault` 真车**恒 0**，只能注入验证，不能指望真车自然出现。 |
 | `docs/guides/GETTING_STARTED.md:50`（测试 lift 服务）、`README.md:63`（升降零点与三层高度）、`docs/field/TIME_BUDGET.csv`（LIFT 第 2/3 层行） | ⚠️ 过期表述 | 真车无升降。模拟环境里的 roof-tower 演示（`GETTING_STARTED.md:19`）**不受影响**——那是无硬件模拟，不是真车目标。 |
 
-**一个必须点明的矛盾**：三份文档对"失联停车时间"给出**三个不同的数**——本文件原写 150 ms、`FIELD_DAY1_EXECUTION_ORDER.md:312` 写 300 ms、`FAULT_INJECTION_TEST_CARD.md:76` 写 150 ms。以固件源码为准：**250 ms**（`rpi_protocol.c:116`），现场仍须实测确认车上烧录版本。
+**一个必须点明的矛盾**（✅ **2026-09-17 当日已收口**）：三份文档曾对"失联停车时间"给出**三个不同的数**——本文件原写 150 ms、`FIELD_DAY1_EXECUTION_ORDER.md` 写 300 ms、`FAULT_INJECTION_TEST_CARD.md:76` 写 150 ms。
+
+- 统一为 **250 ms**，依据固件源码 `rpi_protocol.c:116`（现场仍须实测确认车上烧录版本）。
+- 三处来源均已就地更正（`FAULT_INJECTION_TEST_CARD.md:76`、本文件 150 ms 判据、`FIELD_DAY1` 的 300 ms）。
+- **300 ms 不是 MCU 看门狗，而是上位机网页手动驾驶的失联窗口**（`tools/field_dashboard_core.py:18` `DRIVE_STALE_S = 0.30` → `field_dashboard.py:1141` 补发零速）——`docs/guides/` 里出现的 300 ms 属该机制，**正确、应保留**。原「电控承诺 300ms」正是把这两件事混为一谈。
+- 另有第四个值 **100–200 ms**（`docs/team/` 两份文件）与源码不符，且无实测记录，已更正。
 
 ## 2026-09-17 复核：本次**未能验证**的项（不得当作已确认）
 
