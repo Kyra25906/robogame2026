@@ -26,6 +26,7 @@ try:
         action_blockers, clamp_drive, line_chain_health, route_payload,
     )
     from grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
+    from odom_calibration import OdomTrial, analyze_trials, trial_from_result
 except ImportError:  # 允许测试以 tools.field_dashboard 导入
     from tools.distance_trial import DistanceTrial
     from tools.field_console import FieldConsole, load_specs
@@ -35,6 +36,7 @@ except ImportError:  # 允许测试以 tools.field_dashboard 导入
         action_blockers, clamp_drive, line_chain_health, route_payload,
     )
     from tools.grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
+    from tools.odom_calibration import OdomTrial, analyze_trials, trial_from_result
 
 try:
     from arm_selftest import ArmSelftest, stage_names
@@ -496,6 +498,9 @@ class DashboardController:
         self.mechanism_busy = False
         self.distance_trial: DistanceTrial | None = None
         self.distance_result: dict = {"state": "未开始"}
+        # 里程计标定：一次完整定距试验 = 一个候选，操作员补录尺量值后成为一条样本
+        self.odom_trial_candidate: dict | None = None
+        self.odom_trials: list[OdomTrial] = []
         # 黑白标定状态（纯逻辑在 field_dashboard_core.LineCalibration）
         self.line_calibration = LineCalibration()
         self.line_calibration_result: dict | None = None
@@ -578,6 +583,11 @@ class DashboardController:
         result.update({"processes": self.console.snapshot(), "ros_error": self.ros_error, "session_path": str(self.archive.path)})
         result["mechanism_busy"] = self.mechanism_busy
         result["distance_result"] = dict(self.distance_result)
+        # 里程计标定（B3 现场项）：候选 + 已记录样本的汇总结论
+        result["odom_trial_candidate"] = (
+            None if self.odom_trial_candidate is None else dict(self.odom_trial_candidate)
+        )
+        result["odom_calibration"] = analyze_trials(self.odom_trials)
         result["drive_limits"] = {"max_v": self.max_drive_speed, "max_vy": min(self.max_drive_speed, 0.4), "max_w": 0.8}
         result["mechanism_services"] = self.ros.service_status() if self.ros else {}
         result["grasp"] = self.grasp_panel()
@@ -644,6 +654,7 @@ class DashboardController:
                                       float(body.get("speed_mps", 0.05)), now, now,
                                       uuid.uuid4().hex, self.state.safety.boot_id)
                 self.state.mode = "DISTANCE"
+                self.odom_trial_candidate = None  # 新的一次试验：旧候选作废
             try:
                 for name in ("motion", "arm", "line"):
                     if name in self.console.items and self.console.items[name].running:
@@ -679,6 +690,33 @@ class DashboardController:
             if self.state.mode == "DISTANCE":
                 self.zero_and_release("用户停止定距")
             return {"ok": True}
+        if path == "/api/odom/record":
+            # 把「这次走了多少（里程计）」与「实际走了多少（尺量）」配成一条标定样本
+            measured = body.get("measured_m")
+            if measured is None or str(measured).strip() == "":
+                raise ValueError("请填写尺量位移（米）")
+            with self.lock:
+                if self.odom_trial_candidate is None:
+                    raise ValueError(
+                        "没有可记录的定距结果：先在「底盘定距测试」里完整跑一次"
+                        "（中途停止/超时的不算样本）"
+                    )
+                trial = trial_from_result(
+                    self.odom_trial_candidate,
+                    measured_m=float(measured),
+                    note=str(body.get("note", ""))[:120],
+                )
+                self.odom_trials.append(trial)
+                analysis = analyze_trials(self.odom_trials)
+            self.record({"type": "control", "action": "odom_record",
+                         "trial": trial.as_dict(), "analysis": analysis})
+            return {"ok": True, "analysis": analysis}
+        if path == "/api/odom/reset":
+            with self.lock:
+                cleared = [trial.as_dict() for trial in self.odom_trials]
+                self.odom_trials = []
+            self.record({"type": "control", "action": "odom_reset", "cleared": cleared})
+            return {"ok": True, "cleared": len(cleared)}
         if self.state.mode == "DISTANCE" and (
             path in {"/api/control/manual/acquire", "/api/line/start", "/api/line/stop"}
             or (len(parts) == 4 and parts[:2] == ["api", "process"]
@@ -998,6 +1036,9 @@ class DashboardController:
             if self.distance_trial is not None:
                 self.distance_result.update(state="已停止", detail=reason)
                 self.distance_trial = None
+                # 中断的定距试验不能当标定样本（可能只走了一半）：
+                # 清掉候选，避免操作员把上一次中断的结果当成本次数据记录。
+                self.odom_trial_candidate = None
             if self.ros:
                 self.ros.drive(0.0, 0.0, 0.0)
             self.state.release_manual()
@@ -1038,7 +1079,24 @@ class DashboardController:
                 if done:
                     self.distance_trial = None
                     self.state.release_manual()
-                    self.distance_result.update(state="里程计目标已到达", detail="请尺量实际距离，反馈到达不代表实地精度已验证")
+                    elapsed = max(0.0, now - trial.started_at)
+                    self.distance_result.update(
+                        state="里程计目标已到达",
+                        detail="请尺量实际位移并填到「尺量距离」，"
+                               "反馈到达不代表实地精度已验证",
+                        elapsed_s=round(elapsed, 3),
+                        odom_m=round(trial.progress, 4),
+                        commanded_speed_mps=trial.speed,
+                        odom_speed_mps=round(trial.progress / elapsed, 4) if elapsed > 0 else None,
+                    )
+                    # 一次完整试验 = 一个标定候选（尺量值随后由网页补录）
+                    self.odom_trial_candidate = {
+                        "target_m": trial.distance,
+                        "odom_m": trial.progress,
+                        "elapsed_s": elapsed,
+                        "commanded_speed_mps": trial.speed,
+                        "completed": True,
+                    }
                     self.record({"type": "control", "action": "distance_complete", **self.distance_result})
             except Exception as exc:
                 self.zero_and_release(str(exc))

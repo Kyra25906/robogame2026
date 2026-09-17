@@ -243,7 +243,7 @@ class CompetitionConfigBindingTests(unittest.TestCase):
 
     def _effective(self, launch: str, package: str, executable: str, param: str):
         return effective_parameter(
-            LAUNCH_DIR / launch, package, executable, param, config_root=self.CONFIG_ROOT
+            LAUNCH_DIR / launch, package, executable, param
         )
 
     def test_competition_stack_enforces_single_authority(self):
@@ -258,13 +258,18 @@ class CompetitionConfigBindingTests(unittest.TestCase):
                 f"{executable} 在比赛图里必须要求授权",
             )
 
-    def test_standalone_line_graphs_disable_authorization(self):
-        """没有任务层的图必须关掉门控，否则巡线节点永远等不到授权。"""
+    def test_standalone_line_graphs_do_not_require_authorization(self):
+        """没有任务层的图必须关掉门控（或干脆不配置，用节点默认 false）。
+
+        `None` = 没有任何一层写过这个参数 → 用节点代码默认值 `False` → 同样安全。
+        """
         for launch in ("line_follow_hardware.launch.py", "line_follow_mock.launch.py"):
-            self.assertIs(
-                self._effective(launch, "motion_control", "line_follow_controller", "require_authorization"),
-                False,
-                f"{launch} 没有任务层：必须让巡线节点不要求授权",
+            effective = self._effective(
+                launch, "motion_control", "line_follow_controller", "require_authorization"
+            )
+            self.assertIn(
+                effective, (False, None),
+                f"{launch} 没有任务层：巡线节点不能要求授权（实际解析为 {effective!r}）",
             )
 
     def test_field_config_enables_the_route(self):

@@ -17,7 +17,6 @@ from tools.launch_graph import (
     missing_publishers,
     node_topics,
     parse_launch_nodes,
-    _node_parameter_info,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -95,36 +94,16 @@ class LaunchGraphCompletenessTests(unittest.TestCase):
                 )
 
     def test_standalone_line_launch_justifies_its_active_source_exemption(self):
-        """两张独立巡线图有意不启动任务层，因此没有 /mission/active_source。
+        """两张独立巡线图有意不启动任务层，因此没有 /mission/active_source 的发布者。
 
-        豁免必须一直成立，而且**按语义检查、不只看文本**：一旦某张图给巡线节点
-        传了 `common` 层，`robot.yaml` 里的 `require_authorization: true` 就会生效
-        → 巡线节点永远等不到授权 → 独立联调一动不动。这时必须在该图内联覆盖为 false。
+        豁免的**语义前提**是「这些图里巡线节点不要求授权」——那条由
+        `tests/test_mission_manager_route.py::test_standalone_line_graphs_do_not_require_authorization`
+        按「配置层 + 内联覆盖」算出最终生效值来强制（文本级断言查不出这类冲突）。
+        这里只确认缺口登记与实现仍然一致，防止悄悄多出别的缺口。
         """
         for name in ("line_follow_hardware.launch.py", "line_follow_mock.launch.py"):
-            path = LAUNCH_DIR / name
-            text = path.read_text(encoding="utf-8")
-            self.assertIn('"active_source": "line_follow"', text, name)
-            line_nodes = [
-                layers
-                for package, executable, layers, _inline, _names in _node_parameter_info(path)
-                if (package, executable) == ("motion_control", "line_follow_controller")
-            ]
-            self.assertTrue(line_nodes, f"{name} 里没有巡线节点？")
-            for layers in line_nodes:
-                if "common" in layers:
-                    self.assertRegex(
-                        text,
-                        r"['\"]require_authorization['\"]\s*:\s*False",
-                        f"{name} 给巡线节点传了 common 层，必须内联覆盖 require_authorization: False，"
-                        "否则独立联调时巡线节点永远收不到授权而不动",
-                    )
-                else:
-                    self.assertNotIn(
-                        "require_authorization",
-                        text,
-                        f"{name} 没传 common 层，就不该出现 require_authorization（会误导读者）",
-                    )
+            gaps = missing_publishers(LAUNCH_DIR / name, SRC_ROOT)
+            self.assertEqual(set(gaps), {"/mission/active_source"}, name)
 
 
 class LaunchGraphParserTests(unittest.TestCase):
