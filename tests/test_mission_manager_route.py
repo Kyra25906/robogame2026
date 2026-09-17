@@ -566,6 +566,34 @@ class WorkSequenceWiringTests(unittest.TestCase):
             self.assertIn(key, payload, key)
 
 
+class MatchClockAndRoundsWiringTests(unittest.TestCase):
+    """B4：比赛时钟与多趟循环的接线。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mission = _tree(MISSION_NODE)
+        cls.mission_text = MISSION_NODE.read_text(encoding="utf-8")
+
+    def test_rounds_parameter_reaches_the_route_builder(self):
+        self.assertIn('"rounds"', self.mission_text)
+        loader = ast.unparse(_function(self.mission, "_load_route"))
+        self.assertIn("rounds=rounds", loader)
+        self.assertIn("load_route_plan", loader)
+
+    def test_match_time_limit_is_a_configurable_parameter(self):
+        self.assertIn('"match_time_limit_s"', self.mission_text)
+        init = ast.unparse(_function(self.mission, "__init__"))
+        self.assertIn("match_time_limit_s", init)
+        self.assertIn("MissionConfig", init)
+
+    def test_payload_exposes_rounds_and_remaining_time(self):
+        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
+        self.assertIn("rounds", payload)
+        # 剩余时间随 route_progress 一起被带出来（**progress 展开）
+        self.assertIn("**progress", payload)
+        self.assertIn("route_progress", payload)
+
+
 class TurnCommandPathTests(unittest.TestCase):
     """纯逻辑组合：转弯命令 → 仲裁门控（授权语义与巡线路径同一套）。"""
 
