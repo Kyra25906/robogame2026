@@ -21,7 +21,7 @@
 | 评分项 | 分值 | 规则/细则 | 代码/配置 | 测试/证据 | 状态 |
 |---|---|---|---|---|---|
 | 电控布线 | 10 | 评分细则 | —（硬件） | — | ➖ 非算法 |
-| 底盘运动 | 10 | — | robot_bridge / motion_control | E1/E2 真车验证（STATUS 50Hz、六方向正确） | ✅ 代码就绪；E3 标定受阻（里程计 10 倍偏差待电控） |
+| 底盘运动 | 10 | — | robot_bridge / motion_control | E1/E2 真车验证（STATUS 50Hz、六方向正确） | ✅ 代码就绪；E3 标定**待重测**（**换过电机**：2026-08-18 旧电机时期的「里程计 10 倍偏差」不自动适用当前硬件，需重测编码器常量与轮径后判定） |
 | 运动决策 | 20 | 细则「启动区→存矿位置」 | mission.py 状态机 + motion_control + localization | E10 闭环打通（goal→SUCCESS） | ✅ 核心已验证；停车点/航点待精修 |
 | 取存镖 | 20 | 细则「取出矿石并存于本体」 | manipulator_client + A4（P0-4/5/6） | test_mission_classify 13 项 | 🔶 软件就绪；阻塞甲2（机构重复精度）/甲3（相机） |
 | 建筑搭建 | 20 | 细则「正常搭建建筑」+ 3.2.2 S4 | A4 INCONCLUSIVE + VERIFY_BUILD 3s 计时 | test_mission_classify + test_mission | 🔶 计时兜底已实现；机构精度/层数上限待现场 |
