@@ -31,7 +31,7 @@
 
 ## current（18 份）—— 现在照它做动作（命令、步骤、清单）。
 
-| 文档 | 标题 | 最后修改 |
+| 文档 | 标题 | 文件修改时间（本机） |
 |---|---|---|
 | `AGENTS.md` | 教学式增量开发与 Agent 协作约定（通用版） | 2026-09-18 |
 | `README.md` | RoboGame 2026 robot software | 2026-09-18 |
@@ -54,7 +54,7 @@
 
 ## reference（36 份）—— 现在照它做判断（协议字节、参数含义、接口责任、规则对照）。长期有效，按需查。
 
-| 文档 | 标题 | 最后修改 |
+| 文档 | 标题 | 文件修改时间（本机） |
 |---|---|---|
 | `docs/DOC_INVENTORY.md` | 文档盘点与分类（DOC_INVENTORY） | 2026-09-18 |
 | `docs/RULE_COVERAGE.md` | 规则条款覆盖矩阵（RULE_COVERAGE） | 2026-09-18 |
@@ -95,7 +95,7 @@
 
 ## history（32 份）—— 某一天的事实与决策，内容冻结。只用于回看与交接，不用于执行。
 
-| 文档 | 标题 | 最后修改 |
+| 文档 | 标题 | 文件修改时间（本机） |
 |---|---|---|
 | `docs/history/B3_WORK_LOG_2026-09-17.md` | B3 工作留痕（路线 → 路口转弯 → 坡道 → 取放 → 自主完赛） | 2026-09-18 |
 | `docs/history/DEV_LOG_2026-08-04.md` | RoboGame2026 开发日志：单方块模拟闭环 | 2026-08-08 |
@@ -132,7 +132,7 @@
 
 ## archived（5 份）—— 已确认过期：**不要照做**。正文必须有「> ⚠️ 已过期」横幅并写明替代文档。
 
-| 文档 | 标题 | 最后修改 |
+| 文档 | 标题 | 文件修改时间（本机） |
 |---|---|---|
 | `docs/PLAN_2026-08-13_TO_18.md` | RoboGame2026 2026-08-13 至 08-18 执行计划（v2 快进版） | 2026-09-18 |
 | `docs/field/FIELD_DAY1_EXECUTION_ORDER.md` | 现场第一天执行清单 | 2026-09-18 |
@@ -142,7 +142,7 @@
 
 ## teaching（8 份）—— 教学材料，面向学习，不参与现场执行。
 
-| 文档 | 标题 | 最后修改 |
+| 文档 | 标题 | 文件修改时间（本机） |
 |---|---|---|
 | `docs/LEARNING_LOG.md` | RoboGame2026 开发学习记录 | 2026-09-18 |
 | `docs/guides/BEGINNER_PROJECT_LEARNING_GUIDE.md` | 从少量编程基础到机器人项目开发：RoboGame2026 学习总结 | 2026-08-05 |
@@ -153,6 +153,9 @@
 | `lessons/01_interfaces_core/README.md` | 第 1 课：先认识“共同语言”和纯逻辑 | 2026-09-17 |
 | `lessons/02_cube_perception/README.md` | 第 2 课：让机器人先“看见”方块 | 2026-09-17 |
 
+> 最后一列是**本机文件的修改时间，不是 git 提交时间**：clone / checkout 之后它会统一变成
+> checkout 时间，所以只能当粗略参考。要看某个文件真实的最后改动，用 `git log -1 -- <路径>`。
+
 ## 不在版本库里的文档与目录（含 `.gitignore` 排除的）
 
 clone 到树莓派或别人的机器上时，**下面这些文件不会出现**。
@@ -162,7 +165,7 @@ clone 到树莓派或别人的机器上时，**下面这些文件不会出现**�
 |---|---|---|---|---|---|
 | `docs/*.docx` | *.docx | 4 | RoboGame2026_二审人话版实机任务清单_2026-08-15.docx、RoboGame2026_二审前执行计划_可打印版.docx、RoboGame2026_二审算法缺口与执行清单_2026-08-15.docx | `*.docx` | 由 tools/build_*.py 生成的可打印版，字节大且逐次重生成 |
 | `docs/calibration/checkerboard_A4_20mm_9x6.pdf` | 文件 | 1 | checkerboard_A4_20mm_9x6.pdf | `*.pdf` | 由同目录 svg 生成，需要时重生成 |
-| `tmp` | 目录 | 11135 | _hosttmp/stm32_host_w598uc4a/line_telemetry_test.exe、_hosttmp/stm32_host_w598uc4a/unit0.o、_hosttmp/stm32_host_w598uc4a/unit0.s | `tmp/` | 临时脚本与中间产物 |
+| `tmp` | 目录 | 11137 | _commit_code.txt、_commit_docs.txt、_hosttmp/stm32_host_w598uc4a/line_telemetry_test.exe | `tmp/` | 临时脚本与中间产物 |
 | `outputs` | 目录 | 87 | _review_requirements_extract.txt、camera_acceptance_20260803/annotated.mp4、camera_acceptance_20260803/detections.jsonl | `outputs/` | 生成的可打印文档 |
 | `results` | 目录 | 82 | gf100_calibration_audit_20260811/purple50cm.jpg、gf100_calibration_audit_20260811/purple70cm.jpg、gf100_calibration_audit_20260811/purple90cm.jpg | `results/` | 视觉原始视频/图片与报告（体积大，必须另行备份） |
 | `_dialogue_doc_work` | 目录 | 5 | build_transcript.py、export_word_pdf.ps1、md_to_html.py | `_dialogue_doc_work/` | 对话归档工程的中间文件 |

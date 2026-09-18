@@ -31,6 +31,7 @@ from docs_inventory import (  # noqa: E402
     IGNORED_RULES,
     REGISTRY,
     check,
+    check_generated_inventory,
     collect,
     discover_markdown,
     has_archived_banner,
@@ -241,6 +242,35 @@ class RealRepositoryTests(unittest.TestCase):
         for path in REGISTRY["archived"]:
             text = (ROOT / path).read_text(encoding="utf-8")
             self.assertTrue(has_archived_banner(text), f"{path} 缺少已过期横幅")
+
+    def test_generated_inventory_is_not_stale(self):
+        """生成页必须跟得上登记表：改了分类/加了文档就要重跑 `--write`。
+
+        生成文件真正的风险不是写错，而是**悄悄过期**——而读它的人正是拿它判断
+        「这份文档还算不算数」。这里只比结构与归属，不比本机修改时间（clone 后必然变）。
+        """
+        self.assertEqual([f.render() for f in check_generated_inventory(ROOT)], [])
+
+    def test_stale_generated_inventory_is_reported(self):
+        """假仓库里造一份落后的生成页，必须能红（否则这条检查等于没有）。"""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = _fake_repo(Path(raw))
+            (tmp / "docs/DOC_INVENTORY.md").write_text(
+                "# 盘点\n\n## current（1 份）—— 现在照它做动作。\n\n"
+                "| 文档 | 标题 | 文件修改时间（本机） |\n|---|---|---|\n"
+                "| `docs/known.md` | 已登记 | 2026-09-18 |\n",
+                encoding="utf-8",
+            )
+            table = _registry()  # 登记表里 current 有两份，生成页只列了一份
+            codes = [f.code for f in check_generated_inventory(tmp, table)]
+            self.assertIn("inventory-stale", codes)
+            self.assertIn("docs/unknown.md", [f.subject for f in check_generated_inventory(tmp, table)])
+
+    def test_missing_generated_inventory_is_reported(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = _fake_repo(Path(raw))
+            codes = [f.code for f in check_generated_inventory(tmp, _registry())]
+            self.assertEqual(codes, ["inventory-missing"])
 
 
 class RenderTests(unittest.TestCase):

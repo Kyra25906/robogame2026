@@ -616,11 +616,17 @@ def render_inventory(root: Path, documents: list[Document], areas: list[IgnoredA
             "",
             f"## {category}（{len(rows)} 份）—— {CATEGORY_MEANING[category]}",
             "",
-            "| 文档 | 标题 | 最后修改 |",
+            "| 文档 | 标题 | 文件修改时间（本机） |",
             "|---|---|---|",
         ]
         for doc in rows:
             lines.append(f"| `{doc.path}` | {doc.title or '—'} | {doc.updated or '—'} |")
+
+    lines += [
+        "",
+        "> 最后一列是**本机文件的修改时间，不是 git 提交时间**：clone / checkout 之后它会统一变成",
+        "> checkout 时间，所以只能当粗略参考。要看某个文件真实的最后改动，用 `git log -1 -- <路径>`。",
+    ]
 
     lines += [
         "",
@@ -640,6 +646,80 @@ def render_inventory(root: Path, documents: list[Document], areas: list[IgnoredA
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def check_generated_inventory(root: Path, registry: dict[str, tuple[str, ...]] | None = None) -> list[Finding]:
+    """检查**已生成**的 `docs/DOC_INVENTORY.md` 有没有落后于分类登记表。
+
+    为什么单独一条检查：生成文件最大的风险不是写错，而是**悄悄过期**——
+    有人加了一份文档、改了分类，却没重跑 `--write`，于是页面上还挂着旧分类，
+    而读它的人正是拿它来判断「这份文档还算不算数」的。
+    这里只比对**结构与归属**（每份登记的文档是否出现在它该出现的类别标题下），
+    不比对「最后修改时间」那类本机易变的值——那种比较在 clone 之后必然假红。
+    """
+    target = root / "docs" / "DOC_INVENTORY.md"
+    if not target.is_file():
+        return [
+            Finding(
+                "inventory-missing",
+                "docs/DOC_INVENTORY.md 不存在：跑 `python3 tools/docs_inventory.py --write` 生成",
+            )
+        ]
+    text = target.read_text(encoding="utf-8", errors="replace")
+    sections = _split_inventory_sections(text)
+    findings: list[Finding] = []
+    for category, path in registry_entries(registry):
+        rows = sections.get(category)
+        if rows is None:
+            findings.append(
+                Finding("inventory-stale", f"生成的盘点页里没有 `{category}` 一节", category)
+            )
+            continue
+        if f"`{path}`" not in rows:
+            findings.append(
+                Finding(
+                    "inventory-stale",
+                    f"{path} 在登记表里是 `{category}`，但生成的盘点页里没列在那一节"
+                    "（改了分类或加了文档后忘了重跑 --write？）",
+                    path,
+                )
+            )
+    for category, rows in sections.items():
+        for path in re.findall(r"^\| `([^`]+)` \|", rows, re.MULTILINE):
+            if path not in {p for _, p in registry_entries(registry)}:
+                findings.append(
+                    Finding(
+                        "inventory-stale",
+                        f"生成的盘点页把 {path} 列在 `{category}`，但它已不在登记表里（删了文档没重跑？）",
+                        path,
+                    )
+                )
+    return findings
+
+
+def _split_inventory_sections(text: str) -> dict[str, str]:
+    """把生成的盘点页按 `## <category>（N 份）` 切成 类别 → 该节正文。"""
+    sections: dict[str, str] = {}
+    current: str | None = None
+    buffer: list[str] = []
+    for line in text.splitlines():
+        match = re.match(r"^## ([a-z_]+)（\d+ 份）", line)
+        if match and match.group(1) in CATEGORY_MEANING:
+            if current is not None:
+                sections[current] = "\n".join(buffer)
+            current = match.group(1)
+            buffer = []
+            continue
+        if line.startswith("## ") and current is not None:
+            sections[current] = "\n".join(buffer)
+            current = None
+            buffer = []
+            continue
+        if current is not None:
+            buffer.append(line)
+    if current is not None:
+        sections[current] = "\n".join(buffer)
+    return sections
 
 
 def format_report(findings: list[Finding], documents: list[Document] | None = None) -> str:
@@ -678,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - 现场手�
     if args.list:
         for doc in documents:
             print(f"{doc.category:9s} {doc.path}")
-    findings = check(root)
+    findings = check(root) + check_generated_inventory(root)
     print(format_report(findings, documents))
     if args.write:
         areas = scan_ignored_areas(root)
