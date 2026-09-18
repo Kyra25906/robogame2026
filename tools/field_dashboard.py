@@ -56,9 +56,56 @@ except ImportError:  # 允许测试以 tools.field_dashboard 导入
     from tools.odom_calibration import OdomTrial, analyze_trials, trial_from_result
 
 try:
+    from arm_jog import (
+        JOG_HEARTBEAT_TIMEOUT_S,
+        JOG_JOINTS,
+        JOG_LIMIT_DEG,
+        JOG_MAX_PERIOD_S,
+        JOG_MAX_STEP_DEG,
+        JOG_MIN_PERIOD_S,
+        JOG_MIN_STEP_DEG,
+        JOG_SAFE_POSE_DEG,
+        JOG_SERVICE_TIMEOUT_S,
+        JogSession,
+        joint_label,
+        jog_stop_reason,
+        validate_jog_request,
+    )
     from arm_selftest import ArmSelftest, stage_names
 except ImportError:  # 允许测试以 tools.field_dashboard 导入
+    from tools.arm_jog import (
+        JOG_HEARTBEAT_TIMEOUT_S,
+        JOG_JOINTS,
+        JOG_LIMIT_DEG,
+        JOG_MAX_PERIOD_S,
+        JOG_MAX_STEP_DEG,
+        JOG_MIN_PERIOD_S,
+        JOG_MIN_STEP_DEG,
+        JOG_SAFE_POSE_DEG,
+        JOG_SERVICE_TIMEOUT_S,
+        JogSession,
+        joint_label,
+        jog_stop_reason,
+        validate_jog_request,
+    )
     from tools.arm_selftest import ArmSelftest, stage_names
+
+# 姿态表逻辑放在 robogame_core（ROS 包）里，因为将来 manipulator_client 也要用同一份。
+# ⚠️ 部署注意：它在 ROS 包里，树莓派上需要 `colcon build --symlink-install`（或重新 build）
+#    才会生效，光 scp 一个文件不够。
+from robogame_core.arm_poses import (
+    POSE_JOINTS,
+    POSE_LIMIT_DEG,
+    ArmPoseRecord,
+    PoseTable,
+    builtin_pose_table,
+    load_pose_table,
+    record_from_command_history,
+    replay_plan,
+    safe_pose_angles,
+    save_pose_table,
+    validate_pose_name,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -576,7 +623,7 @@ class RosFacade:
 
 
 class DashboardController:
-    def __init__(self, console: FieldConsole, archive: SessionArchive, hub: EventHub, loop: asyncio.AbstractEventLoop, *, max_drive_speed: float = 0.3, calibration_file: str = "") -> None:
+    def __init__(self, console: FieldConsole, archive: SessionArchive, hub: EventHub, loop: asyncio.AbstractEventLoop, *, max_drive_speed: float = 0.3, calibration_file: str = "", pose_file: str = "") -> None:
         if not math.isfinite(max_drive_speed) or not 0.02 <= max_drive_speed <= 0.8:
             raise ValueError("网页最大前后速度必须在 0.02～0.80 m/s 内")
         # B4：标定落盘路径（空串 = 用 robogame_core 里的默认路径）
@@ -593,6 +640,26 @@ class DashboardController:
         self.mechanism_busy = False
         self.distance_trial: DistanceTrial | None = None
         self.distance_result: dict = {"state": "未开始"}
+        # 关节微调（jog）：一次会话 + 一个后台步进任务。松手/断线/安全门任一成立即停。
+        self.arm_jog: JogSession | None = None
+        self.arm_jog_task: asyncio.Task | None = None
+        # 关节命令历史：**我们相信每个关节现在在哪**（下发过的目标，不是测量值）。
+        # 起点是固件上电授权后的安全姿态（arm.c:774），页面会把这件事写出来。
+        self.arm_commanded_deg: dict[int, int] = dict(safe_pose_angles())
+        self.arm_command_order: list[int] = []
+        # 空串 = 用默认家目录路径（与标定文件同一套约定）。**不要**留空串进
+        # load_pose_table：Path("") 是当前目录，会被当成"文件存在"然后报 IsADirectoryError。
+        self.pose_file = pose_file or str(Path.home() / "robogame_arm_poses.json")
+        try:
+            self.poses = load_pose_table(self.pose_file)
+            self.pose_error: str | None = None
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            # 坏文件不静默退回出厂表：那会让人以为"我记的姿态还在"。
+            self.poses = builtin_pose_table()
+            self.pose_error = f"姿态表读取失败（{self.pose_file}）：{exc}"
+        # 姿态回放：逐关节串行下发（0x20 同一时刻只允许一条机构命令）
+        self.arm_replay: dict | None = None
+        self.arm_replay_task: asyncio.Task | None = None
         # 里程计标定：一次完整定距试验 = 一个候选，操作员补录尺量值后成为一条样本
         self.odom_trial_candidate: dict | None = None
         self.odom_trials: list[OdomTrial] = []
@@ -691,7 +758,38 @@ class DashboardController:
         result["route"] = route_payload()
         # 真伪与实例核查：这是真车还是 mock？有没有第二个 bridge？
         result["runtime_check"] = self.runtime_check()
+        # 关节微调：按住走了几步、现在发到哪个角度、为什么停
+        result["arm_jog"] = self.arm_jog_snapshot()
+        # 姿态示教与回放：记下了哪些姿态、回放到第几步
+        result["arm_poses"] = self.arm_poses_snapshot()
         return result
+
+    def arm_jog_snapshot(self) -> dict:
+        """关节微调面板要的全部状态（含那句必须显示的"角度不是测量值"）。"""
+        now = time.monotonic()
+        session = self.arm_jog
+        payload = {
+            "available": True,
+            "limits_deg": list(JOG_LIMIT_DEG),
+            "active": False,
+            # 面板的关节清单/默认起点/取值范围都从这里取：常量只定义在 tools/arm_jog.py，
+            # 不在 JS 里抄一份（抄的那份迟早与后端分叉，而分叉的表现是"页面允许的角度被后端拒"）。
+            "joints": [
+                {"id": joint, "label": joint_label(joint),
+                 "safe_pose_deg": JOG_SAFE_POSE_DEG[joint]}
+                for joint in JOG_JOINTS
+            ],
+            "step_range": [JOG_MIN_STEP_DEG, JOG_MAX_STEP_DEG],
+            "period_range": [JOG_MIN_PERIOD_S, JOG_MAX_PERIOD_S],
+            "heartbeat_timeout_s": JOG_HEARTBEAT_TIMEOUT_S,
+            "note": (
+                "机械臂无位置反馈：这里的「当前角度」是我们**发出去的目标角度**累加值，"
+                "不是读回来的。0x21 状态帧里没有位置/脉宽字段。"
+            ),
+        }
+        if session is None:
+            return payload | {"session": None}
+        return payload | {"active": session.active, "session": session.as_dict(now)}
 
     def owned_process_groups(self) -> tuple[list[int], list[int]]:
         """本控制台启动的 PID 与**进程组**。
@@ -786,6 +884,336 @@ class DashboardController:
         if self.ros is None:
             raise ValueError(self.ros_error or "ROS 尚未就绪")
         return self.ros
+
+    # ------------------------------------------------------------------
+    # 关节微调（jog）：像遥控器那样按住动一小步，但每一步都是绝对角度
+    # ------------------------------------------------------------------
+
+    def _jog_blockers(self) -> list[dict]:
+        """微调的准入检查。用的是与手动驾驶**同一套**安全判据（不另立一套）。"""
+        with self.lock:
+            if self.state.mode != "OBSERVE":
+                raise ValueError("底盘运动模式中不能动机械臂；请先停止或释放控制（C-4）")
+        if self.mechanism_busy:
+            raise ValueError("已有机构动作在执行（可能是另一个微调步或一次抓放），请等它结束")
+        return action_blockers(self.state.safety, time.monotonic())
+
+    def _refuse_while_arm_busy(self, what: str) -> None:
+        """机械臂正在被本页面驱动（微调/回放）时，别的机构命令一律不接。
+
+        为什么必须显式拒绝：0x20/0x21 只允许**一条**机构命令在跑（bridge 侧并发直接
+        返回错误码 6），而微调在两步之间有短暂空档。不拦的话，人在空档里点「夹取」，
+        两条命令会互相顶掉，现场表现成"角度乱跳、还以为是机械故障"。
+        """
+        session = self.arm_jog
+        if session is not None and session.active:
+            raise ValueError(
+                f"关节微调正在进行（{session.request.label}）："
+                f"先松开按钮停掉它，再{what}"
+            )
+        if self.arm_replay is not None and self.arm_replay.get("active"):
+            raise ValueError(
+                f"姿态回放正在进行（{self.arm_replay.get('name')}）："
+                f"等它结束或点「停止回放」，再{what}"
+            )
+
+    def _note_arm_command(self, joint: int, angle_deg: int) -> None:
+        """记住"我们给这个关节下发过的最后一个目标角度"。
+
+        ⚠️ 这**不是测量值**：机械臂没有位置反馈，0x21 状态帧也没有位置/脉宽字段。
+        它的用途只有一个——示教时把"我们相信它现在在哪"记成一条可复现的姿态。
+        """
+        self.arm_commanded_deg[int(joint)] = int(angle_deg)
+        if int(joint) in self.arm_command_order:
+            self.arm_command_order.remove(int(joint))
+        self.arm_command_order.append(int(joint))
+
+    def _arm_commanded_snapshot(self) -> dict:
+        return {
+            "commanded_deg": {str(joint): self.arm_commanded_deg[joint]
+                              for joint in POSE_JOINTS if joint in self.arm_commanded_deg},
+            "order": list(self.arm_command_order),
+            "note": "「当前角度」= 我们下发过的目标角度累加，不是测量值（无位置反馈）",
+        }
+
+    # ---- 姿态示教与回放 -------------------------------------------------
+
+    async def _arm_replay_loop(self, name: str, record: ArmPoseRecord, plan: list[dict]) -> None:
+        """逐关节串行回放：上一步的固件回执到了才发下一步。
+
+        为什么串行而不并发：0x20 同一时刻只允许一条机构命令（并发直接回错误码 6）；
+        这条限制在固件里（`rpi_protocol.c:702-706` 不同 command_id 回 BAD_STATE）。
+        顺序按**示教时的操作顺序**，不是我们替操作员排的（顺序是机械问题）。
+        """
+        state = self.arm_replay
+        try:
+            for step in plan:
+                if state is None or not state.get("active"):
+                    return
+                try:
+                    blockers = self._jog_blockers()
+                except ValueError as exc:
+                    state["stop_reason"] = f"安全门拦截：{exc}"
+                    break
+                if blockers:
+                    state["stop_reason"] = (
+                        f"安全门拦截：{blockers[0]['message']}（{blockers[0]['evidence']}）"
+                    )
+                    break
+                joint, angle = int(step["joint"]), int(step["angle_deg"])
+                self.mechanism_busy = True
+                try:
+                    result = await asyncio.to_thread(
+                        self._require_ros().arm_set_joint, joint, angle, JOG_SERVICE_TIMEOUT_S,
+                    )
+                except Exception as exc:
+                    result = {"success": False, "error_code": 9003, "detail": str(exc)}
+                finally:
+                    self.mechanism_busy = False
+                state["steps_done"] = int(state.get("steps_done", 0)) + 1
+                state["last_result"] = dict(result)
+                state["steps"].append({
+                    "index": step["index"], "joint": joint, "angle_deg": angle,
+                    "success": bool(result.get("success")),
+                    "error_code": int(result.get("error_code", 0)),
+                    "detail": str(result.get("detail", "")),
+                })
+                self.record({
+                    "type": "arm", "action": "pose_replay_step", "pose": name,
+                    "joint": joint, "angle_deg": angle,
+                    "success": bool(result.get("success")),
+                    "error_code": int(result.get("error_code", 0)),
+                    "detail": str(result.get("detail", "")),
+                })
+                if not result.get("success"):
+                    state["stop_reason"] = (
+                        f"关节 {joint} 到 {angle}° 失败：code={result.get('error_code')} "
+                        f"{result.get('detail', '')}（姿态表里后面的关节没有下发）"
+                    )
+                    break
+                self._note_arm_command(joint, angle)
+                if step.get("settle_s"):
+                    await asyncio.sleep(float(step["settle_s"]))
+            else:
+                if state is not None:
+                    state["stop_reason"] = state.get("stop_reason") or "回放完成"
+        except asyncio.CancelledError:
+            if state is not None:
+                state["stop_reason"] = state.get("stop_reason") or "回放被取消"
+            raise
+        finally:
+            if state is not None:
+                state["active"] = False
+                state["finished_at"] = time.monotonic()
+                self.record({"type": "arm", "action": "pose_replay_finished",
+                             "pose": name, "steps_done": state.get("steps_done", 0),
+                             "stop_reason": state.get("stop_reason")})
+            self.arm_replay_task = None
+
+    def _arm_pose_record(self, body: dict) -> dict:
+        """把"当前下发的目标角度"记成一条具名姿态（示教的产出）。"""
+        self._refuse_while_arm_busy("记录姿态")
+        name = validate_pose_name(body.get("name"))
+        record = record_from_command_history(
+            name=name, history=[
+                (joint, self.arm_commanded_deg[joint])
+                for joint in self.arm_command_order if joint in self.arm_commanded_deg
+            ],
+            note=str(body.get("note", ""))[:120],
+        )
+        self.poses.upsert(record)
+        path = save_pose_table(self.pose_file, self.poses)
+        self.record({"type": "arm", "action": "pose_recorded",
+                     "pose": record.as_dict(), "file": path})
+        return {"ok": True, "pose": record.as_dict(), "file": path}
+
+    def _arm_pose_delete(self, body: dict) -> dict:
+        self._refuse_while_arm_busy("删除姿态")
+        name = validate_pose_name(body.get("name"))
+        removed = self.poses.remove(name)
+        path = save_pose_table(self.pose_file, self.poses)
+        self.record({"type": "arm", "action": "pose_deleted", "pose": name, "removed": removed})
+        return {"ok": True, "removed": removed, "file": path}
+
+    def _arm_pose_replay(self, body: dict) -> dict:
+        if self.arm_replay is not None and self.arm_replay.get("active"):
+            raise ValueError("已有一次回放在进行中")
+        self._refuse_while_arm_busy("开始回放")
+        record = self.poses.get(str(body.get("name", "")))
+        if record is None:
+            raise ValueError(
+                f"姿态表里没有「{body.get('name')}」：可用的有 {', '.join(self.poses.names()) or '（空）'}"
+            )
+        try:
+            settle_s = float(body.get("settle_s", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("settle_s 必须是数字") from exc
+        plan = replay_plan(record, settle_s=settle_s)
+        blockers = self._jog_blockers()
+        if blockers:
+            raise ValueError(f"{blockers[0]['message']}（{blockers[0]['evidence']}）")
+        self.arm_replay = {
+            "name": record.name, "active": True, "started_at": time.monotonic(),
+            "finished_at": None, "steps_done": 0, "plan": plan,
+            "steps": [], "last_result": None, "stop_reason": None,
+        }
+        self.record({"type": "control", "action": "pose_replay_start",
+                     "pose": record.describe(), "steps": len(plan)})
+        self.arm_replay_task = asyncio.get_running_loop().create_task(
+            self._arm_replay_loop(record.name, record, plan)
+        )
+        return {"ok": True, "name": record.name, "steps": len(plan),
+                "plan": plan, "description": record.describe()}
+
+    def _arm_pose_stop(self) -> dict:
+        state = self.arm_replay
+        if state is None or not state.get("active"):
+            return {"ok": True, "already_stopped": True}
+        state["stop_reason"] = state.get("stop_reason") or "操作员停止回放"
+        task = self.arm_replay_task
+        if task is not None and not task.done():
+            task.cancel()
+        return {"ok": True, "steps_done": state.get("steps_done", 0)}
+
+    def arm_poses_snapshot(self) -> dict:
+        """姿态示教面板要的全部状态。"""
+        now = time.monotonic()
+        payload = {
+            "available": True,
+            "file": self.pose_file,
+            "names": list(self.poses.names()),
+            "poses": self.poses.as_dict(),
+            "limits_deg": list(POSE_LIMIT_DEG),
+            "commanded": self._arm_commanded_snapshot(),
+            "replay": None,
+            "note": (
+                "示教记的是**我们下发过的目标角度**，不是测量值；复现也是开环的——"
+                "固件的 SUCCEEDED 只代表输出脉宽到了目标，不代表舵机真到了那个角度。"
+                "建议每次回放前先「回零」（/mechanism/home），从同一个已知起点出发。"
+            ),
+        }
+        if self.pose_error:
+            payload["error"] = self.pose_error
+        if self.arm_replay is not None:
+            state = dict(self.arm_replay)
+            state["elapsed_s"] = round(
+                max(0.0, (state.get("finished_at") or now) - state["started_at"]), 2
+            )
+            payload["replay"] = state
+        return payload
+
+    async def _arm_jog_loop(self, session: JogSession) -> None:
+        """一步一步走：每一步都等固件回执，失败/越界/心跳断/安全门命中就停。
+
+        为什么每一步都等回执，而不是按周期盲发：`ARM_SET` 是绝对角度目标，固件按约
+        45°/s 走过去。盲发会让后一条覆盖前一条（目标被改写），看起来"能连续动"，
+        实际是命令互相顶掉——现场会表现成"角度乱七八糟、还以为是机械问题"。
+        """
+        try:
+            while True:
+                try:
+                    blockers = self._jog_blockers()
+                except ValueError as exc:
+                    # 别的动作抢了机构通道（或底盘开始动）：这是正常的并发，不是崩溃。
+                    session.stop_reason = f"安全门拦截：{exc}"
+                    break
+                reason = jog_stop_reason(session, time.monotonic(), blockers=blockers)
+                if reason is not None:
+                    session.stop_reason = reason
+                    break
+                target = session.next_target_deg()
+                if target is None:
+                    session.stop_reason = "已到角度边界，微调结束"
+                    break
+                self.mechanism_busy = True
+                try:
+                    result = await asyncio.to_thread(
+                        self._require_ros().arm_set_joint,
+                        session.request.joint, target, JOG_SERVICE_TIMEOUT_S,
+                    )
+                except Exception as exc:  # ROS 异常也不能让循环悄悄死掉
+                    result = {"success": False, "error_code": 9003, "detail": str(exc)}
+                finally:
+                    self.mechanism_busy = False
+                session.note_step(target, result)
+                if result.get("success"):
+                    # 示教的原料：只有**成功**的目标才更新"我们相信它在哪"。
+                    self._note_arm_command(session.request.joint, target)
+                self.record({
+                    "type": "arm", "action": "jog_step",
+                    "joint": session.request.joint, "angle_deg": target,
+                    "success": bool(result.get("success")),
+                    "error_code": int(result.get("error_code", 0)),
+                    "detail": str(result.get("detail", "")),
+                })
+                if not result.get("success"):
+                    session.stop_reason = (
+                        f"关节 {session.request.joint} 到 {target}° 失败："
+                        f"code={result.get('error_code')} {result.get('detail', '')}"
+                    )
+                    break
+                await asyncio.sleep(session.request.period_s)
+        except asyncio.CancelledError:
+            session.stop_reason = session.stop_reason or "微调被取消"
+            raise
+        finally:
+            session.finished_at = time.monotonic()
+            self.record({
+                "type": "arm", "action": "jog_finished",
+                "token": session.token, "steps_done": session.steps_done,
+                "last_target_deg": session.last_target_deg,
+                "stop_reason": session.stop_reason,
+            })
+            if self.arm_jog is session:
+                self.arm_jog_task = None
+
+    def _arm_jog_start(self, body: dict) -> dict:
+        """开始一次微调。**必须先通过安全门**，否则按钮点了也不该动。"""
+        blockers = self._jog_blockers()
+        if blockers:
+            raise ValueError(
+                f"{blockers[0]['message']}（{blockers[0]['evidence']}）"
+            )
+        request = validate_jog_request(
+            joint=body.get("joint"),
+            direction=body.get("direction"),
+            step_deg=body.get("step_deg"),
+            period_s=body.get("period_s"),
+            start_deg=body.get("start_deg"),
+        )
+        now = time.monotonic()
+        session = JogSession(
+            request=request, token=uuid.uuid4().hex, started_at=now,
+            heartbeat_at=now, last_target_deg=request.start_deg,
+        )
+        self.arm_jog = session
+        self.record({"type": "control", "action": "arm_jog_start",
+                     "plan": request.label, "token": session.token})
+        self.arm_jog_task = asyncio.get_running_loop().create_task(
+            self._arm_jog_loop(session)
+        )
+        return {"ok": True, "token": session.token, "plan": request.label}
+
+    def _arm_jog_heartbeat(self, body: dict) -> dict:
+        with self.lock:
+            session = self.arm_jog
+            if session is None or body.get("token") != session.token:
+                raise ValueError("微调已结束或不属于当前页面")
+            session.heartbeat_at = time.monotonic()
+        return {"ok": True}
+
+    def _arm_jog_stop(self, body: dict) -> dict:
+        session = self.arm_jog
+        if session is None:
+            return {"ok": True, "already_stopped": True}
+        if body.get("token") not in (None, session.token):
+            raise ValueError("微调令牌不匹配：不接受别的页面停止本次微调")
+        session.stop_reason = session.stop_reason or "操作员松开按钮，已停止微调"
+        task = self.arm_jog_task
+        if task is not None and not task.done():
+            task.cancel()
+        return {"ok": True, "steps_done": session.steps_done,
+                "last_target_deg": session.last_target_deg}
 
     async def action(self, path: str, body: dict) -> dict:
         parts = [p for p in path.split("/") if p]
@@ -1001,6 +1429,7 @@ class DashboardController:
                 if blockers:
                     raise ValueError(blockers[0]["message"])
             running = {"action": action, "state": "执行中", "started_at": time.time(), "height_m": height}
+            self._refuse_while_arm_busy(f"执行「{action}」")
             self.state.last_mechanism_result = running
             if action != "stop":
                 self.mechanism_busy = True
@@ -1014,6 +1443,11 @@ class DashboardController:
                 if action != "stop":
                     self.mechanism_busy = False
             result = {**running, **result, "finished_at": time.time(), "state": "成功" if result["success"] else "超时" if result.get("error_code") == 2002 else "失败"}
+            if action == "home" and result["success"]:
+                # 回零成功 → 固件把四个关节放回 ARM_SAFE_PULSE_US（arm.c 的 Arm_AutoGoHome）。
+                # 于是"我们相信它在哪"可以整体重置成安全姿态——这是回放前该做的起点对齐。
+                for joint in POSE_JOINTS:
+                    self._note_arm_command(joint, int(safe_pose_angles()[joint]))
             with self.lock:
                 if self.state.last_mechanism_result is running:
                     self.state.last_mechanism_result = result
@@ -1021,6 +1455,20 @@ class DashboardController:
             return {"ok": result["success"], "result": result}
         if path in {"/api/arm/set_joint", "/api/arm/selftest"}:
             return await self._arm_action(path, body)
+        if path == "/api/arm/jog/start":
+            return self._arm_jog_start(body)
+        if path == "/api/arm/jog/heartbeat":
+            return self._arm_jog_heartbeat(body)
+        if path == "/api/arm/jog/stop":
+            return self._arm_jog_stop(body)
+        if path == "/api/arm/pose/record":
+            return self._arm_pose_record(body)
+        if path == "/api/arm/pose/delete":
+            return self._arm_pose_delete(body)
+        if path == "/api/arm/pose/replay":
+            return self._arm_pose_replay(body)
+        if path == "/api/arm/pose/stop":
+            return self._arm_pose_stop()
         if path == "/api/line/calibrate/start":
             return self._calibrate_start(body)
         if path == "/api/line/calibrate/capture":
@@ -1097,6 +1545,7 @@ class DashboardController:
 
     async def _arm_action(self, path: str, body: dict) -> dict:
         if path == "/api/arm/selftest":
+            self._refuse_while_arm_busy("跑联调自检")
             stage = str(body.get("stage", ""))
             if not stage:
                 # 只列清单、不执行：让网页从后端拿阶段列表，避免两处硬编码。
@@ -1113,6 +1562,7 @@ class DashboardController:
             angle_deg = float(body["angle_deg"])
         except (KeyError, ValueError, TypeError):
             raise ValueError("请填写关节编号和角度（度）")
+        self._refuse_while_arm_busy("手动下发单条 ARM_SET")
         if not 0 <= joint <= 4:
             raise ValueError("关节编号必须是 0～4（0=腰/云盘, 1=肩, 2=肘, 3=腕, 4=爪）")
         if not math.isfinite(angle_deg):
@@ -1141,6 +1591,9 @@ class DashboardController:
             self.mechanism_busy = False
         self.record({"type": "arm", "action": "set_joint", "joint": joint,
                      "angle_deg": angle_deg, "result": result})
+        if result.get("success") and joint in POSE_JOINTS:
+            # 手动单条 ARM_SET 也参与示教：它同样改变"我们相信它在哪"。
+            self._note_arm_command(int(joint), int(angle_deg))
         return {"ok": bool(result.get("success")), "result": result}
 
     def _calibrate_start(self, body: dict) -> dict:
@@ -1387,7 +1840,8 @@ async def run(args) -> None:
     hub = EventHub()
     console = FieldConsole(load_specs(args.config), event_sink=None)
     app = DashboardController(console, archive, hub, loop, max_drive_speed=args.max_drive_speed,
-                              calibration_file=args.calibration_file)
+                              calibration_file=args.calibration_file,
+                              pose_file=args.pose_file or str(Path.home() / "robogame_arm_poses.json"))
     console.event_sink = app.process_event
     app.start_ros()
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
@@ -1422,6 +1876,9 @@ def parse_args():
     parser.add_argument("--calibration-file", default="",
                         help="巡线黑白标定落盘路径（面板「应用标定」会写这里；"
                              "节点启动时用同一个路径加载）。留空则用默认路径 ~/robogame_line_calibration.json")
+    parser.add_argument("--pose-file", default="",
+                        help="具名姿态表落盘路径（示教记录写这里）。"
+                             "留空则用默认路径 ~/robogame_arm_poses.json")
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("field_console.json"))
     parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "field_console")
     return parser.parse_args()
