@@ -314,7 +314,7 @@ ros2 service call /chassis/stop robogame_interfaces/srv/ExecuteMechanism \
 
 #### 3.4 通信中断自动停车测试
 
-**这是今天最重要的安全测试。** ~~电控承诺了"300ms 没收到命令就自己停"~~ ⚠️ **2026-09-17 更正：300 ms 不是固件里的值。** 仓库固件看门狗的源码值是 **250 ms**——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，为 2026-08-18 晚与电控商定「150→250 ms」后的值（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）。
+**这是今天最重要的安全测试。** ~~电控承诺了"300ms 没收到命令就自己停"~~ ⚠️ **2026-09-17 更正：300 ms 不是固件里的值。** 仓库固件看门狗的源码值是 **250 ms**——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，为 2026-08-18 晚与电控商定「150→250 ms」后的值（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`）。
 
 > **为什么当时会写 300 ms？** 300 ms 在仓库里确实存在，但属于**另一个机制**：网页手动驾驶的失联窗口（`tools/field_dashboard_core.py:18` `DRIVE_STALE_S = 0.30`，超时后由上位机补发零速），**不是 MCU 看门狗自主停车**。原文把这两件事混为一谈了。
 >

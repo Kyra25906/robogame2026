@@ -724,7 +724,7 @@ communication_ok: true
 - 新HELLO代表新会话，会先清除旧速度，避免重连后续跑；
 - 非有限数、非法enable和超限速度会清命令并锁存协议故障。
 
-> ⚠️ **2026-09-17 补注（不改写历史）**：以上是当时只读审查到的固件值。其中「树莓派控制看门狗为150ms」**已不是当前值**——2026-08-18 晚与电控商定放宽到 **250 ms**（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`；固件 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`）。原文保留，仅提示当前值；车上烧录版本仍须现场实测确认。
+> ⚠️ **2026-09-17 补注（不改写历史）**：以上是当时只读审查到的固件值。其中「树莓派控制看门狗为150ms」**已不是当前值**——2026-08-18 晚与电控商定放宽到 **250 ms**（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`；固件 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`）。原文保留，仅提示当前值；车上烧录版本仍须现场实测确认。
 
 最关键的是，当前固件把三个树莓派自动速度限值都设为 `0.0f`。这不是参数遗漏后仍可运行，而是明确的失败安全设计：限幅未冻结前拒绝所有启用的自动运动命令。因此下一步不是直接发布非零 `/cmd_vel`，而是先确认机械参数和首次架空试验限值，形成新的可追溯固件版本，再编译、烧录和重新完成安全门验证。
 

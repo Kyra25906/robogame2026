@@ -16,7 +16,7 @@
 | 5 | **遥控器离线**（⚠️ 最容易踩的坑） | 现场操作员 | **手柄必须关机/离线**——手柄在线时底盘切人工接管，树莓派 CMD_VEL 被丢弃，车只听手柄的 |
 | 6 | **限幅非零**（本次电控改动） | 电控 | `chassis.h` 三个宏非 0 + 烧录后确认 |
 
-> ⚠️ **2026-09-17 更正**：第 3 条原写「每 150ms」。固件看门狗已于 **2026-08-18 晚**与电控商定由 150 ms 放宽到 **250 ms**（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）；仓库固件源码为 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`。心跳仍是 50Hz（20 ms 周期），相对 250 ms 的余量因此更大，第 3 条本身不变，只是阈值数字改了。**车上烧录的是否就是这份源码无法从仓库确认**——现场以实测值为准。
+> ⚠️ **2026-09-17 更正**：第 3 条原写「每 150ms」。固件看门狗已于 **2026-08-18 晚**与电控商定由 150 ms 放宽到 **250 ms**（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`）；仓库固件源码为 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`。心跳仍是 50Hz（20 ms 周期），相对 250 ms 的余量因此更大，第 3 条本身不变，只是阈值数字改了。**车上烧录的是否就是这份源码无法从仓库确认**——现场以实测值为准。
 
 ## 数值约定（电控建议，算法已对齐）
 

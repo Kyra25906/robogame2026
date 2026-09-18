@@ -1,6 +1,6 @@
 # STM32 侧 0x14 发送模板
 
-电控在 `rpi_protocol.c` 中增加消息类型 `0x14`，payload 固定 21 字节，随后交给现有 `RPI_SendFrame()`。所有多字节字段小端序。
+**现状（2026-09-18 核对）**：固件**已实现**该消息——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:1552` 的 `RPI_SendLineTelemetry()` 就按下面的布局编码；`tests/test_line_telemetry_0x14.py` 的固件契约测试用正则钉住消息号（`:240`）、`payload[21]`（`:253`）、12bit 钳位（`:256-259`）与保留位清零（`:261-265`）。因此本模板不再是"待电控新增"的待办，而是**字节布局的唯一书面依据（仍待电控签字冻结）**。payload 固定 21 字节，随后交给现有 `RPI_SendFrame()`。所有多字节字段小端序。
 
 ```c
 #define RPI_MSG_LINE_TELEMETRY 0x14U

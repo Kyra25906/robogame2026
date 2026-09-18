@@ -12,8 +12,13 @@
 - `cube_perception/standalone.py`：不依赖相机 ROS 驱动，直接测试摄像头、照片或视频。
 - `cube_perception/hsv_tuner.py`：用滑块调橙色或紫色 HSV 阈值，按 `S` 保存。
 - `cube_perception/mock_node.py`：持续发布理想的假目标，供整车流程联调。
+- `cube_perception/report.py`：单份 JSONL 的验收报告渲染（markdown / html / text），也是 `vision_report` 入口。
+- `cube_perception/batch_report.py`：按 manifest 批量出报告，也是 `vision_batch_report` 入口。
+- `cube_perception/segment_annotator.py`：分段标注工具（本地网页），也是 `vision_segment_annotator` 入口。
+- `cube_perception/stage.py`：视觉阶段枚举 `SEARCH` / `ACQUIRE` / `VERIFY` 和每阶段的 `StageProfile`（最大工作距离）；阶段名经 `/perception/stage` 传入（`node.py:53`）。
 - `config/vision_default.json`：常规视觉参数。
 - `config/vision_demo_roi.json`：带演示 ROI 的参数样例。
+- `config/vision_gf100_640x480_bench.json`：GF100 在 640×480 下的台架候选参数（`focal_px: 1275.0`，与 `robot_field.yaml` 的现场覆盖同值）。
 - `setup.py`：登记七个 `ros2 run` 程序入口：`cube_perception`（正式节点）、`mock_perception`（假目标）、`cube_detector`（独立相机/录像入口）、`hsv_tuner`（调阈值）、`vision_report`（单份 JSONL 验收报告）、`vision_batch_report`（批量报告）、`vision_segment_annotator`（分段标注）。
 
 ## 3. 编译和加载
@@ -248,8 +253,10 @@ ros2 run cube_perception mock_perception
 - `max_missed_frames`：短暂丢失多少帧后删除跟踪记录。
 - `fallback_focal_px`／JSON 中的 `focal_px`：没有相机内参时使用的像素焦距。
   通用配置保留开发兜底值 `700.0`；GF100、1280×720、当前手动对焦状态的台架
-  候选值 `2550.0` 单独保存在 `config/vision_gf100_1280x720_bench.json`，现场模式
-  由 `robot_field.yaml` 显式覆盖。改变分辨率、镜头或对焦后必须重新标定。
+  候选值 `2550.0` 单独保存在 `config/vision_gf100_1280x720_bench.json`。
+  现在现场实际跑的是 640×480，对应 `config/vision_gf100_640x480_bench.json`
+  里的 `focal_px: 1275.0`（= 2550 × 640/1280），现场模式由 `robot_field.yaml`
+  用同值显式覆盖。改变分辨率、镜头或对焦后必须重新标定。
 
 ## 7. 当前完成度与现场待办
 

@@ -38,7 +38,15 @@ detail: mission complete
 
 ## 4. 状态流程
 
-主要流程为：
+现场（比赛）走路线模式，主线是：
+
+```text
+WAIT_FOR_COMMUNICATION → SELF_CHECK → WAIT_FOR_PHYSICAL_START → ROUTE_RUNNING
+```
+
+前三个状态定义在 `robogame_core/robogame_core/mission.py:15`、`:16`、`:17`，路线模式 `ROUTE_RUNNING` 在 `mission.py:20`；由 `config/robot_field.yaml` 的 `route_enabled: true` 打开（说明见 `mission_manager/node.py:10`）。
+
+下面这条单块／一橙一紫演示链只在没有路线时使用（`route_enabled: false`，例如 `single_cube` 演示）：
 
 ```text
 SELF_CHECK → WAIT_FOR_PHYSICAL_START
@@ -48,17 +56,25 @@ SELF_CHECK → WAIT_FOR_PHYSICAL_START
 → RETREAT → VERIFY_BUILD → COMPLETE
 ```
 
-颜色目标数为 0 时会跳过对应步骤；失败超过 `max_retries` 或急停时进入失败/安全停止。
+它在 `mission.py:21-22` 已被明确标注「B1 起对完整比赛 run 作废」，保留给演示链路和既有测试使用。
+
+颜色目标数：只有紫色有跳过逻辑（`mission.py:481-484`），橙色没有（`orange_target` 为 0 时仍会进入 `GO_TO_ORANGE`，`mission.py:266`）；失败超过 `max_retries` 或急停时进入失败/安全停止。
 
 ## 5. 输入和输出
 
 - 输入 `/robot/status`：通信、急停、实体启动和机构故障。
 - 输入 `/motion/result`：导航结果。
 - 输入 `/manipulator/result`：抓放结果。
+- 输入 `/line_follow/status`：巡线节点状态（`node.py:105`）。
+- 输入 `/pose`：路线模式下的当前位置（`node.py:106`）。
 - 输出 `/motion/goal`：目标路点。
 - 输出 `/manipulator/command`：抓放命令。
 - 输出 `/mission/state`：当前状态和结果。
 - 输出 `/mission/cargo`：算法认为的车载方块数量。
+- 输出 `/mission/active_source`：当前唯一被授权驱动底盘的来源名，其他运动节点据此决定动不动（`node.py:97` 发布、`node.py:221` 赋值）。
+- 输出 `/mission/route`：路线模式的进度 JSON（`node.py:98`、`node.py:265`）。
+- 输出 `/mission/turn`：路线里的转向命令（`node.py:100`、`node.py:230`）。
+- 输出 `/mission/line`：路线里的巡线命令（`node.py:101`、`node.py:228`）。
 - 输出 `/cmd_vel`：终止状态时发布零速度。
 
 ## 6. 配置

@@ -57,7 +57,7 @@ CRC 使用 CRC-16/CCITT-FALSE：`poly=0x1021`、`init=0xFFFF`、不反射、`xor
 2. STM32 回复 `ACK_OK` 后，普通机械命令才允许执行。
 3. 每条合法 HELLO 建立新会话，并使旧会话的未完成命令和去重缓存失效。
 4. 树莓派每 50 ms 发送 HEARTBEAT，payload 沿用现有 4 字节格式。
-5. STM32 超过 **250 ms** 未收到合法心跳或现有底盘保活帧即判定通信中断。机械命令不代替周期心跳。（⚠️ **2026-09-17 更正**：原写 150 ms。2026-08-18 晚与电控商定由 150 ms 放宽到 250 ms，仓库固件 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` = `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，依据 `docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`。**车上烧录版本无法从仓库确认，须现场实测确认**。）
+5. STM32 超过 **250 ms** 未收到合法心跳或现有底盘保活帧即判定通信中断。机械命令不代替周期心跳。（⚠️ **2026-09-17 更正**：原写 150 ms。2026-08-18 晚与电控商定由 150 ms 放宽到 250 ms，仓库固件 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` = `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，依据 `docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`。**车上烧录版本无法从仓库确认，须现场实测确认**。）
 6. 通信中断后停止机构，当前命令进入 `FAILED/9003`，不自动续执行。恢复后必须重新 HELLO。
 7. 树莓派发现 `0x12` 中 `boot_id` 改变时，废弃所有未完成命令并重新 HELLO；升降视为未回零。
 

@@ -273,7 +273,7 @@ python3 tools/field_dashboard.py
 | 机械臂 | 「机械臂」→ 夹取 / 释放 / 回零 / 机构停止 | **真车无升降**，LIFT 会被固件拒（`3010`） |
 | 机械臂自检 | 「机械臂联调」卡片 | 五级自检（链路/通路/夹爪/超时/停止），含手动 ARM_SET |
 | 抓取对准 | 「抓取对准（视觉 → 转向/前进）」 | 视觉对准仿真，与真车同一份纯函数 |
-| 全流程路线 | 「全流程路线（B1 只读）」 | 13 段路线、每段退出判据与可信度；**只显示计划，不驱动车辆** |
+| 全流程路线 | 「全流程路线（B1 只读 + B2 实时段）」 | 13 段路线、每段退出判据与可信度；**只显示计划，不驱动车辆** |
 | 日志 | 「原始日志」 | 可按模块筛选/搜索、暂停滚动，不必再 `ros2 topic echo` |
 
 ### 4.3 定距试车注意
@@ -347,7 +347,14 @@ python3 tools/field_dashboard.py
 1. **必须单实例**：启动前先 `ps aux | grep <节点>` 确认无残留。
 2. **按依赖顺序**：`robot_bridge` → `localization` → `motion_control`。
 3. **真车测试脚本用 50 Hz 发送**（`time.sleep(0.02)`）。
-   **10 Hz 会触发 `command_timeout` 插零速**，表现为一段一段地走。
+   **"10 Hz 会触发 `command_timeout` 插零速"这条旧说法怎么来的**：08-18 之前现场没传
+   `--params-file`，节点用默认 `command_timeout_s=0.15`（`robot_bridge/node.py:127`），
+   0.1 s 的发送周期就落在超时窗口外，bridge 于是主动插零速（`node.py:1175`
+   `if now - self.last_command > self.command_timeout`），表现为一段一段地走。
+   **现在的现场配置已经不是这样**：网页启动 bridge 走 `tools/field_console.json:7`，
+   加载的是 `robot.yaml:7` 的 `command_timeout_s: 0.5`，10 Hz（0.1 s）**不会**触发插零速。
+   结论：50 Hz 仍是推荐做法，但"10 Hz 必然顿挫"只在不传 params-file、退回节点默认
+   `0.15` 的裸 `ros2 run` 时才成立。
 
 ---
 

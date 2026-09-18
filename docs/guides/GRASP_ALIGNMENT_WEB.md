@@ -44,7 +44,10 @@
 D:\python.exe -B tools\field_dashboard.py --host 127.0.0.1 --port 8766 --output tmp\grasp_web_check
 ```
 
-浏览器打开 `http://127.0.0.1:8766`。`rclpy` 缺失时页面顶部会写 `ROS unavailable`，
+浏览器打开 `http://127.0.0.1:8766`。`rclpy` 缺失时后端会把错误放进快照字段
+`ros_error`（`tools/field_dashboard.py:516` 生成、`:587` 随 `/api/snapshot` 下发）；
+前端**没有**任何横幅渲染它（`tools/field_dashboard_web/**` 里搜不到 `ros_error`），
+所以要看只能看快照字段或「原始日志」里的 diagnostic 记录。
 这是预期的：实时面板需要真机话题，**仿真按钮不需要 ROS**。
 
 ### 树莓派（真车联调）

@@ -103,7 +103,7 @@ outputs/field_console/YYYYMMDD_HHMMSS_microseconds/
 tools/field_dashboard.py          # 路由与接线（/api/arm/*）
 tools/arm_selftest.py             # 五级自检的判定逻辑（可脱离 ROS 单测）
 tools/field_dashboard_web/arm_panel.js
-tools/field_dashboard_web/index.html      # 一行 <script src="/arm_panel.js">
+tools/field_dashboard_web/index.html      # 6 个 <script> 引用之一（/arm_panel.js）
 ```
 
 改完重启网页服务并强制刷新浏览器。

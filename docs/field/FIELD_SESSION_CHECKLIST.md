@@ -29,7 +29,7 @@
 - [ ] **启动前**：`ps aux | grep <节点>` 确认**无残留**，有就 `kill`——**双实例会互相打架**（本次多次踩坑）
 - [ ] **顺序**：robot_bridge → localization → motion_control（**依赖顺序，不能乱**）
 - [ ] 每个终端**贴标签**（RB / LOC / MC / CMD），避免「终端 3 是哪个」
-- [ ] 每终端先 `source`：`cd ~/robogame/ros2_ws && source /opt/ros/jazzy/setup.bash && source install/setup.bash`
+- [ ] 每终端先 `source`：`cd ~/robogame_algorithm/ros2_ws && source /opt/ros/jazzy/setup.bash && source install/setup.bash`（✏️ 2026-09-18 更正：原文写 `~/robogame/ros2_ws`，与同批现场文档用的 `~/robogame_algorithm` 不一致；**树莓派上的实际 clone 路径以现场 `ls ~` 为准**）
 - [ ] robot_bridge 等 `handshake complete` 再启动下一个
 - [ ] 启动后 `ros2 topic list` 确认话题全（/robot/status、/wheel_odom、/pose、/motion/goal、/motion/result、/cmd_vel）
 

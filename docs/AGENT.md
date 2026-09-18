@@ -347,7 +347,7 @@ __name__
 
 1. `AGENT.md`：只记录可复用的协作或收工规则，不堆叠项目进度；
 2. `LEARNING_LOG.md`：记录当天真正理解的工程知识和证据边界；
-3. `PLAN_2026-08-13_TO_18.md`：更新当日完成项、偏差和明日第一步；
+3. `docs/DOC_INVENTORY.md`：新增/改名文档后跑 `python3 tools/docs_inventory.py --write` 重新生成分类（**这是生成文件，不要手改**；分类登记表在 `tools/docs_inventory.py` 的 `REGISTRY`）。**不要再更新 `PLAN_2026-08-13_TO_18.md`**——那份计划的窗口已于 2026-08-18 结束，现标为 `archived`（2026-09-18 修正：旧清单要求每天更新它，等于让 agent 往过期计划里写进度）；
 4. `README.md`：修正最新交接入口和当前结论；
 5. `TODO_AND_ISSUES.md`：用勾选和证据记录完成项、新待办和阻塞；
 6. `ENGINEERING_DISCIPLINE.md`：按完成标准（DoD）自检本轮是否真正「完成」，并区分已验证 / 未验证。

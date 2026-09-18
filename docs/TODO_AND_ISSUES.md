@@ -13,6 +13,12 @@
 
 最后更新：2026-09-17（只读复核修正：过期的 `2001` 机构拒绝描述、第三轮复审清单的完成状态、测试计数不再钉死数字、失效文件路径（`FREEZE_TABLE.md` 归档、固件目录名）与 `robot.yaml` 行号引用改为按键名定位）
 
+<!-- docs-audit: allow path-missing docs/field/FREEZE_TABLE.md -->
+<!-- 上面这行是给 tools/docs_audit.py 看的显式豁免：本文**就是在报告**旧路径 docs/field/FREEZE_TABLE.md
+     已不存在（表已归档到 docs/field/_archived/FREEZE_TABLE.md）。检查器分不清「声称存在」和
+     「报告缺失」，所以豁免必须写在文档里、且会在审计报告里被打印出来（静默豁免 = 悄悄关掉检查）。
+     2026-09-18 文档盘点时加。 -->
+
 ## 当前状态摘要
 
 ### 已经远程完成
@@ -244,7 +250,7 @@
 - [x] `P0` 为 `/wheel_odom` 和有效 `/imu/data` 填写非零、可配置的协方差；ODOM过期使用极大速度方差，IMU无效或过期保持 `angular_velocity_covariance[0] = -1`。当前数值是明确标注的保守临时值，最终仍需实机标定。证据：Ubuntu配置检查0错误0警告，ODOM/IMU/定位/安全相关回归121项全部通过。
 - [x] `P1` 使用V1载荷中的 `mcu_tick_ms`检查ODOM/IMU时间连续性：正常递增和32位回绕放行，重复与倒退拒绝，大间隔拒绝当前帧并重建基准，拒绝帧不刷新数据新鲜时间；阈值 `max_mcu_sample_gap_ms=250` 可配置且必须为正整数。证据：Ubuntu配置0错误0警告，时间/ODOM/IMU/定位/安全相关回归129项全部通过。
 - [x] `P0` 增加转向与IMU融合的PTY/ROS端到端测试：同时发送 `ODOM.wz_radps`、`IMU.gyro_z_radps`和 `STATUS.imu_valid`；已验证IMU有效时采用IMU角速度，STATUS无效或IMU测量过期时回退轮式ODOM，正负旋转方向不颠倒，差异过大时 `/rosout` 出现告警且 `/pose` 保持有限值。测试发现并修复定位节点忽略 `angular_velocity_covariance[0] = -1`、把桥接节点重复发布的过期IMU误当可用的问题。证据：Ubuntu PTY/ROS与定位、串口、安全停止相关回归133项全部通过。
-- [ ] `P0` 现场补齐真实硬件证据：确认STM32持续发送ODOM/IMU，编码器方向及 `vx/vy/wz`单位正确，IMU轴向和正负号正确，真实断联能停车，树莓派突然掉电时STM32本地看门狗在协议规定的 **250 ms**（**2026-09-17 更正**：原写 150 ms；固件已按 08-18 晚与电控的商定放宽为 `RPI_WATCHDOG_TIMEOUT_MS 250U`，见 `rpi_protocol.c:116` 与 `RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`。**车上烧录版本无法从仓库确认，现场以实测值为准**）内触发。必须在执行器断电、底盘架空和落地低速三个阶段逐级验收。
+- [ ] `P0` 现场补齐真实硬件证据：确认STM32持续发送ODOM/IMU，编码器方向及 `vx/vy/wz`单位正确，IMU轴向和正负号正确，真实断联能停车，树莓派突然掉电时STM32本地看门狗在协议规定的 **250 ms**（**2026-09-17 更正**：原写 150 ms；固件已按 08-18 晚与电控的商定放宽为 `RPI_WATCHDOG_TIMEOUT_MS 250U`，见 `rpi_protocol.c:116` 与 `RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`。**车上烧录版本无法从仓库确认，现场以实测值为准**）内触发。必须在执行器断电、底盘架空和落地低速三个阶段逐级验收。
 
 ## manipulator_client 软件缺口（2026-08-13 审计新增）
 
@@ -583,7 +589,7 @@
 - [x] 执行器无动力条件下完成USB拔线失败安全与重插自动重连；恢复后节点仍存活并重新达到约50Hz。
 - [x] 完成ROS `/chassis/stop` 到STM32的真实闭环：服务写出零速度+急停成功，STM32回传 `emergency_stop=true`、`error_code=9001`，通信继续正常。
 - [x] 安全退出 `robot_bridge`，确认无残留桥接进程且STM32稳定设备路径仍存在。
-- [x] 收到并只读审查STM32F427完整工程；确认9001、**150ms通信看门狗**（**2026-09-17 注**：这是审查当日（08-13）的固件值；现固件已放宽为 `RPI_WATCHDOG_TIMEOUT_MS 250U`，见 `rpi_protocol.c:116` 与 `RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`。**做验收判据时不要照抄 150ms**）、本地PB2长按重新授权、重连不清急停、遥控器优先和新HELLO清旧速度等实现。
+- [x] 收到并只读审查STM32F427完整工程；确认9001、**150ms通信看门狗**（**2026-09-17 注**：这是审查当日（08-13）的固件值；现固件已放宽为 `RPI_WATCHDOG_TIMEOUT_MS 250U`，见 `rpi_protocol.c:116` 与 `RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`。**做验收判据时不要照抄 150ms**）、本地PB2长按重新授权、重连不清急停、遥控器优先和新HELLO清旧速度等实现。
 
 ### ISSUE-021：STM32当前明确禁止树莓派自动运动
 

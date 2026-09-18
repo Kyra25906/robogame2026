@@ -1,13 +1,20 @@
 # GitHub 两人代码协作说明
 
+> **2026-09-18 更正（以仓库现状为准）**：本文写的是**最初的**分支设想（`main` + 两个 `feature/*`），
+> 但仓库实际已经演进成**集成主线**模型：当前主线是 **`integration/line-follow-t26`**
+> （`integration/robogame-t26` 已是它的祖先，不再分叉）。也就是说：
+> **`main` 不是现行主线，别把新工作往 `main` 上合**；分支的创建、同步、合并命令仍然照本文做，
+> 只是把文中的 `main` 换成当前 `integration/*` 主线。核对当前主线的命令：
+> `git branch --show-current`、`git merge-base --is-ancestor origin/integration/robogame-t26 origin/integration/line-follow-t26`。
+
 ## 1. 推荐结构
 
 GitHub 私有仓库是源码中心：
 
 ```text
-main                         只放通过测试、可以演示的稳定版本
-feature/vision-integration   视觉、抓放、状态机和集成分支
-feature/localization         第二位同学的定位和标定分支
+integration/line-follow-t26  现行集成主线（真车/现场版本，当前 HEAD 在此）
+feature/*                    各人的功能分支（从主线切出，合回主线）
+main                         最初设想的稳定分支；现已不是主线，只作历史保留
 ```
 
 每个人只在自己的功能分支开发，不直接向 `main` 随意推送。合并前运行测试，由另一人检查改动。

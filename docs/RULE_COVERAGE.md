@@ -5,8 +5,10 @@
 > 从未出现在任何提交中，「高台」与规则条款号首次出现均为 2026-08-18），
 > 因此本矩阵是**每轮复审的前置**：先过此矩阵，再走读代码。
 >
-> **依据**：`RoboGame2026 竞技组规则手册2_1`（文本提取 `tmp/rules_2_1_full.txt`）、
+> **依据**：`RoboGame2026 竞技组规则手册2_1`（仓库根目录的 PDF，**被 `.gitignore` 排除、不在版本库里**；文本提取件 `tmp/rules_2_1_full.txt` 同样不入库——所以要复核条款原文，得先拿到这两份本地文件，或在 `二审评分细则_提取文本.txt`（**已入库**）里找对应条目）、
 > `二审评分细则（竞技组）`（`二审评分细则_提取文本.txt`）、执行队列 `docs/team/算法一执行队列_2026-08-18.md`。
+>
+> **引用约定（2026-09-18 补）**：下文里的 `文件:行号` 会随重构漂移，引用前请按**符号名**（函数/类/参数/话题名）核对，不要只凭行号。
 >
 > **状态图例**：✅ 已实现（有代码+证据）｜🔶 已设计未实现（方案/占位已定，代码未接或未完整）｜❌ 未覆盖（显式列出，不留空白）｜➖ 非算法职责（硬件/机械/组委会）
 >
@@ -40,17 +42,17 @@
 | 3.1.5 中央高地区 | 高台 1.8×1.7m 高 200mm + 斜坡 1.8×0.8m 14° | `robogame_core/ramp_control.py`（限速/打滑/下坡防冲）+ field_map 高台/斜坡区域 | test_ramp_control 16 项 | ✅ 已实现；坡度/阈值待现场整定 |
 | 3.1.6 墙体建筑材料区 | 1.8×0.3m，10 橙槽×2（全场 20 橙） | 材料区坐标（D1 实测）+ 抓取点 W01/W08 | test_field_map | ✅ 区域实测；W08（对方墙材区）为 08-19 新确认项 |
 | 3.1.7 屋顶建筑材料区 | 2.2×0.4m，3 紫槽 | 材料区坐标（D1 实测）+ 抓取点 W02/W03 | test_field_map | ✅ 已实现 |
-| 3.1.8 视觉标签与巡线 | 5cm 黑线连接启动区/材料区/搭建区；15×15cm 标签 6 个、墙上 40cm | C2 `apriltag_pose.py`（detect/PnP）+ D2 标签映射 + D3 黑线拓扑；C4 巡线待接入 | test_apriltag_pose 14 项 + test_route_segment | 🔶 检测器/映射/拓扑已实现；**标签样式待现场确认**（仓库样例检测不到标准 AprilTag，疑数字牌）；**巡线 C4/C7 未接入**（等 line_follow 分支 + 红外选型） |
+| 3.1.8 视觉标签与巡线 | 5cm 黑线连接启动区/材料区/搭建区；15×15cm 标签 6 个、墙上 40cm | C2 `apriltag_pose.py`（detect/PnP）+ D2 标签映射 + D3 黑线拓扑；C4 巡线已接入（`line_follow_node.py` + `line_follow.py` + `mission_route.py:117`） | test_apriltag_pose 14 项 + test_route_segment + `tests/test_line_follow*.py` | 🔶 检测器/映射/拓扑/巡线均已实现；**标签样式待现场确认**（仓库样例检测不到标准 AprilTag，疑数字牌）；巡线**真车**闭环仍待 `/line_sensor` 发布者从 mock 切到 `robot_bridge`（2026-09-18 复核更新） |
 
 ## 三、规则 3.2 比赛机制
 
 | 条款 | 规则要求 | 代码/配置 | 测试/证据 | 状态 |
 |---|---|---|---|---|
 | 3.2.1 流程总则 | 6 分钟正式比赛；完全自主 | G2.1 赛时时钟 | — | 🔶 已设计未实现 |
-| 3.2.1 载货约束 | 最多携带 3 块、至多 1 紫；放置到搭建区才减一 | `Cargo.can_add`（models.py:66，total<3 + purple<1）+ mission.py PLACE 记账 | test_mission（roof tower 2 橙 1 紫） | ✅ 已实现（间接覆盖）；**G4.2 直接单测复验待补** |
+| 3.2.1 载货约束 | 最多携带 3 块、至多 1 紫；放置到搭建区才减一 | `Cargo.can_add`（models.py:76，total<3 + purple<1）+ mission.py PLACE 记账 | test_mission（roof tower 2 橙 1 紫） | ✅ 已实现（间接覆盖）；**G4.2 直接单测复验待补** |
 | 3.2.1 S1 | 完全自主，不得人为干预 | 任务状态机 | test_mission/test_startup_comm_wait | ✅ 已实现 |
 | 3.2.1 S3 | 运输掉块不可人为干预 | G3.1 掉块检测/记账回滚 | — | 🔶 已设计未实现 |
-| 3.2.1 S4 | 机械结构不可越过障碍区墙体边线，违者异常处理/可罚下 | P2-1 `pose_in_own_half`（navigation.py）+ C6 | test_cmd_vel_arbiter 14 项 | ✅ 基础已实现；边界参数按新坐标系重定义 → G4.1 |
+| 3.2.1 S4 | 机械结构不可越过障碍区墙体边线，违者异常处理/可罚下 | P2-1 `pose_in_own_half`（navigation.py）+ C6 | test_cmd_vel_arbiter 16 项 | ✅ 基础已实现；边界参数按新坐标系重定义 → G4.1 |
 | 3.2.1 S5 | 可抓取位于建筑材料区的所有方块 | **组委会确认可抓对方方块** → G4.1 重定义（取件允许越半场、越障碍区墙体仍罚）+ W08 抓取点 | test_cmd_vel_arbiter（越界拒绝） | 🔶 语义更新待落地（own_half_x_max 重定义、任务逻辑支持越半场取件） |
 | 3.2.1 S6 | 方块丢出场外永久丢失 | G1.4 目标去重/记账 | — | 🔶 已设计未实现 |
 | 3.2.1 S8 | 携带 4 块视为超载损坏 | `Cargo.can_add` 上限 3（防超载） | test_mission | ✅ 已实现 |
@@ -73,7 +75,7 @@
 
 ## 五、显式未覆盖 / 待补清单（不留空白）
 
-- ❌ **3.1.8 巡线接入（C4）**：line_follow 算法已在分支（55e2ba9），`LINE_FOLLOW` 段未接入 RouteChain；红外模块装车与选型（C7：GPIO vs STM32）未定 → 等第二位同学分支 + 电控答复。
+- ~~❌ **3.1.8 巡线接入（C4）**：line_follow 算法已在分支（55e2ba9），`LINE_FOLLOW` 段未接入 RouteChain；红外模块装车与选型（C7：GPIO vs STM32）未定~~ → **✅ 2026-09-18 复核：已接入并入库**。证据：`ros2_ws/src/motion_control/motion_control/line_follow_node.py`（节点名 `line_follow_controller`，`setup.py:9` 注册）、纯算法 `robogame_core/line_follow.py`、路线映射 `mission_route.py:117`（`SegmentRole.LINE → SegmentKind.LINE_FOLLOW`）、任务层订阅 `/line_follow/status`（`mission_manager/node.py:105`）、`field_layout.yaml:112` 优先级含 `LINE_FOLLOW`、0x14 遥测上下位机两侧编解码（`serial_protocol.py:18,29`）、launch `line_follow_hardware.launch.py` / `line_follow_mock.launch.py`、测试 `tests/test_line_follow*.py`。**仍属现场项**：C7 的红外数据来源已定为 MCU 上送（0x14 → `/line_sensor`），但真车要把 `/line_sensor` 的发布者从 mock 切到 `robot_bridge` 解码结果（`line_follow_node.py:14` 自述），才算真车闭环。
 - ❌ **3.1.8 标签样式确认**：仓库样例 tag_01~06.png 用 OpenCV 8 种字典均检测不到（NCC≈0.27，疑数字牌）；检测器按 AprilTag 实现，现场确认后可能需替换 `detect_tags` 内部。
 - ❌ **3.2.1 S5 越半场取件落地（G4.1）**：可抓对方方块已由组委会确认，但 `own_half_x_max` 边界参数未按新坐标系（x=短边4.8/y=长边7.2）重定义，任务逻辑不支持越半场取件；须区分「允许取件区域」与「罚分越界行为」。
 - ❌ **3.1.4 停车点坐标**：W04 等停车点当前为推断值（estimated），需车到现场按机械臂工作距离精修。

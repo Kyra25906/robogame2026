@@ -13,8 +13,17 @@
 - `perception.py`：视觉候选结构、置信度、针孔估距和目标选择。
 - `mission.py`：任务状态机、有限重试、安全停止和橙—橙—紫顺序。
 - `serial_protocol.py`：串口帧、CRC16、V1各类载荷编解码和字节流重新同步。
+- `route_loader.py`：把场地图 yaml 读成自检过的 `RoutePlan`（纯逻辑，零 ROS）。
+- `mission_route.py`：全流程路线（比赛 run）的段数据与段推进（纯算法，零 ROS）。
+- `mission_run.py`：任务运行循环——把「当前段 → 该发什么命令」的决策收在一处（纯逻辑）。
+- `work_sequence.py`：作业段的动作序列，如 W02 连取 3 块、W04 搭 2 层（纯逻辑）。
+- `junction_turn.py`：路口转弯器，「到路口了、转过去了」由巡线自己判断（纯逻辑，零 ROS）。
+- `arm.py`：机械臂关节表（编号、脉宽、行程）、角度↔脉宽换算和 ARM_SET 拒绝错误码。
+- `field_map.py`：RoboGame 2026 场地图数据模型（规则推导 + 现场回填）。
 - `__init__.py`：Python 包标记。
 - `setup.py`、`package.xml`、`resource/robogame_core`：ROS2 安装信息。
+
+本目录共 33 个 `.py`（`robogame_core/robogame_core/` 下 32 个模块加一个 `setup.py`），上面只列了与 ROS2 节点直接对接或最常被问到的主要模块，完整清单看目录本身。
 
 ## 3. 如何使用
 
@@ -62,4 +71,6 @@ python3 -m unittest tests.test_perception -v
 
 ## 6. 当前限制
 
-里程计积分和导航控制是冲刺期简化模型；视觉估距假设方块尺寸已知。串口V1载荷已冻结候选版并有固定测试向量，协议依据为 `docs/field/STM32_SERIAL_PROTOCOL_V1.md`；STM32端实现和真机验收尚未完成。
+里程计积分和导航控制是冲刺期简化模型；视觉估距假设方块尺寸已知。串口V1载荷已冻结候选版并有固定测试向量，协议依据为 `docs/field/STM32_SERIAL_PROTOCOL_V1.md`。
+
+STM32 侧的机械命令通道（0x20/0x21）**已经在固件里实现**，例如 `Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:766-776` 的 `RPI_MECH_OP_LIFT_ABS` 分支会明确回 `FAILED` + 错误码 `3010`（本车没有升降装置）。真正**尚未完成**的是真机验收：串口权限、时序、错误码透传和故障恢复都需要现场逐项确认。以上只是静态代码事实，不能证明真车动作已经可用。

@@ -50,6 +50,7 @@
 - `ros2_ws/src`
 - `tests`
 - `docs`
+- `tools`
 - `README.md`
 
 不会传输 ROS2 的 `build`、`install`、`log`，也不会传输临时分析文件。

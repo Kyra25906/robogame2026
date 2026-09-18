@@ -1,5 +1,11 @@
 # RoboGame2026 集成交接（2026-08-13）
 
+> **2026-09-18 盘点注记（历史留痕，不用于执行）**：本文件是 08-13 当天的交接，**分支信息已过期**。
+> 下文第 49–53 行会让接手 agent 先确认「当前分支应为 `integration/robogame-t26`、HEAD 应为 `044664f` 或更新」——
+> **照这条做会误判「站错分支」**：现行主线是 **`integration/line-follow-t26`**，
+> 而 `integration/robogame-t26` 已经是它的**祖先**（`git merge-base --is-ancestor origin/integration/robogame-t26 origin/integration/line-follow-t26` 退出码 0）。
+> 「工作树应干净」也已不成立。当前分支与文档导航见 `docs/README.md`，当前进度见 `docs/TODO_AND_ISSUES.md`。
+
 ## 1. 用途
 
 记录 08-13 完成的软件安全修复、视觉进度同步与视觉节点审计，供重启后继续。分支 `integration/robogame-t26`，远程 `origin/integration/robogame-t26`。

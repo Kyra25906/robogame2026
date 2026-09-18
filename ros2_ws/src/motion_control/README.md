@@ -46,6 +46,7 @@ ros2 topic echo /pose --once
 - 输入 `/pose`：当前位置，由 `localization` 发布。
 - 输入 `/motion/goal`：目标 `x、y、theta`，由人工或 `mission_manager` 发布。
 - 输入 `/robot/status`：通信和急停状态；状态缺失、通信故障或急停时拒绝新目标并终止当前导航。
+- 输入 `/mission/active_source`：任务层广播的底盘授权（`node.py:87`）。`require_authorization` 默认 `false`；现场配置 `robot_field.yaml` 置 `true`，此时只有被授权的来源才允许驱动底盘，未授权时收到目标也不动车并打印告警（`node.py:198`）。
 - 输出 `/cmd_vel`：`vx、vy、wz`，交给 `robot_bridge`。
 - 输出 `/motion/result`：`SUCCESS`、`TIMEOUT`、`LOCALIZATION_ERROR` 或 `SAFETY_STOP`。
 
@@ -63,6 +64,8 @@ ros2 topic echo /pose --once
 - `pose_stale_s`：多久没收到新位姿就停车。
 - `status_stale_s`：多久没收到新的机器人状态就终止导航，默认0.30秒。
 - `min_x、max_x、min_y、max_y`：允许目标区域。
+- `require_authorization`：是否要求 `/mission/active_source` 授权才允许驱动底盘，节点默认 `false`；现场配置 `robot_field.yaml` 为 `true`。
+- `authorization_stale_s`：授权多久没刷新就失效，默认 `0.5` 秒。
 
 这些参数集中在 `robogame_bringup/config/robot.yaml`。
 

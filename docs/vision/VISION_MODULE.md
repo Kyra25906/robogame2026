@@ -116,8 +116,13 @@ lateral_m
 yaw_error_rad
 pixel_x
 pixel_y
-timestamp
+stamp
 ```
+
+In the ROS message that field is `builtin_interfaces/Time stamp`
+(`robogame_interfaces/msg/CubeDetection.msg:4`), and the JSONL record carries the time
+per frame rather than per cube (`timestamp_s`, `cube_perception/standalone.py:87`);
+an earlier revision of this page listed it as `timestamp`.
 
 The standalone tool writes the same fields as the ROS `/cubes` publisher. That
 keeps offline tests and the final robot on one detector implementation.
@@ -311,7 +316,8 @@ then tune it through YAML or launch parameters without changing code.
 During the Ubuntu VMware mock validation, one of two `INCONCLUSIVE` runs was
 preempted by `COMMUNICATION_ERROR` because `RobotStatus` was not delivered for
 more than the configured `status_stale_s=0.30` seconds. The immediate rerun
-completed correctly at the configured 0.60-second observation timeout. The
+completed correctly at the observation timeout configured at that time (0.60 s; the
+current default is `placement_observation_timeout_s: 6.0` in `robot.yaml:130`). The
 normal three-second `STABLE` run and the explicit `FAILED` run were unaffected.
 
 Treat this as a virtual-machine scheduling observation, not yet as proof of a

@@ -2,7 +2,7 @@
 
 ## Supported baseline
 
-- Ubuntu 24.04 with ROS 2 Jazzy. This is the only supported target: every package README, the Raspberry Pi and the Ubuntu VM use `/opt/ros/jazzy`. (An earlier revision of this page also offered Ubuntu 22.04 + Humble; nothing in the repo is validated on Humble.)
+- Ubuntu 24.04 with ROS 2 Jazzy. This is the only supported target: the Raspberry Pi and the Ubuntu VM use `/opt/ros/jazzy`, and 7 of the 9 package READMEs name it today (`cube_perception`, `robot_bridge`, `localization`, `robogame_bringup`, `motion_control`, `robogame_core`, `robogame_interfaces`); `mission_manager/README.md` and `manipulator_client/README.md` do not name a distro. (An earlier revision of this page offered Ubuntu 22.04 + Humble; nothing in the repo is validated on Humble.)
 - Python 3, `python3-opencv`, `cv_bridge`, and `pyserial`.
 - USB UVC camera and a USB virtual serial link to the MCU.
 
@@ -34,15 +34,29 @@ the wheels off the ground and the mechanisms unloaded. The V1 frame mapping now 
 in `docs/field/STM32_SERIAL_PROTOCOL_V1.md` and is implemented in
 `ros2_ws/src/robogame_core/robogame_core/serial_protocol.py` (the old
 `docs/field/MCU_PROTOCOL.md` was deleted — its message IDs are obsolete, do not cite it).
+
+<!-- docs-audit: allow path-missing docs/field/MCU_PROTOCOL.md -->
+<!-- 上面这行是给 tools/docs_audit.py 看的显式豁免：本行**就是在报告**该文件已被删除。 -->
+
 It has been run on the real car once, on 2026-08-18: HELLO→ACK→READY was validated
 (`type=0x13`), which covers the handshake only — not the mechanism command payloads.
 
 ## Core tests without ROS
 
 ```bash
-PYTHONPATH=ros2_ws/src/robogame_core:ros2_ws/src/cube_perception \
+# Run from the repository root (the directory that contains ros2_ws).
+# PYTHONPATH must cover every package under ros2_ws/src, not just a couple of them.
+PYTHONPATH="$(find ros2_ws/src -mindepth 1 -maxdepth 1 -type d | paste -sd:)" \
 python3 -m unittest discover -s tests -v
 ```
+
+Listing only two packages (an earlier revision of this page used
+`PYTHONPATH=ros2_ws/src/robogame_core:ros2_ws/src/cube_perception`) does **not** work:
+`tests/test_localization.py` imports `localization.quality` and
+`tests/test_line_follow_runner.py` imports `motion_control.line_follow_runner`, so
+discovery reports those modules as errors with
+`ModuleNotFoundError: No module named 'localization'`. `tools/run_tests.py` builds the
+same all-package path automatically.
 
 ## First bring-up sequence
 

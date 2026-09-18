@@ -2,9 +2,23 @@
 
 本页是 `docs/` 的总入口。第一次接触项目时，不需要从头阅读全部文件；先按当前任务选择入口。
 
-最后更新：2026-09-17
+最后更新：2026-09-18
 
-本次修订做了什么：修正主线分支名（`integration/line-follow-t26`）；新增「现场联调（2026-09 当前）」一节，收录树莓派 SSH/网页指南、现场网页看板、现场检查清单、08-18 部署联调记录和 08-19 真车对接设计稿；把已过期的 08-13~18 计划页移入历史记录；更正测试取数说明与真车对接阻塞项（08-18 真车握手已实测、08-19 机械参数已冻结）。
+本次修订做了什么（2026-09-18 文档盘点）：新增 **[DOC_INVENTORY.md](DOC_INVENTORY.md) 文档盘点与分类**（每一份文档属于哪一类、哪些已过期、哪些根本没进版本库，由 `tools/docs_inventory.py --write` 生成）；把 `docs/` 里全部 96 份 markdown 按「当前执行 / 接口参考 / 历史留痕 / 已过期 / 教学」登记并加了机械校验（`tests/test_docs_inventory.py`）；补上此前漏登记的 [术语表](术语表.md)、[RULE_COVERAGE](RULE_COVERAGE.md)、[两人算法最终分工](team/两人算法最终分工.md)、[树莓派—STM32 机械机构通信协议](树莓派_STM32机械机构通信协议_v1.0.md)；修正测试取数（解释器不同结果不同，见「当前软件结论」）。
+
+## 先看分类，再挑入口
+
+**不确定一份文档现在还算不算数时，先查 [DOC_INVENTORY.md](DOC_INVENTORY.md)**——它回答的正是这个问题：
+
+| 类别 | 含义（现在该拿它做什么） |
+|---|---|
+| `current` | 照它做**动作**（命令、步骤、清单） |
+| `reference` | 照它做**判断**（协议字节、参数含义、接口责任、规则对照） |
+| `history` | 只用于回看与交接，**不用于执行** |
+| `archived` | 已确认过期，**不要照做**（正文有「⚠️ 已过期」横幅） |
+| `teaching` | 学习材料 |
+
+规矩：一份文档只能属于一类；标成 `current` 就必须被 `tools/docs_audit.py` 覆盖（否则「审计通过」其实是「没检查」）；标成 `archived` 必须在正文开头写清替代文档。
 
 ## Agent 交接入口（新 agent 先读这里）
 
@@ -18,9 +32,10 @@
    - 集成 / 部署 → `history/INTEGRATION_HANDOFF_2026-08-13.md`
    - **真车 / 现场（最新）** → [field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md](field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md)（08-18 树莓派部署 + 真车通信/底盘实测记录）
    - **机械对接 / 设计（最新）** → [history/SESSION_2026-08-19_SUMMARY.md](history/SESSION_2026-08-19_SUMMARY.md)（08-19 机械组当面确认与设计收敛）
-4. 本页（README.md）—— 文档导航，按需查
+4. [DOC_INVENTORY.md](DOC_INVENTORY.md) —— 文档分类：**哪份还算数、哪份已过期、哪些根本没进版本库**（先查这个，再决定要不要读某份文档）
+5. 本页（README.md）—— 文档导航，按需查
 
-**完成后**：更新 [TODO_AND_ISSUES.md](TODO_AND_ISSUES.md) 的完成证据和新问题；如有跨会话交接，再写一份新的 handoff 到对应域目录。
+**完成后**：更新 [TODO_AND_ISSUES.md](TODO_AND_ISSUES.md) 的完成证据和新问题；如有跨会话交接，再写一份新的 handoff 到对应域目录；新增或改名文档后跑 `python3 tools/docs_inventory.py`（分类没登记会直接报错）。
 
 当前主线分支：`integration/line-follow-t26`。（`integration/robogame-t26` 已是它的祖先，2026-09-17 用 `git merge-base --is-ancestor origin/integration/robogame-t26 origin/integration/line-follow-t26` 验证退出码为 0。）
 
@@ -41,6 +56,9 @@
 | 目的 | 文档 | 使用方式 |
 |---|---|---|
 | 确认当前进度、阻塞项和下一步 | [TODO_AND_ISSUES.md](TODO_AND_ISSUES.md) | 每次开发结束更新完成证据和新问题 |
+| 确认某份文档现在还算不算数 | [DOC_INVENTORY.md](DOC_INVENTORY.md) | 分类由 `tools/docs_inventory.py` 生成，不要手改 |
+| 查一个名词/参数/话题是什么意思 | [术语表.md](术语表.md) | 按**符号名**（函数、参数、话题）查，不要按行号（行号会随重构漂移） |
+| 确认「规则里有没有漏掉某条」 | [RULE_COVERAGE.md](RULE_COVERAGE.md) | 每轮复审的前置：先过矩阵，再走读代码 |
 | 复习开发中学到的知识 | [LEARNING_LOG.md](LEARNING_LOG.md) | 面向编程基础较少的同学持续追加 |
 | 对照工程底线自检 | [ENGINEERING_DISCIPLINE.md](ENGINEERING_DISCIPLINE.md) | 收工时按完成标准（DoD）自检，区分「已验证 / 未验证」 |
 
@@ -101,10 +119,12 @@
 - 主线 `integration/line-follow-t26`（08-18 已 cherry-pick 并入第二位同学 XuLingfeng 的 `feature/line_follow`，当日 HEAD `b2f7557`）；`integration/robogame-t26` 已是它的祖先，不再分叉。
 - 软件模拟闭环、取消、四种放置终态已经完成。
 - 测试数量**不在文档里写死**（每轮都在变：08-13 快照的 `258`、阶段 A 的 `399+` 都已过期；08-18 树莓派实车记录为 `499`，到 2026-09-17 又已超出）。现场取数命令：`D:\python.exe -B tools\run_tests.py`（DSH 沙箱适配的 unittest 包装器，**以输出的 `Ran N tests` 为准**）；只数测试函数定义可用 `python -c "import pathlib,re;print(sum(len(re.findall(r'def test_',p.read_text(encoding='utf-8'))) for p in pathlib.Path('tests').rglob('*.py')))"`。两个口径定义不同，**数字不相等是正常的，不要互相印证**。
-  ⚠️ **解释器不同结果就不同**（2026-09-17 实测）：本机 PATH 上的 `python` 是 3.11、**没装 cv2** → `Ran 1108 tests`、`errors=5`（3 个 `import cv2` 失败 + 2 个 `field_console` 子进程建管道被沙箱拒绝 WinError 5）；`D:\python.exe` 是 3.14、**有 cv2** → `Ran 1136 tests`、只剩那 2 个沙箱 error。**这 5 个/2 个 error 都是本机环境造成，不代表代码结论**；权威全量仍需在 Ubuntu / 树莓派上跑。所以引用数字时**必须同时写明用的是哪个解释器**，别把不同解释器的数当同一个指标。Windows 上需 rclpy 的行为测试会 skip，Ubuntu/Pi 上全量运行。测试数量每轮都在变，**引用前必须自己重跑上面两条命令**。
+  ⚠️ **解释器不同结果就不同**（**2026-09-18 重新实测，含本轮新增的 25 项文档盘点测试**）：本机 PATH 上的 `python` 是 3.11、**没装 cv2** → `Ran 1400 tests`、`errors=5`（3 个 `import cv2` 失败 + 2 个 `field_console` 子进程建管道被沙箱拒绝 WinError 5）、`skipped=68`；`D:\python.exe` 是 3.14、**有 cv2** → `Ran 1427 tests`、只剩那 2 个沙箱 error、`skipped=75`。**这 5 个/2 个 error 都是本机环境造成，不代表代码结论**（2026-09-17 记的是同一现象、当时的数字是 1108/1136——数字本身又会过期，别抄）；权威全量仍需在 Ubuntu / 树莓派上跑。所以引用数字时**必须同时写明用的是哪个解释器与日期**，别把不同解释器的数当同一个指标。Windows 上需 rclpy 的行为测试会 skip，Ubuntu/Pi 上全量运行。测试数量每轮都在变，**引用前必须自己重跑上面两条命令**。
+- 巡线链路已入库并接入路线：`motion_control/line_follow_node.py`（节点名 `line_follow_controller`，订阅 `/line_sensor` + `/mission/active_source`，发布 `/line_follow/status`）、纯算法 `robogame_core/line_follow.py`、路线段 `mission_route.py` 的 `SegmentRole.LINE → SegmentKind.LINE_FOLLOW`、任务层订阅 `/line_follow/status`（`mission_manager/node.py:105`）、0x14 遥测上下位机两侧编解码（`serial_protocol.py:18,29,255-270`）。**仍属现场项**：真车上 `/line_sensor` 的发布者要从 mock 切到 `robot_bridge` 的 0x14 解码结果（`line_follow_node.py:14`）。
 - V1 协议文档与上位机编解码已实现并随 `integration/line-follow-t26` 合入主线（编码器在 `ros2_ws/src/robogame_core/robogame_core/serial_protocol.py`，测试在 `tests/test_serial_protocol.py`）；08-18 真车实测 STATUS 解码成功（`detail="decoded MCU V1 STATUS"`，50Hz 稳定）。
 - 真实 STM32 握手已实测通过：HELLO→ACK→READY 正常（`validated type=0x13`），串口设备 `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_307A39653433-if00` 与 `robot_field.yaml` 一致；架空底盘的前进/后退/原地转方向已验证。早先 `/dev/ttyUSB0` 收到 `b'hello'` 的回环只证明 USB 转串口基础收发，该结论已被本项取代。
-- 树莓派当前部署：GitHub clone `integration/line-follow-t26` 到 `~/robogame`，`rosdep` 装齐依赖 + `colcon build` 9 包成功，树莓派单测 `499 tests OK（skipped=54）`，与 Windows/Ubuntu 一致。08-18 之后的新改动尚未重新部署。
+- 树莓派当前部署：GitHub clone `integration/line-follow-t26` 到 `~/robogame`（**2026-09-18 注**：现场文档多写 `~/robogame_algorithm`，两处不一致；以树莓派上实际 clone 路径为准，现场 `ls ~` 确认一次），`rosdep` 装齐依赖 + `colcon build` 9 包成功，树莓派单测 `499 tests OK（skipped=54）`（08-18 当日快照）。08-18 之后的新改动尚未重新部署。
 - 真车对接阻塞项已收敛（08-19 与机械组当面确认后）。**已解除**：机械几何参数冻结（轮径 128mm / 减速比 1:36 / 轴距 475mm / 轮距 465mm / 方块 100±5mm EVA）；动作合同确认（GRAB/RELEASE 是开关式命令、软件不下发开合量；真车禁用 LIFT 改单层地面放置；抓取期间底盘锁死；底盘运动期间机构不动或收回；禁发横移 VY）；逐字节载荷由 [STM32_SERIAL_PROTOCOL_V1.md](field/STM32_SERIAL_PROTOCOL_V1.md) 承载，STATUS/HELLO/ACK/READY 已在真车验证。**仍开放**：编码器 PPR、方块质量、肩/腕角度映射、各动作耗时、安全收回姿态，以及**机械臂自动指令通道（arm.c）未就绪**——臂动作的前提。详见 [真车对接设计稿_2026-08-19.md](field/真车对接设计稿_2026-08-19.md)。
 - field 无硬件模式保持通信不可信、拒绝机构动作并门控速度命令。
+- ⚠️ **「禁发横移 VY」只是硬件侧结论，软件侧没有执行**（2026-09-18 复核）：`navigation.py` 仍按 `ky: 1.2 / max_vy: 0.30`（`robot.yaml:32,38`）下发 `/cmd_vel.linear.y`，路线里也有侧移段（`mission_route.py` S11/S14、`work_sequence.py` 0.15/0.11 m），`cmd_vel_arbiter.py` 不滤 vy。上车前要么把 vy 钳到 0、要么逐段确认横移行为，**当前两者都没做**。
 - 真实闭环不能用模拟 PASS 代替，必须等 MCU 机构载荷（arm.c 自动指令通道）、相机安装和现场数据。

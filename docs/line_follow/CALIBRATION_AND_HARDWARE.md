@@ -2,9 +2,9 @@
 
 ## 硬件确认状态（2026-08-17 原始记录，2026-09-17 修正）
 
-> **2026-09-17 更正（现行结论，优先于下表）**：八路灰度模块**不是 ADC 直读**。工程已改为 **UART7 串口模块方案**——下位机 `line_sensor.c` 用 UART7（PE8=TX / PE7=RX，115200）发 `$0,1,1#` 使能模块，解析 `$A,x1:4096,...#`（12bit 模拟值 0~4095）与 `$D,...#`（数字 0/1）帧（取证：`docs/TODO_AND_ISSUES.md:54`、`:67-68`）。因此下表「ADC 通道分配」「通信方式未知」两条旧结论已被取代；`stm32f4xx_hal_conf.h:41` 的 `HAL_ADC_MODULE_ENABLED` 确实仍被注释，但那与巡线模块无关，不要再据此去配 ADC 通道。
-> 上送帧格式见 `docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT_2026-08-19.md` §1–§2（0x14 LINE_TELEMETRY，21 字节，50 Hz，8 路 12bit 原始值）。该文档正文仍自称「待电控确认的草案」，而固件上送与上位机解码实际已实现（`docs/TODO_AND_ISSUES.md:58`、`:69`）——**字节布局仍缺书面冻结**。
-> 现在真正**待电控确认**的只剩：模块是否装车、供电与接口电平、实际回传频率、模块型号（`docs/TODO_AND_ISSUES.md:54`）。下表保留 2026-08-17 原始状态仅作历史记录。
+> **2026-09-17 更正（现行结论，优先于下表）**：八路灰度模块**不是 ADC 直读**。工程已改为 **UART7 串口模块方案**——下位机 `line_sensor.c` 用 UART7（PE8=TX / PE7=RX，115200）发 `$0,1,1#` 使能模块，解析 `$A,x1:4096,...#`（12bit 模拟值 0~4095）与 `$D,...#`（数字 0/1）帧（取证：`docs/TODO_AND_ISSUES.md`「巡线归属与待办（2026-08-17）」一节里含 `UART7` 与「下位机只做八路灰度采集上送」的两条——**行号会漂移，请按键名/关键词定位，不要按行号**）。因此下表「ADC 通道分配」「通信方式未知」两条旧结论已被取代；`stm32f4xx_hal_conf.h:41` 的 `HAL_ADC_MODULE_ENABLED` 确实仍被注释，但那与巡线模块无关，不要再据此去配 ADC 通道。
+> 上送帧格式见 `docs/field/LINE_TELEMETRY_0x14_INTERFACE_ALIGNMENT_2026-08-19.md` §1–§2（0x14 LINE_TELEMETRY，21 字节，50 Hz，8 路 12bit 原始值）。该文档正文仍自称「待电控确认的草案」，而固件上送与上位机解码实际已实现（`docs/TODO_AND_ISSUES.md` 里标题含 `0x14` 的那条待办；以关键词 `0x14`、`已实现` 定位，不要按行号）——**字节布局仍缺书面冻结**。
+> 现在真正**待电控确认**的只剩：模块是否装车、供电与接口电平、实际回传频率、模块型号（`docs/TODO_AND_ISSUES.md` 同节；以关键词 `仍待电控确认` 定位）。下表保留 2026-08-17 原始状态仅作历史记录。
 
 ### 未确认项
 
@@ -14,7 +14,7 @@
 | 是否装车 | 未确认 | 需电控确认物理安装状态 |
 | 接口电平 | 未确认 | 需电控确认是 3.3V 还是 5V |
 | ~~ADC 通道~~ | **已作废（2026-09-17）** | 巡线模块是 UART7 串口模块，不占 ADC 通道；`stm32f4xx_hal_conf.h:41` 的 `HAL_ADC_MODULE_ENABLED` 仍被注释禁用，但与巡线模块无关 |
-| 通信方式 | ✅ **已确认：UART7 串口（2026-09-17）** | 非 ADC / I2C / SPI，而是 UART7（PE8=TX / PE7=RX，115200）读模块回传帧；取证 `docs/TODO_AND_ISSUES.md:67` |
+| 通信方式 | ✅ **已确认：UART7 串口（2026-09-17）** | 非 ADC / I2C / SPI，而是 UART7（PE8=TX / PE7=RX，115200）读模块回传帧；取证：`docs/TODO_AND_ISSUES.md`「巡线归属与待办（2026-08-17）」一节里含 `UART7` 的那条——**行号会漂移，请按键名/关键词定位，不要按行号** |
 | 采样频率 | 未确认 | 未知八路模块的回传频率 |
 
 ### 结论
@@ -42,7 +42,7 @@
 
 ### 步骤 1：采集原始值
 
-将传感器对准黑线和白底，分别记录 8 路的原始 ADC 值：
+将传感器对准黑线和白底，分别记录 8 路的原始值（0x14 上送的 UART 12bit 模拟量，0～4095；**不是** ADC 直读，见本页顶部 2026-09-17 更正）：
 
 ```
 黑线：通道0=___ 通道1=___ 通道2=___ 通道3=___ 通道4=___ 通道5=___ 通道6=___ 通道7=___
@@ -78,7 +78,7 @@ normalized_i = (raw_i - white_min_i) / (black_max_i - white_min_i)
 
 ### 步骤 5：调参
 
-1. 初始参数：`kp=1.0, kd=0.1, vx_base=0.1`
+1. 初始参数：`kp=1.0, kd=0.1, vx_base=0.2`（与代码默认值一致：`robogame_core/line_follow.py:155`、`robot.yaml:78`；旧版本这里写的 `vx_base=0.1` 已不是默认值）
 2. 低速贴线运行，观察是否震荡
 3. 震荡则降低 kp 或增大 kd
 4. 响应迟钝则增大 kp
@@ -86,10 +86,10 @@ normalized_i = (raw_i - white_min_i) / (black_max_i - white_min_i)
 
 ### 步骤 6：记录标定结果
 
-将最终参数写入 `robot.yaml`：
+将最终参数写入 `robot.yaml` 的 **`line_follow_controller`** 段（段名必须与节点名一致：节点在 `motion_control/line_follow_node.py:61` 注册为 `line_follow_controller`，`robot.yaml:67` 用的也是这个段名）：
 
 ```yaml
-line_follow:
+line_follow_controller:
   ros__parameters:
     kp: ___
     kd: ___
@@ -99,6 +99,8 @@ line_follow:
     edge_threshold: 0.3
     intersection_threshold: 6
 ```
+
+⚠️ 写成旧的段名 `line_follow:` 不会报任何错（YAML 合法、`ros2 run` 也能起），但节点读不到这一节，参数会**静默不生效**——现场表现为"改了 kp 车却一点没变"。改完用 `ros2 param get /line_follow_controller kp` 核对实际生效值。
 
 同时在本文档记录标定日期、环境光照条件和测试结果。
 

@@ -21,10 +21,11 @@ ROS2服务 → 安全检查 → 0x20命令 → ACK → 0x21状态 → ROS2结果
 | `/mechanism/home` | `ExecuteMechanism` | `HOME` |
 | `/mechanism/stop` | `ExecuteMechanism` | `STOP` |
 | `/lift/set_height` | `SetLiftHeight` | 绝对高度，单位米 |
-| `/arm/set_joint` | `SetArmJoint` | 机械臂单关节绝对角度，单位度（见 §9） |
+| `/arm/set_joint` | `SetArmJoint` | 机械臂单关节绝对角度，单位度（见 §8） |
 | `/chassis/stop` | `ExecuteMechanism` | 全局底盘急停，不等同于机构STOP |
+| `/chassis/retreat` | `ExecuteMechanism` | `RETREAT`，**mock 专用**：真实模式对未知命令回 `9`（真实固件没有 RETREAT，撤退由任务层走 `/motion/goal`） |
 
-订阅 `/cmd_vel`，发布 `/wheel_odom`、`/imu/data` 和 `/robot/status`。
+订阅 `/cmd_vel`，发布 `/wheel_odom`、`/imu/data`、`/line_sensor` 和 `/robot/status`。
 
 ## 3. 机械传输参数
 
@@ -124,7 +125,9 @@ ros2 service call /arm/set_joint robogame_interfaces/srv/SetArmJoint \
 | `8` | 活动命令被机构STOP取消 |
 | `9` | 不支持的真实机械命令 |
 | `42` | 示例MCU执行错误；实际MCU终态错误码原样返回 |
+| `1001` | mock 模式收到未知机械命令（`node.py:781`） |
 | `2002` | 整条机械命令超过业务期限 |
+| `3001` | 真实模式 `/chassis/stop` 的零速帧或急停帧没发全（`node.py:744`） |
 | `9001` | 急停或全局STOP中断命令 |
 | `9003` | 串口不可用、写失败或协议响应超时 |
 | `9004` | MCU `boot_id`变化，旧会话命令作废 |
@@ -161,7 +164,10 @@ ros2 service call /arm/set_joint robogame_interfaces/srv/SetArmJoint \
 - **固件侧已实现该通道**（2026-08-19）：0x20 的 GRAB/RELEASE/STOP/HOME/ARM_SET 会真正
   驱动舵机，`LIFT_ABS` 明确回 `3010`。约定与错误码见
   `docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md` §7。
-- **`cube_present` 恒为 0**：本车没有方块传感器。因此
+- **`cube_present` 不是本节点写死的 0**：真实模式取 MCU STATUS 的
+  `STATUS_CUBE_PRESENT` 位，mock 模式取模拟状态（`node.py:1270-1274`）。
+  “本车到底有没有方块传感器、固件是否置位”是**固件/硬件事实**，要用现场
+  `STATUS` 观测确认，不能从本节点代码推断。若固件始终不置位该位，则
   `grab_verification_policy` 真车只能用 `service_only`（`cube_present` /
   `gripper_and_cube` 永远无法通过）；放置可用 `gripper_open_and_cube_absent`
   （靠固件 `STATUS_GRIPPER_CLOSED`，而那是命令推算值、不是测量值）。

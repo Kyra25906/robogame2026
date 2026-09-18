@@ -14,6 +14,8 @@
 > - **2026-08-19 冻结参数**（问答表 O-02-1/O-02-3/O-03-2/O-03-1/M-01-1/M-01-3）：轮径 **128 mm**、减速比 **1:36**、轴距 **475 mm**、轮距 **465 mm**、方块 **100±5 mm EVA** 无倒角；机械臂 **3 DOF**（云盘/肩/腕，计划加肘 4 DOF）**无任何位置反馈**；云盘 **360°**（实际工作弧约 90°，右侧↔车尾）。
 > - **三条真车铁律**：① **没有升降** → 真车禁用 LIFT，只做**单层地面放置**；② **不能横移** → **VY 恒 0**；③ **臂纯开环、无位置反馈**（C-1）→ 完成判据只能是"时间到/超时"，成功证据只能靠**相机复核**，不能修正末端精度。**任何"验证某关节到达目标角度"式的判据在本车不可满足**，必须改写成目视/人工确认。
 > - **证据边界**：本次复核只核对仓库内文档与固件**源码**。"车上 MCU 当前烧录的固件版本"**未核实**（见下方 ✏️ 250 ms 项）；S-2 转车精度、相机视野、抓取容差窗口**均未实测**（设计稿第 7 节）。
+> - **⚠️ 2026-09-18 更正（软件侧事实，先看这条）**：上面「三条真车铁律」第②条写的"**不能横移** → **VY 恒 0**"，前半句（硬件能力）成立，后半句（软件不变式）**不成立**——代码今天就会下发 vy，不要把它当成已实现的不变式。事实与证据见下方 Week 1「正 `vx`/`vy`/`wz` 方向」判据里的 ✏️ 2026-09-18 更正。
+> - **引用纪律（2026-09-18）**：本文中的 `文件:行号` 交叉引用会随重构漂移，引用前按符号名核对。
 
 ## Week 1 gate
 
@@ -23,13 +25,15 @@
   - ⚠️ 判据保留，但**当前已知会失败，且原因不在 parser**：固件 ODOM/STATUS 共用 8 深 USB TX 队列、队满静默丢帧，长跑会出现 `rejected ODOM` 与 `/pose` 断流（根因见 `docs/field/ODOM_DROP_ROOT_CAUSE_2026-08-19.md:16-29,60-62`）。
   - 替代判据：记录 `error_code`（4001）与 `rejected ODOM` 条数，把"软件 parser 失败"与"固件丢帧"分开——两者都表现为串口异常，但只有前者是我们的 bug。
 - [ ] ~~MCU stops within 150 ms after command loss.~~ ✏️ **已改写：MCU 在命令丢失后 ≤250 ms 内停车。**
-  - 依据：固件看门狗已从 150 ms **放宽到 250 ms**——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，注释 `:112`"放宽到 250ms 为 USB 调度 / 树莓派负载留余量（治标）"；电控 2026-08-18 晚已同意（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:104`）。
+  - 依据：固件看门狗已从 150 ms **放宽到 250 ms**——`Four_Motor_PID_Test_1/Four_Motor_PID_Test/Core/Src/rpi_protocol.c:116` `#define RPI_WATCHDOG_TIMEOUT_MS 250U`，注释 `:112`"放宽到 250ms 为 USB 调度 / 树莓派负载留余量（治标）"；电控 2026-08-18 晚已同意（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:116`）。
   - ⚠️ **未核实**：真车 MCU 当前烧录的是否就是这份 250 ms 固件。现场按"实测值记录、≤250 ms 通过"执行，不要预设 150 ms。
-- [ ] ~~Positive `vx`, `vy`, and `wz` match the agreed coordinate system.~~ ✏️ **已改写：正 `vx`、正 `wz` 方向正确，且 `vy` 恒为 0。**
-  - 依据：真车**没有可用的横移**（左右平移偏差过大）→ 软件**禁止输出横移 VY（恒 0）**，导航与视觉对准从"横移纠偏"改为"**转向对准 + 直线接近**"（问答表 C-6 `给机械组现场问答表_2026-08-19.md:40`；设计稿 `真车对接设计稿_2026-08-19.md:25,113`）。
+- [ ] ~~Positive `vx`, `vy`, and `wz` match the agreed coordinate system.~~ ✏️ **已改写：正 `vx`、正 `wz` 方向正确，且 `vy` 恒为 0。**（⚠️ 2026-09-18 更正：后半句**不成立**——软件并没有让 `vy` 恒 0，见下方更正段）
+  - 依据：真车**没有可用的横移**（左右平移偏差过大）→ 软件**禁止输出横移 VY（恒 0）**，导航与视觉对准从"横移纠偏"改为"**转向对准 + 直线接近**"（问答表 C-6 `给机械组现场问答表_2026-08-19.md:40`；设计稿 `真车对接设计稿_2026-08-19.md:25,113`）。（⚠️ 2026-09-18：这是 C-6 的**设计意图**，代码里**并未**实现，见下方更正段）
   - 历史上只证明过**架空**时 vy 四轮转向组合正确（`RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:24`）——**架空方向正确 ≠ 落地可用**，不得据此下发 vy。
-  - ⚠️ **"VY 恒 0"目前靠约定与仲裁器忽略，不是靠校验拦住的（2026-09-17 复核）**：`robot.yaml` 现在写的是 `max_vy: 0.30`（**非 0**），而 `robogame_core/config_validation.py:64` 只把 `max_vy` 列为"必须存在的键"，**没有"必须为 0"的约束**。实际不出横移是因为 ALIGN 的横向命令被仲裁器**刻意忽略**（`tests/test_cmd_vel_arbiter.py:93` 断言 `command.vy == 0.0`），且 `grasp_alignment` 明确不提供横向接近轴。
-    → **行为上是对的，但缺一道结构性防线**：若日后把导航/对准的 `ky` 调非零、或新增横向位移段，`max_vy: 0.30` 会**放行**，而真车横移恰恰是"偏差过大不可用"的那一项。建议把 `max_vy` 改成 `0.0`，或在 `config_validation` 加一条"真车配置不得为非零横移"的检查。**在加上之前，现场不要假设"vx/wz 以外的横移会被自动拦下"。**
+  - ⚠️ **"VY 恒 0"目前靠约定与仲裁器忽略，不是靠校验拦住的（2026-09-17 复核）**：`robot.yaml` 现在写的是 `max_vy: 0.30`（**非 0**），而 `robogame_core/config_validation.py:64` 只把 `max_vy` 列为"必须存在的键"，**没有"必须为 0"的约束**。~~实际不出横移是因为 ALIGN 的横向命令被仲裁器**刻意忽略**（`tests/test_cmd_vel_arbiter.py:93` 断言 `command.vy == 0.0`），且 `grasp_alignment` 明确不提供横向接近轴。~~
+    - ~~→ **行为上是对的，但缺一道结构性防线**：若日后把导航/对准的 `ky` 调非零、或新增横向位移段，`max_vy: 0.30` 会**放行**，而真车横移恰恰是"偏差过大不可用"的那一项。~~
+    - ✏️ **2026-09-18 更正（代码事实，上面划线的两句作废）**：**代码今天就会下发 vy**——`navigation.py:135`（`clamp(ky*ey, max_vy*scale)`，ey 是车体系横向误差）→ `motion_control/node.py:231` 把 `command.vy` 写进 `/cmd_vel.linear.y`；路线里已经有横向位移段（`mission_route.py:952-972` S11「0.32m 侧向平移」、`:1063-1084` S14 返回段）、作业序列里也有（`work_sequence.py:43-45`：取块槽间 0.15 m、搭建同层 0.11 m）；网页手动 A/D 同样发 vy（`field_dashboard.py:788`）；`cmd_vel_arbiter.py:91` 只按来源放行、**不滤 vy**。所谓"被仲裁器刻意忽略"只对 ALIGN 那一路成立（`tests/test_cmd_vel_arbiter.py:93`），NAVIGATE（motion_controller）与网页手动驾驶的 vy 会原样放行。
+    - **结论（硬件 vs 软件）**：硬件侧已确认**横移不可用**（C-6），但软件侧**并未**屏蔽 vy，所以横移段在真车上属于**未验证且可能出错**的路径（现场按"每段都要人看着"处理）。要不要在 `robot.yaml` 或仲裁器里把 vy 钳到 0，是**待拍板的决定（当前没有做）**。
 - [ ] ~~Grab, release, lift, and stop commands return explicit results.~~ ✏️ **已改写：`GRAB` / `RELEASE` / `STOP` 返回明确结果；`LIFT` 的期望结果是失败码 `3010`。**
   - 依据：真车**没有升降装置** → 真车模式**禁用 LIFT**，任务改为**单层地面放置**，三层高度参数暂缓冻结（问答表 C-3 `给机械组现场问答表_2026-08-19.md:37`；设计稿 `真车对接设计稿_2026-08-19.md:48`；设计稿 `:114` 互锁第 4 条"LIFT 禁用"）。
   - `/lift/set_height` **期望返回 `3010`**（固件 `RPI_ERROR_MECH_NO_LIFT = 3010`：`rpi_protocol.c:217`，下发处 `:775`；`docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md:182,189` 明确"真车无升降装置 → 回 FAILED + 3010，不假装接受后超时"）。`FIELD_DASHBOARD.md:119` 把"`/lift/set_height` 应返回 `3010`"当作**通过**判据。
@@ -88,7 +92,7 @@ If any item fails, freeze the roof-tower branch and make the single-cube loop re
 - [ ] ⛔ Full roof tower succeeds 6/10.
   - 同上——整座塔 = 多层叠加，硬件前提不成立。
 - [ ] Cargo counts never advance after a failed grab or drop.
-  - ✅ **保留（软件记账，与硬件无关）**：`Cargo.can_add`（`models.py:66`，total<3 + purple<1）+ mission PLACE 记账（`RULE_COVERAGE.md:50`）。
+  - ✅ **保留（软件记账，与硬件无关）**：`Cargo.can_add`（`models.py:76`，total<3 + purple<1）+ mission PLACE 记账（`RULE_COVERAGE.md:50`）。
   - 补充：真车**没有方块传感器、掉块检测仍未实现**（`RULE_COVERAGE.md:52` G3.1），所以"抓取/放置失败"的判定只能来自服务结果 + 超时 + 相机复核——计数回滚逻辑正确，但**输入来源受限**，现场须靠人工核对次数。
 
 ---
@@ -103,13 +107,13 @@ If any item fails, freeze the roof-tower branch and make the single-cube loop re
 | `docs/field/FIELD_SESSION_CHECKLIST.md` | ✅ 操作类清单（上车前/中/后），**与 08-19 事实不冲突，可照做** | **唯一过期点**：`:73` E3 计划写"直行 1m/**横移 1m**/转 360° ×10"——**横移已不可用**（C-6）→ 改为"直行 1m + 原地转 360°"（横移项删除） |
 | `docs/field/FIELD_DAY1_EXECUTION_ORDER.md` | ❌ **已过期（最后更新 2026-08-08），仍自称"现场第一天执行清单"** | 真车已于 08-18/08-19 完成对接，**不要按它执行第一天**。与 08-19 确认冲突处：要求测**升降有效行程 / 三层放置高度**（`:47-51,73,80`，C-3 无升降）、要求测**夹爪张开与闭合毫米数**（`:45-46`，C-2 已确认软件不需要这些数）、要求测**左移/右移方向并落地使用**（`:264-278,303-304`，C-6 已确认横移不可用）、称失联停车为 **300 ms**（`:312`，固件实际 250 ms）。仍有效的部分：通信检查、STOP 优先、拔 USB 失联停车、相机采图、数据打包（这些与 `FIELD_SESSION_CHECKLIST.md` 重叠，以后者为准）。 |
 | `docs/field/FAULT_INJECTION_TEST_CARD.md` | ⚠️ 可用，但两处需修正 | 卡片一（状态过期）、二（服务不可用）、四（硬件急停）、六（动作超时）、七（视觉丢失）**仍有效**；**修正 ①**：多处把"升降"当作存在的机构（`:89,148,187,267,287`），真车无升降（LIFT→`3010`）；**修正 ②**：`:76` 写"电控的 150ms 失联停车"应为 **250 ms**；卡片三"真车触发"建议的"请求超出机械极限的高度"应改为"下发 LIFT（应得 3010）"；卡片五的 `mechanism_fault` 真车**恒 0**，只能注入验证，不能指望真车自然出现。 |
-| `docs/guides/GETTING_STARTED.md:50`（测试 lift 服务）、`README.md:63`（升降零点与三层高度）、`docs/field/TIME_BUDGET.csv`（LIFT 第 2/3 层行） | ⚠️ 过期表述 | 真车无升降。模拟环境里的 roof-tower 演示（`GETTING_STARTED.md:19`）**不受影响**——那是无硬件模拟，不是真车目标。 |
+| `docs/guides/GETTING_STARTED.md:59`（测试 lift 服务）、`README.md:66`（升降零点与三层高度）、`docs/field/TIME_BUDGET.csv`（LIFT 第 2/3 层行） | ⚠️ 过期表述 | 真车无升降。模拟环境里的 roof-tower 演示（`GETTING_STARTED.md:19`）**不受影响**——那是无硬件模拟，不是真车目标。 |
 
 **一个必须点明的矛盾**（✅ **2026-09-17 当日已收口**）：三份文档曾对"失联停车时间"给出**三个不同的数**——本文件原写 150 ms、`FIELD_DAY1_EXECUTION_ORDER.md` 写 300 ms、`FAULT_INJECTION_TEST_CARD.md:76` 写 150 ms。
 
 - 统一为 **250 ms**，依据固件源码 `rpi_protocol.c:116`（现场仍须实测确认车上烧录版本）。
 - 三处来源均已就地更正（`FAULT_INJECTION_TEST_CARD.md:76`、本文件 150 ms 判据、`FIELD_DAY1` 的 300 ms）。
-- **300 ms 不是 MCU 看门狗，而是上位机网页手动驾驶的失联窗口**（`tools/field_dashboard_core.py:18` `DRIVE_STALE_S = 0.30` → `field_dashboard.py:1141` 补发零速）——`docs/guides/` 里出现的 300 ms 属该机制，**正确、应保留**。原「电控承诺 300ms」正是把这两件事混为一谈。
+- **300 ms 不是 MCU 看门狗，而是上位机网页手动驾驶的失联窗口**（`tools/field_dashboard_core.py:18` `DRIVE_STALE_S = 0.30` → `field_dashboard.py:1150-1152` 补发零速：watchdog 判定 `manual_expired` 后调 `zero_and_release("manual heartbeat timeout")`）——`docs/guides/` 里出现的 300 ms 属该机制，**正确、应保留**。原「电控承诺 300ms」正是把这两件事混为一谈。
 - 另有第四个值 **100–200 ms**（`docs/team/` 两份文件）与源码不符，且无实测记录，已更正。
 
 ## 2026-09-17 复核：本次**未能验证**的项（不得当作已确认）
