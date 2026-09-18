@@ -150,6 +150,62 @@ tools/field_dashboard_web/index.html      # 6 个 <script> 引用之一（/arm_p
   真车永远无法通过；真车抓取只能用 `service_only`。
 - 机构服务本身可用，不代表固件收到了、也不代表机械臂动了。
 
+## 真伪与实例核查（防「假数据」与「双实例」）
+
+页面底部「真伪与实例核查」卡片由 `field_dashboard_web/runtime_guard.js` 自己插入 DOM，
+同步到树莓派需要这几个文件**一起**更新：
+
+```text
+tools/field_runtime_guard.py             # 判据与措辞（纯逻辑，可离线单测）
+tools/field_dashboard.py                 # 发布者地图 + 进程表扫描 + 快照字段 + 启动拦截
+tools/field_dashboard_web/runtime_guard.js
+tools/field_dashboard_web/app.js          # refresh 里多一行 renderRuntimeGuard(s)
+tools/field_dashboard_web/index.html      # 多一行 <script src="/runtime_guard.js">
+```
+
+它解决两个「看起来一切正常」型的误判：
+
+1. **真假**：`robot_bridge` 的 `mock_mode` 默认是 `True`（`robot_bridge/node.py:124`）。
+   只带共用层启动就是假数据——安全总览照样显示「通信正常」，而车上根本没接固件。
+   判据是 `/robot/status` 的 `detail` 字段，分类函数与 launch 里的 `runtime_source_guard`
+   **是同一个**（`robogame_core/runtime_source.py:classify_status_detail`）。
+2. **双实例**：控制台只知道自己 spawn 的 PID，对「有人先在 SSH 里起了
+   `hardware.launch.py`」无感。起了第二个 bridge 的后果不是一句报错，而是
+   `runtime_source_guard` 关掉整个 launch，或两个进程抢同一个串口。判据两路：
+   关键话题的发布者数量（与 source guard 同一份 `CRITICAL_TOPICS`）+ 进程表里
+   「匹配到已知节点、但不属于本控制台」的进程。
+
+### 三种状态，颜色有纪律
+
+| 状态 | 颜色 | 含义 |
+|---|---|---|
+| 真车 + 关键话题各一个发布者 | 绿 | 可以继续 |
+| mock / 串口在但没解码到状态 / 没收到状态 / 别的节点有外部实例 | 灰 + ⚠️ | 需要人注意，但**允许继续**（现场要能手动联调） |
+| 关键话题两个发布者、发布者不是 `robot_bridge`、mock 与真车混在一起 | 红 | 真的被拦住 |
+
+红色只留给「起了就是第二个实例」——把警告也画成红色，人会开始忽略红色。
+
+### 拦截规则（只拦这一种）
+
+点「启动」时后端先核查，命中就拒绝并给出 PID 与命令行：
+
+- 你要启动的节点已经有**外部实例**在跑（整栈在 SSH 里跑着时的典型情况）；
+- 关键话题已经有 >1 个发布者（再起就是第三个）；
+- `/line_sensor` 有两个发布者时，「启动巡线」被拦（巡线节点分不清哪一帧是真的）。
+
+被拦的按钮会置灰并把理由放在 `title` 里，同时「启动底盘链路」整组一起拦下——
+半启动状态比不启动更难排查。**其余情况一律不拦**：mock 只警告，因为手动联调本来
+就可能跑 mock。
+
+### 它**不能**证明什么
+
+- 进程表里没有第二个实例 ≠ 串口没被占用（那要看 `lsof`）；Windows 上没有 `ps -eo`，
+  卡片会明说「进程表不可用——**不能**据此认为没有第二个实例」，而不是显示一片正常；
+- `detail` 说「真车」只代表**这份运行中的 bridge 解到了 MCU 的状态帧**，
+  不代表车上烧的是仓库里这份固件（固件版本/构建哈希仍未上报）；
+- 它不阻断任何**动作**：手动接管、机构命令、定距测试都不经过这张卡片的判据，
+  仍由各自的 `action_blockers` 门控。
+
 ## 证据边界
 
 网页中的“原因定位”来自明确状态字段和时间阈值。进程显示运行只能证明进程尚未

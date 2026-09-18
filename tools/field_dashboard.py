@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import signal
+import subprocess
 import threading
 import time
 import uuid
@@ -25,6 +28,13 @@ try:
         DashboardState, LineCalibration, SessionArchive, SafetyStatus,
         action_blockers, clamp_drive, line_chain_health, route_payload,
     )
+    from field_runtime_guard import (
+        CRITICAL_TOPICS as RUNTIME_CRITICAL_TOPICS,
+        OPTIONAL_TOPICS as RUNTIME_OPTIONAL_TOPICS,
+        guard_report,
+        parse_process_listing,
+        start_block_reason,
+    )
     from grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
     from odom_calibration import OdomTrial, analyze_trials, trial_from_result
 except ImportError:  # 允许测试以 tools.field_dashboard 导入
@@ -34,6 +44,13 @@ except ImportError:  # 允许测试以 tools.field_dashboard 导入
         LINE_TICK_GAP_MS,
         DashboardState, LineCalibration, SessionArchive, SafetyStatus,
         action_blockers, clamp_drive, line_chain_health, route_payload,
+    )
+    from tools.field_runtime_guard import (
+        CRITICAL_TOPICS as RUNTIME_CRITICAL_TOPICS,
+        OPTIONAL_TOPICS as RUNTIME_OPTIONAL_TOPICS,
+        guard_report,
+        parse_process_listing,
+        start_block_reason,
     )
     from tools.grasp_alignment_sim import GRASP_DEFAULTS, evaluate_detection, simulate_grasp
     from tools.odom_calibration import OdomTrial, analyze_trials, trial_from_result
@@ -46,6 +63,55 @@ except ImportError:  # 允许测试以 tools.field_dashboard 导入
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = Path(__file__).with_name("field_dashboard_web")
+
+#: 网页「启动底盘链路」起的 bridge 带 robot_field.yaml（`mock_mode: false`），
+#: 所以本面板期望看到的来源是 field。若实际是 mock，说明有人改了配置或混进了
+#: 假数据——面板必须把这件事说出来，而不是继续显示「通信正常」。
+EXPECTED_RUNTIME_SOURCE = "field"
+
+#: 进程表扫描缓存时间：ps 不需要每次 HTTP 请求都跑，但也不能旧到看不出刚起的实例。
+PROCESS_SCAN_TTL_S = 1.5
+_process_scan_lock = threading.Lock()
+_process_scan_cache: tuple[float, list[dict], bool, str] | None = None
+
+
+def scan_process_list(*, force_refresh: bool = False) -> tuple[list[dict], bool, str]:
+    """读系统进程表，返回 (进程列表, 扫描是否可用, 说明)。
+
+    为什么需要它：`FieldConsole` 只记得**自己 spawn 的** PID，对「有人先在 SSH 里
+    起了 `hardware.launch.py`」一无所知。没有这一步，网页会心安理得地起第二个
+    `robot_bridge`，而后果是 `runtime_source_guard` 关掉整个 launch。
+
+    为什么要 pgid：控制台启动的是 `sh -c "ros2 run ..."`，节点是它的子进程——
+    只比 PID 会把「自己刚起的节点」误报成外部实例。归属按**进程组**判。
+
+    Windows 上没有 `ps -eo`，此时返回「扫描不可用」而不是空列表：那是**如实说
+    不知道**，与「确认没有第二个实例」是两件事。
+    """
+    global _process_scan_cache
+    now = time.monotonic()
+    with _process_scan_lock:
+        if (not force_refresh and _process_scan_cache is not None
+                and now - _process_scan_cache[0] < PROCESS_SCAN_TTL_S):
+            _, processes, available, note = _process_scan_cache
+            return list(processes), available, note
+        if os.name == "nt":
+            payload: tuple[list[dict], bool, str] = (
+                [], False, "本机是 Windows：没有 ps -eo，看不到网页之外的 ROS 进程",
+            )
+        else:
+            try:
+                completed = subprocess.run(
+                    ["ps", "-eo", "pid=,pgid=,args="],
+                    capture_output=True, text=True, timeout=2.0,
+                )
+                payload = (
+                    parse_process_listing(completed.stdout, with_pgid=True), True, "",
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                payload = ([], False, f"进程表扫描失败：{exc}")
+        _process_scan_cache = (now, *payload)
+    return list(payload[0]), payload[1], payload[2]
 
 
 class EventHub:
@@ -145,6 +211,8 @@ class RosFacade:
         if SetArmJoint is not None:
             self.clients["arm_set_joint"] = self.node.create_client(SetArmJoint, "/arm/set_joint")
         self._times: dict[str, list[float]] = {}
+        # 真伪核查用的 /robot/status.detail 样本（最近 200 条够判定「有没有混来源」）。
+        self._status_details: deque[str] = deque(maxlen=200)
         # 巡线链路统计：帧到达时刻、mcu_tick 连续性异常计数、无效帧累计。
         self._line_samples: list[float] = []
         self._line_last_tick: int | None = None
@@ -156,6 +224,12 @@ class RosFacade:
         self.thread.start()
 
     def _status(self, msg) -> None:
+        # 真伪证据只留最近若干条：`detail` 是「真车 / mock / 串口在但没状态」的
+        # 唯一标记（见 robogame_core.runtime_source.classify_status_detail）。
+        # 惰性初始化：既有测试会用 RosFacade.__new__ 绕过构造只测某个回调。
+        if not hasattr(self, "_status_details"):
+            self._status_details = deque(maxlen=200)
+        self._status_details.append(str(msg.detail))
         self.controller.update_safety(SafetyStatus(
             received_at=time.monotonic(), communication_ok=bool(msg.communication_ok),
             emergency_stop=bool(msg.emergency_stop), physical_start=bool(msg.physical_start),
@@ -342,6 +416,23 @@ class RosFacade:
     def publishers(self) -> list[str]:
         infos = self.node.get_publishers_info_by_topic("/cmd_vel")
         return sorted({info.node_name for info in infos if info.node_name != self.node.get_name()})
+
+    def publisher_map(self) -> dict[str, list[str]]:
+        """关键话题 + 巡线/速度话题的发布者名单（真伪与双实例核查的观测之一）。
+
+        关键话题清单来自 `robogame_core.runtime_source.CRITICAL_TOPICS`——
+        与 launch 里的 `runtime_source_guard` **同一份清单**。两处各写一份，
+        就会出现「launch 判失败、网页判正常」这种最难查的矛盾。
+        """
+        topics = tuple(RUNTIME_CRITICAL_TOPICS) + tuple(RUNTIME_OPTIONAL_TOPICS)
+        return {
+            topic: sorted({info.node_name for info in self.node.get_publishers_info_by_topic(topic)})
+            for topic in topics
+        }
+
+    def status_details(self) -> list[str]:
+        """最近的 `/robot/status.detail` 样本（真伪判据的原始证据）。"""
+        return list(getattr(self, "_status_details", []))
 
     def drive(self, vx: float, vy: float, wz: float) -> None:
         msg = self.Twist()
@@ -598,7 +689,69 @@ class DashboardController:
         result["line_calibration"] = self.line_calibration_snapshot()
         # B1：全流程路线只读摘要（静态数据，缓存；自检不过时 available=false + 原因）
         result["route"] = route_payload()
+        # 真伪与实例核查：这是真车还是 mock？有没有第二个 bridge？
+        result["runtime_check"] = self.runtime_check()
         return result
+
+    def owned_process_groups(self) -> tuple[list[int], list[int]]:
+        """本控制台启动的 PID 与**进程组**。
+
+        为什么要进程组：控制台起的是 `sh -c "ros2 run ..."`，真节点是它的子进程，
+        PID 不同、进程组相同。只比 PID 会把「自己刚起的节点」当成外部实例误报。
+
+        取不到 `console.snapshot()` 的正常返回（类型不对/失败）时按「没有自己起的
+        进程」处理：一次观测异常不该让整页状态 500——那时现场最需要的就是这个页面。
+        缺观测这件事本身会以 finding 的形式出现在核查结论里，不会被悄悄吞掉。
+        """
+        items = self.console.snapshot()
+        if not isinstance(items, (list, tuple)):
+            items = []
+        pids: list[int] = []
+        pgids: list[int] = []
+        for item in items:
+            if not isinstance(item, dict) or not item.get("running") or item.get("pid") is None:
+                continue
+            pid = int(item["pid"])
+            pids.append(pid)
+            if os.name == "nt":
+                continue
+            try:
+                pgids.append(os.getpgid(pid))
+            except OSError:
+                # 进程已退出/无权限：只留 PID 判据，不影响其余进程。
+                pass
+        return pids, pgids
+
+    def _build_runtime_check(self, processes, available: bool, note: str) -> dict:
+        """把三样观测拼成核查结论（观测由调用方提供，便于离线测试）。"""
+        pids, pgids = self.owned_process_groups()
+        topics = self.ros.publisher_map() if self.ros is not None else {}
+        details = self.ros.status_details() if self.ros is not None else []
+        # 观测缺了就当"未知"，不让整页状态因为一路观测失败而挂掉；
+        # 真正的失败会在 findings 里以 warn/block 的形式出现，不会被这里掩盖。
+        report = guard_report(
+            topic_publishers=topics if isinstance(topics, dict) else {},
+            status_details=details if isinstance(details, (list, tuple)) else [],
+            processes=processes,
+            managed_pids=pids,
+            managed_pgids=pgids,
+            expected_source=EXPECTED_RUNTIME_SOURCE,
+            process_scan_available=available,
+        )
+        report["scan_note"] = note
+        return report
+
+    def runtime_check(self, *, force_refresh: bool = False) -> dict:
+        """核查结论（同步版：HTTP 线程调用；`ps` 有 1.5 s 缓存）。"""
+        processes, available, note = scan_process_list(force_refresh=force_refresh)
+        return self._build_runtime_check(processes, available, note)
+
+    async def runtime_check_async(self, *, force_refresh: bool = True) -> dict:
+        """核查结论（事件循环里调用：把 `ps` 丢到线程，不阻塞循环）。"""
+        processes, available, note = await asyncio.to_thread(
+            scan_process_list, force_refresh=force_refresh
+        )
+        return self._build_runtime_check(processes, available, note)
 
     def line_calibration_snapshot(self) -> dict:
         """标定面板需要的全部状态：进度、判定、已推送结果、下一步提示。"""
@@ -752,6 +905,18 @@ class DashboardController:
                         self._check_control_epoch(epoch)
                         self.state.mode = "LINE"
                 self._check_control_epoch(epoch)
+                # 启动前核查：起了就是第二个实例的一律拒绝（这是本项目最贵的
+                # 一种现场事故——source guard 会因此关掉整个 launch）。
+                check = await self.runtime_check_async()
+                reason = start_block_reason(check, name)
+                if reason:
+                    self.record({"type": "control", "action": "process_start_refused",
+                                 "name": name, "reason": reason, "check": check})
+                    raise ValueError(
+                        f"拒绝启动 {name}：{reason}。"
+                        "证据在网页「真伪与实例核查」卡片（含 PID 与命令行）。"
+                        "如果那个实例确实该退出，先停它；本网页看不到的实例用 SSH 停。"
+                    )
                 await self.console.start(name)
                 if epoch != self.control_epoch:
                     await self.console.stop(name)
