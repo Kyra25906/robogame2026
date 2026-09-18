@@ -45,7 +45,11 @@ mission_manager → manipulator_client → 夹爪服务 → 机械机构
 - 机械提供**夹爪**的行程、限位、完成证据、故障判据和安全行为（真车无升降，见文首更正）。
 - `robot_bridge`负责 ROS 2 与真实串口协议之间的转换。
 
-> **尚未拍板的冲突（2026-09-18 记录）**：硬件侧已确认「横移不可用」（`docs/field/真车对接设计稿_2026-08-19.md`），但软件侧**没有屏蔽**：`motion_control` 仍会下发 `/cmd_vel.linear.y`（`navigation.py` 用 `ky: 1.2 / max_vy: 0.30` 限幅，`robot.yaml:32,38`），路线里也有侧移段（`mission_route.py` S11/S14、`work_sequence.py` 0.15/0.11 m）。要不要把 vy 钳到 0，是上车前要做的决定，当前**没做**。
+> **未验证项 + 未拍板的冲突（2026-09-18 记录；同日更正措辞）**：有一条 08-19 当面记录（`docs/field/给机械组现场问答表_2026-08-19.md` 的 C-6）称「底盘只能前后 + 原地转；左右平移**偏差过大不可用**」——但它**没有实测数字、没有落地横移测试记录**，仓库里唯一的实测证据方向相反：08-18 架空实测「左移（+vy）、右移（−vy）转向组合正确 ✅」（`docs/field/RASPBERRY_PI_DEPLOYMENT_LOG_2026-08-18.md:22-24`），固件也**实现了** vy（`chassis.h:36,73` 限幅 0.4 m/s、`chassis.c:23` 符号翻转），电控侧仍把「vx/vy/wz 最大速度实测值」列为**待测**（`docs/field/给电控组待确认清单.md:101`）。所以「横移不可用」目前是**未验证的说法，不是硬件侧已确认的事实**（"能用"同样未验证）。
+>
+> 而软件侧**确实没有屏蔽** vy：`navigation.py` 按 `ky: 1.2 / max_vy: 0.30`（`robot.yaml:32,38`）下发 `/cmd_vel.linear.y`，路线里也有侧移段（`mission_route.py` S11/S14、`work_sequence.py` 0.15/0.11 m），`cmd_vel_arbiter.py:91` 不滤 vy。
+>
+> 上车前要定两件事：① **落地实测横移偏差**（0.2～0.3 m ×5，只看现象）；② 测出之前要不要先把 vy 钳 0（当前**没做**）。
 
 三方不能单独猜测单位、方向、载荷或完成条件。详细接口、未冻结字段和确认清单见[算法给电控与机械的接口说明](docs/field/算法给电控与机械的接口说明.md)，串口字节定义见[STM32 串口协议 V1](docs/field/STM32_SERIAL_PROTOCOL_V1.md)（旧的 `docs/field/MCU_PROTOCOL.md` 已删除，消息编号过期，勿再引用）。
 
