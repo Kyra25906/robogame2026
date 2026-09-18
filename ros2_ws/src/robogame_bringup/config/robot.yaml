@@ -23,8 +23,15 @@ robot_bridge:
     max_mcu_sample_gap_ms: 1000
     # 机械臂关节值域（ARM_SET）：空串 = 未冻结 = /arm/set_joint 返回 9010。
     # 见 robot_bridge/README.md §8 与 docs/field/MECHANISM_0x20_INTERFACE_ALIGNMENT_2026-08-18.md §6。
-    arm_joint_ranges: ""
-    arm_joint_ranges_evidence: ""
+    #
+    # ⚠️ 2026-09-19 首次示教临时填值（**未实测**）：0..270 直接取固件 arm.c 的
+    # ARM_JOINT_ANGLE_RANGE_DEG（脉宽下限↔0°、上限↔270°）。目的只有一个：
+    # 让 /arm/set_joint 不再被 9010 拒绝，好在车上逐关节小步试探、把姿态量出来。
+    # 它**不是**机械实测的零位/方向/可达范围 —— 零位、方向、真实可达角都还没标定。
+    # 这个窗口**拦不住"方向反了"**（只是把幅度限制在固件行程内），所以第一步必须
+    # 是小步（安全姿态角度 ±5°），别跳着发大角度。真车示教完请把实测值写回来。
+    arm_joint_ranges: "0:0:270;1:0:270;2:0:270;3:0:270"
+    arm_joint_ranges_evidence: "2026-09-19 首次示教临时值：范围取固件 arm.c ARM_JOINT_ANGLE_RANGE_DEG（0..270），非机械实测；零位与方向未标定"
 
 motion_controller:
   ros__parameters:
