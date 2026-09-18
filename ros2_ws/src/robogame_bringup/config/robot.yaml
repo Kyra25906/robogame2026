@@ -51,8 +51,13 @@ motion_controller:
     pose_stale_s: 1.5
     status_stale_s: 0.30
     # B2（无人干预自主完赛）：底盘只能由 /mission/active_source 授权的那一个来源驱动。
-    # 授权断流/过期/给了别的来源 → 本节点停车。独立调试时置 false 即可绕过。
-    require_authorization: true
+    # 授权断流/过期/给了别的来源 → 本节点停车。
+    # ⚠️ 这里**不设** require_authorization：它是**环境属性**，只能在环境层
+    # （robot_field.yaml）打开。理由与巡线节点完全一样，而且更直接：
+    # 网页「启动底盘链路」按钮就是用本文件启动 motion_controller 的
+    # （见 tools/field_console.json），那时没有任何任务层在广播授权——
+    # 如果在共用层打开门控，那个节点会**永远不动、而且不打任何日志**。
+    # 2026-09-17 踩过同一个坑（巡线节点），修法一致：共用层关、比赛层开。
     authorization_stale_s: 0.5
     min_x: -0.2
     max_x: 7.4

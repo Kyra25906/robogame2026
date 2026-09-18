@@ -63,9 +63,23 @@ function routeLiveView(raw, ageS, turnPhase) {
   const ramp = data.ramp_decision && data.ramp_decision !== 'NORMAL'
     ? `｜⚠️ 坡道 ${data.ramp_decision}`
     : (data.ramp_decision === 'NORMAL' ? '｜坡道正常' : '');
+  // B4 开赛门：标定不可用时**不能**只显示「一切正常」——上电自主模式下
+  // 这是唯一能在赛前看出来的前置条件，必须显式写在这里。
+  const blockers = Array.isArray(data.readiness_blockers) ? data.readiness_blockers : [];
+  const ready = data.line_calibration_ready === true;
+  const readyLine = blockers.length
+    ? `｜⛔ 不能开赛：${blockers[0]}`
+    : (ready ? '｜✅ 巡线标定可用' : '');
+  // B3/B4：车上载货（抓/放成功后由任务层记账）。记账自相矛盾时**必须显眼**：
+  // 这个数会影响降级决策（有存货→先去搭建），数不可信时人要知道。
+  const cargo = typeof data.cargo_onboard === 'number'
+    ? `｜载货 ${data.cargo_onboard} 块`
+    : '';
+  const cargoWarn = data.cargo_valid === false ? '｜⚠️ 载货簿记不可信' : '';
   const text = `第 ${done}/${total} 段｜当前 ${data.segment_id || '-'}（${data.segment_label || '-'}）`
     + `｜阶段 ${data.phase || '-'}｜状态 ${data.state || '-'}`
     + `｜底盘授权 ${data.active_source || 'none'}${work}${workStep}${turnLine}${limit}${ramp}${rounds}${remaining}`
+    + readyLine + cargo + cargoWarn
     + (data.retries ? `｜重试 ${data.retries}` : '')
     // B4：降级（重试耗尽后跳过/撤退）必须显眼——否则现场会以为任务在正常推进
     + (data.degradations ? `｜⚠️ 已降级 ${data.degradations} 次` : '')

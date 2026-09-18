@@ -213,6 +213,31 @@ class DecideTests(unittest.TestCase):
                 self.assertIsNone(decision.work_command, segment.id)
 
 
+class WorkCommandColorTests(unittest.TestCase):
+    """机构命令 → 颜色的反查（载货簿记要用）。"""
+
+    def test_every_contract_command_maps_to_its_color(self):
+        from robogame_core.mission_dispatch import WORK_COMMANDS, color_from_work_command
+
+        for (_kind, color), command in WORK_COMMANDS.items():
+            self.assertIs(color_from_work_command(command), color, command)
+
+    def test_unknown_or_empty_command_returns_none(self):
+        """不认识就返回 None，**不猜**：猜错会让「车上还有几块」悄悄变假。"""
+        from robogame_core.mission_dispatch import color_from_work_command
+
+        for value in (None, "", "PICK_BLUE", "pick_orange"):
+            self.assertIsNone(color_from_work_command(value), repr(value))
+
+    def test_mapping_is_derived_from_the_command_table(self):
+        """反查表必须由 `WORK_COMMANDS` 推出，不能再写一遍（两处会漂移）。"""
+        source = (
+            __import__("pathlib").Path(__file__).resolve().parents[1]
+            / "ros2_ws/src/robogame_core/robogame_core/mission_dispatch.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("for (_kind, color), command in WORK_COMMANDS.items()", source)
+
+
 class LineStatusParsingTests(unittest.TestCase):
     def _status_text(self, **over) -> str:
         payload = {
@@ -269,6 +294,28 @@ class LineStatusParsingTests(unittest.TestCase):
         self.assertIn("#diag#", source, "line_follow_node 的结构化状态标记变了")
         for key in ('"state"', '"stale"', '"blocked"', '"dev"'):
             self.assertIn(key, source, f"line_follow_node 不再上送 {key}")
+
+    def test_calibration_ready_is_tri_state(self):
+        """B4 开赛门：True / False / 字段缺失（None）必须是三个不同结论。
+
+        为什么不能把缺失当 False：那样「老版本节点没上报」和「上报了但不可用」
+        会得到同一个原因字符串，现场排查时看不出该去查哪一头。
+        """
+        self.assertIs(parse_line_status(self._status_text(calibration_ready=True)).calibration_ready, True)
+        self.assertIs(parse_line_status(self._status_text(calibration_ready=False)).calibration_ready, False)
+        self.assertIsNone(
+            parse_line_status(self._status_text()).calibration_ready,
+            "节点没上报该字段时必须保持未知，不能被当成「不可用」或「可用」",
+        )
+
+    def test_calibration_ready_accepts_string_flags(self):
+        """面板/日志里常见字符串写法，两种格式都要一致。"""
+        self.assertIs(parse_line_status("state=ON_LINE stale=False blocked=False calibration_ready=true").calibration_ready, True)
+        self.assertIs(parse_line_status("state=ON_LINE stale=False blocked=False calibration_ready=0").calibration_ready, False)
+
+    def test_node_publishes_calibration_ready(self):
+        """字段存在性契约：解析器读得到，前提是节点真的上送这个名字。"""
+        self.assertIn('"calibration_ready"', LINE_NODE.read_text(encoding="utf-8"))
 
 
 class PlacementHeightTests(unittest.TestCase):

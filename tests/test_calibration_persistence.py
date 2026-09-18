@@ -200,6 +200,23 @@ class LineNodeCalibrationLoadTests(unittest.TestCase):
         for key in ("calibration_file", "calibration_status"):
             self.assertIn(key, publish, f"状态串必须上报 {key}（网页看到节点用的是哪份标定）")
 
+    def test_status_reports_readiness_for_the_start_gate(self):
+        """B4/R13：任务层的开赛门读的是这个字段，缺了它就等于门永远拦人（未知=拒绝）。"""
+        publish = ast.unparse(_function(self.tree, "_publish"))
+        self.assertIn("calibration_ready", publish)
+
+    def test_readiness_is_true_on_both_success_paths(self):
+        """两条「真的拿到可用标定」的路径（启动加载 / 面板推送）都必须置位。"""
+        loader = ast.unparse(_function(self.tree, "_load_persisted_calibration"))
+        self.assertIn("self.calibration_ready = True", loader)
+        callback = ast.unparse(_function(self.tree, "_on_set_parameters"))
+        self.assertIn("self.calibration_ready = True", callback)
+
+    def test_readiness_starts_false_so_it_cannot_default_to_ready(self):
+        """必须显式从 False 起步：默认值是「不可用」，不是「可用」。"""
+        init = ast.unparse(_function(self.tree, "__init__"))
+        self.assertIn("self.calibration_ready = False", init)
+
 
 class CalibrationConfigBindingTests(unittest.TestCase):
     """面板写哪里、节点读哪里，必须是同一个路径——否则「落盘了却没人用」。"""

@@ -35,6 +35,19 @@ mission_manager:
     # 与「机构层计数怎么复位」都还没有结论（见 docs/history 工作留痕 R9）。
     # 现场测出一趟耗时后，再按剩余时间决定要不要提到 2。
     rounds: 1
+    # B4 开赛门：正式场地要求巡线黑白标定**可用**才允许开赛。
+    # 标定不可用（或巡线节点没上报）时，物理启动信号一到就判失败并说明原因，
+    # 而不是带着假归一化读数去巡线——上电自主模式下没人会在赛前发现这件事。
+    # 现场单测路线（不接真线）时可临时改 false。
+    require_line_calibration: true
+
+motion_controller:
+  ros__parameters:
+    # 比赛环境才打开授权门控：整栈（hardware.launch.py）里任务层是唯一授权来源。
+    # ⚠️ 必须在**环境层**打开（共用层 robot.yaml 里不能有），否则网页「启动底盘链路」
+    # 手动联调时会启动一个永远不动、也不报警的 motion_controller。
+    # 回归测试：tests/test_mission_manager_route.py::test_gate_is_an_environment_property。
+    require_authorization: true
 
 line_follow_controller:
   ros__parameters:

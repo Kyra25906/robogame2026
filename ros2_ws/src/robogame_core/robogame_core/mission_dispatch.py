@@ -69,6 +69,25 @@ WORK_COMMANDS: Mapping[tuple[WorkKind, CubeColor], str] = {
     (WorkKind.PLACE, CubeColor.PURPLE): "PLACE_PURPLE",
 }
 
+#: 反查表：机构命令 → 颜色。载货簿记要用它把「机构报告成功」翻译成「车上多了/少了一块」。
+#: 从 `WORK_COMMANDS` 反推而不是再写一张表——两处各写一遍必然漂移。
+_COLOR_BY_COMMAND: Mapping[str, CubeColor] = {
+    command: color for (_kind, color), command in WORK_COMMANDS.items()
+}
+
+
+def color_from_work_command(command: str | None) -> CubeColor | None:
+    """机构命令 → 方块颜色；无法识别返回 `None`（调用方决定怎么处理）。
+
+    为什么需要它：B3 的作业序列只发命令字符串，但**载货记账**要按颜色加减
+    （`Cargo` 分开记橙/紫）。不认识命令时返回 `None` 而不是猜一个颜色——
+    猜错会让「车上还有几块」这个数在无人干预时悄悄变假。
+    """
+    if not command:
+        return None
+    return _COLOR_BY_COMMAND.get(command)
+
+
 _LINE_STATES_BY_NAME = {state.value: state for state in LineSensorState}
 
 
@@ -91,6 +110,9 @@ class LineStatus:
     ramp_decision: str = ""
     #: 本段生效巡线限速（B3）
     line_limit_mps: float | None = None
+    #: 巡线节点是否在用**可用的**黑白标定（B4；None = 老版本没上报这个字段）。
+    #: 上电自主的前置条件：标定不可用时归一化没有意义，任务必须在开赛前拒绝启动。
+    calibration_ready: bool | None = None
 
 
 def parse_line_status(text: str) -> LineStatus:
@@ -151,6 +173,12 @@ def parse_line_status(text: str) -> LineStatus:
     if limit is not None and not math.isfinite(limit):
         limit = None
 
+    # 三态：字段缺失 = None（老版本上送），而不是 False。
+    # 这样「巡线节点没上报」和「上报了但没标定」是两个不同结论，不会互相污染。
+    calibration_ready: bool | None = None
+    if "calibration_ready" in payload:
+        calibration_ready = _flag("calibration_ready", default=False)
+
     return LineStatus(
         state=_LINE_STATES_BY_NAME[state_name],
         stale=_flag("stale", default=True),
@@ -159,6 +187,7 @@ def parse_line_status(text: str) -> LineStatus:
         turn_phase=str(payload.get("turn_phase") or ""),
         ramp_decision=str(payload.get("ramp_decision") or ""),
         line_limit_mps=limit,
+        calibration_ready=calibration_ready,
     )
 
 

@@ -169,3 +169,38 @@ test('match clock and round count are shown (B4)', () => {
   assert.match(routeLiveView(live({rounds: 2}), 0.1).text, /共 2 趟/);
   assert.doesNotMatch(routeLiveView(live({match_remaining_s: null}), 0.1).text, /剩余/);
 });
+
+test('readiness blockers are shown before the start signal (B4)', () => {
+  // 赛前就要看得见「为什么不能开赛」，否则只能等按下开始后任务直接 FAILED。
+  const blocked = routeLiveView(live({
+    line_calibration_ready: false,
+    readiness_blockers: ['开赛被拒绝：巡线黑白标定不可用'],
+  }), 0.1);
+  assert.match(blocked.text, /不能开赛/);
+  assert.match(blocked.text, /标定不可用/);
+});
+
+test('ready calibration is stated positively (B4)', () => {
+  const view = routeLiveView(live({
+    line_calibration_ready: true, readiness_blockers: [],
+  }), 0.1);
+  assert.match(view.text, /巡线标定可用/);
+  assert.doesNotMatch(view.text, /不能开赛/);
+});
+
+test('unknown calibration state makes no claim (B4)', () => {
+  // null = 节点没上报；这时**不能**显示「标定可用」，也不能凭空报一个阻塞项。
+  const view = routeLiveView(live({line_calibration_ready: null, readiness_blockers: []}), 0.1);
+  assert.doesNotMatch(view.text, /标定/);
+});
+
+test('cargo on board is shown, and an untrusted count is flagged (R15)', () => {
+  const view = routeLiveView(live({cargo_onboard: 2, cargo_valid: true}), 0.1);
+  assert.match(view.text, /载货 2 块/);
+  assert.doesNotMatch(view.text, /簿记不可信/);
+  // 记账自相矛盾时必须显眼：这个数会决定「有存货就去搭建」的降级分支
+  const untrusted = routeLiveView(live({cargo_onboard: 1, cargo_valid: false}), 0.1);
+  assert.match(untrusted.text, /⚠️ 载货簿记不可信/);
+  // 没有这个字段就不显示（老版本任务层）
+  assert.doesNotMatch(routeLiveView(live(), 0.1).text, /载货/);
+});

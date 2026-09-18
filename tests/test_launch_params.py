@@ -174,9 +174,13 @@ class LaunchParameterParserTests(unittest.TestCase):
             # B2：field 层新增 mission_manager（route_enabled）与 line_follow_controller
             # （比赛环境才打开授权门控）——因此 hardware.launch.py 必须给这两个节点
             # 传 field 层（规则 B）。
+            # R16：新增 motion_controller。授权门控是**环境属性**，从共用层
+            # （robot.yaml）搬到了环境层——共用层也在网页手动联调时被加载，
+            # 在那里打开会让手动启动的 motion_controller 永远不动。搬完之后
+            # hardware.launch.py 也必须给 motion_controller 传 field 层（规则 B 自动盯住）。
             {
                 "robot_bridge", "manipulator_client", "cube_perception",
-                "mission_manager", "line_follow_controller",
+                "mission_manager", "line_follow_controller", "motion_controller",
             },
         )
         self.assertEqual(

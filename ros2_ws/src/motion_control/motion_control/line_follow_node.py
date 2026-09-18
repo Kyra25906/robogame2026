@@ -151,6 +151,9 @@ class LineFollowNode(Node):
         # 没有持久化标定时默认基准只有方向意义，所以这里要**大声**说明。
         self.calibration_file = str(self.get_parameter("calibration_file").value)
         self.calibration_status = ""
+        # B4：上电自主的**前置条件位**。只有「真的拿到一份可用于二值化的基准」才为 True，
+        # 任务层会拿它当开赛门（见 MissionConfig.require_line_calibration）。
+        self.calibration_ready = False
         self._load_persisted_calibration()
         # 参数可在运行时被现场面板改写（标定），改完立即生效，不必重启节点。
         self.add_on_set_parameters_callback(self._on_set_parameters)
@@ -190,6 +193,7 @@ class LineFollowNode(Node):
         失败模式（没人会去看读数，只会觉得车坏了）。
         """
         path = self.calibration_file
+        self.calibration_ready = False
         if not path:
             self.calibration_status = "未配置标定文件：基准只有方向默认值，请先在网页面板标定"
             self.get_logger().warn(
@@ -218,6 +222,7 @@ class LineFollowNode(Node):
             "black_base": min(loaded.black_ref),
         }
         self.calibration_status = reason
+        self.calibration_ready = True
         self.get_logger().info(f"已加载落盘标定：{reason}")
 
     def _read_calibration(self) -> dict:
@@ -243,9 +248,23 @@ class LineFollowNode(Node):
         }
 
     def _calibration_is_usable(self, white: list[float], black: list[float]) -> tuple[bool, str]:
-        worst = min(abs(b - w) for w, b in zip(white, black))
-        if worst < 1.0:
-            return False, f"存在黑白基准几乎相同的通道（最小差 {worst:.0f}），无法二值化；请重新标定"
+        """这份黑白基准能不能用来二值化？规则**只写在 `LineCalibration` 一处**。
+
+        为什么不在节点里自己比差值（R13 修正的真实缺陷）：早期版本只比
+        `abs(black - white)` 的**大小**、不看方向，于是「黑白反接」（black < white）
+        会通过校验——而反接会把归一化整个翻转（黑线本该读 1.0 却读 0.0），
+        车朝**反方向**纠偏。启动加载走的是 `startup_verdict`（含方向检查），
+        面板推送走的是这里；两条路径规则不一致时就会出现「启动拦住、推送放行」，
+        而推送正是现场最常用的那条路。所以统一成同一个校验器。
+        """
+        try:
+            LineCalibration(
+                white_ref=tuple(float(v) for v in white),
+                black_ref=tuple(float(v) for v in black),
+                source="panel",
+            )
+        except ValueError as exc:
+            return False, f"{exc}；请在网页面板重新标定"
         return True, ""
 
     def _on_set_parameters(self, parameters) -> "SetParametersResult":
@@ -277,6 +296,11 @@ class LineFollowNode(Node):
         if not usable:
             return SetParametersResult(successful=False, reason=why)
         self.calibration = candidate
+        # 现场面板推来的标定只要过了上面那道**同一个**校验器，就等于「标定可用」。
+        # 注意：这只说明基准**可用于二值化**（方向、分离度都对），不说明它标得准——
+        # 准不准要靠巡线整定与路口实测。
+        self.calibration_ready = True
+        self.calibration_status = "面板推送的标定已生效"
         self.get_logger().info(
             "标定生效：white_ref="
             + ",".join(f"{v:.0f}" for v in white)
@@ -643,6 +667,8 @@ class LineFollowNode(Node):
                     # B4：标定来源与可用性（网页显示「节点现在用的是哪份标定」）
                     "calibration_file": self.calibration_file or None,
                     "calibration_status": self.calibration_status or None,
+                    # 开赛门：任务层只在 True 时允许开赛（上电自主的前置条件）
+                    "calibration_ready": bool(self.calibration_ready),
                     **gates,
                 },
                 ensure_ascii=False,

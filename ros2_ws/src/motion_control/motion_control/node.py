@@ -77,6 +77,8 @@ class MotionControllerNode(Node):
             stale_s=float(self.get_parameter("authorization_stale_s").value),
         )
         self.was_driving = False
+        # 未授权且手里有目标时只告警一次（每次新目标重置），避免 50Hz 刷屏
+        self.auth_warning_sent = False
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 20)
         self.result_pub = self.create_publisher(String, "/motion/result", 10)
         self.create_subscription(Odometry, "/pose", self._on_pose, 20)
@@ -159,6 +161,8 @@ class MotionControllerNode(Node):
         was_idle = self.goal is None
         self.goal = candidate
         self.goal_time = time.monotonic()
+        # 新目标 = 重新给一次「为什么不动」的机会（见 _tick 里的未授权告警）
+        self.auth_warning_sent = False
         if was_idle:
             self.last_velocity = Velocity2D(0.0, 0.0, 0.0)
             self.last_control_time = self.goal_time
@@ -185,6 +189,17 @@ class MotionControllerNode(Node):
                 )
                 self._stop()
                 self.was_driving = False
+            # 有目标却不动，且**一句日志都没有**，是现场最难查的一种现象
+            # （2026-09-17 真的发生过：共用层误开门控 → 节点永远静默）。
+            # 所以：手里有目标但未被授权时，说一次原因和当前授权来源。
+            if self.goal is not None and not self.auth_warning_sent:
+                current = self.authorization.granted_source(now)
+                self.get_logger().warn(
+                    "收到目标但未被授权，暂不动车：/mission/active_source 必须是 "
+                    f"{SOURCE_NAVIGATE}（当前：{current or '无授权/授权已过期'}）。"
+                    "手动联调时请确认 require_authorization 没有被共用层打开"
+                )
+                self.auth_warning_sent = True
             return
         if self.goal is None:
             return

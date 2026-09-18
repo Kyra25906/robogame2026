@@ -53,6 +53,21 @@ class MissionConfig:
     purple_target: int = 0
     max_retries: int = 2
     state_timeout_s: float = 20.0
+    #: 运动段的超时预算按**本段实际需要的时间**推导：
+    #:     budget = max(state_timeout_s, 本段长度 / 本段限速 × factor + extra)
+    #: 为什么不能用一个常数：最长的主路段 2.8 m 在计划限速 0.25 m/s 下要 11.2 s，
+    #: 20 s 只有 1.8 倍余量；现场一旦为了安全把限速调慢（例如减半），该段就会
+    #: 「超时失败」而不是「只是变慢」——离线预演正是这样发现的（见工作留痕 R12）。
+    timeout_margin_factor: float = 2.0
+    timeout_extra_s: float = 5.0
+    #: 段没写限速时用的默认速度（与 RouteChain 的 default_speed_mps 同源）
+    route_default_speed: float = 0.15
+    #: 作业段（取/放，含多次抓取 + 之间的车体微移）单独的超时预算。
+    #: 依据 `docs/field/TIME_BUDGET.csv`：单次抓取典型 7.1 s、最坏 14.3 s；
+    #: 「取 3 块 + 2 次侧移」最坏约 50 s，因此默认给 120 s 余量。
+    #: ⚠️ 用 20 s（与运动段相同的预算）会让取件段**必然超时**——离线端到端预演
+    #: （`tools/mission_sim.py`）正是这样发现的。
+    work_state_timeout_s: float = 120.0
     build_stability_s: float = 3.0
     # A2 / P0-1: 上电等待通信就绪的上限（覆盖握手 3s×3 + 余量），
     # 超时才 fail(COMMUNICATION_ERROR)；等待期内不评估、不 fail。
@@ -63,6 +78,60 @@ class MissionConfig:
     # B4：比赛总时长上限（秒）。规则 3.2.1：正式比赛 6 分钟，计时结束后动作无效。
     # >0 时，路线执行超过这个时长就**安全停车**（而不是继续跑到自然结束）。
     match_time_limit_s: float = 360.0
+    # B4：开赛前是否要求巡线标定**可用**（`/line_follow/status` 的 calibration_ready）。
+    # 为什么要在任务层设这道门：上电自主意味着没有人会在赛前看一眼归一化读数。
+    # 标定不可用时巡线的偏差是假的，车看起来「在巡线」但实际在乱走——这种失败
+    # 无法在赛中补救，只能在开赛前拒绝启动并说清原因。
+    # 默认 False：单元测试与 mock 演示不接真线，不能因为缺标定就跑不起来；
+    # 正式场地配置（robot_field.yaml）把它打开。
+    require_line_calibration: bool = False
+
+
+def line_calibration_blocker(
+    config: MissionConfig, ready: bool | None
+) -> str | None:
+    """开赛前置条件：巡线标定是否可用。
+
+    返回 `None` = 放行；返回字符串 = **必须拒绝开赛**，字符串就是要给人看的原因。
+
+    三态语义（`ready`）：
+
+    - `True`：巡线节点确认在用一份可二值化的基准 → 放行；
+    - `False`：节点明确说标定不可用 → 拒绝；
+    - `None`：没收到过 `/line_follow/status`（或已断流）→ **也拒绝**。
+      为什么「不知道」要当「不行」：上电自主模式下没有任何人在赛前看一眼读数，
+      标定不可用时的巡线偏差是假数据，车会「看起来在巡线」地走错路线。
+      这种失败赛中无法补救，只能开赛前拦下。宁可不开赛，不可瞎跑。
+    """
+    if not config.require_line_calibration:
+        return None
+    if ready is True:
+        return None
+    if ready is False:
+        return (
+            "开赛被拒绝：巡线黑白标定不可用（/line_follow/status calibration_ready=false）。"
+            "请在网页面板完成黑白标定并落盘后重新上电"
+        )
+    return (
+        "开赛被拒绝：没有收到巡线标定状态（/line_follow/status 未上报或已断流）。"
+        "请确认 line_follow_controller 已启动并在上报 calibration_ready"
+    )
+
+
+def segment_required_time_s(segment, *, default_speed: float = 0.15) -> float:
+    """本段「按几何与限速」需要的时间（秒）。
+
+    段长度取实测两点距离（或原地段的 0）；限速为 0（未覆盖）时用 `default_speed`。
+    用途：按段推导超时预算（见 `MissionConfig.timeout_margin_factor`）。
+    """
+    import math
+
+    length = math.hypot(
+        segment.to_pose.x - segment.from_pose.x,
+        segment.to_pose.y - segment.from_pose.y,
+    )
+    speed = segment.max_speed_mps if segment.max_speed_mps > 0.0 else default_speed
+    return length / speed if speed > 0.0 else 0.0
 
 
 def classify_action_result(data: str) -> tuple[bool, MissionResult | None, str]:
@@ -138,6 +207,7 @@ class MissionMachine:
         communication_ok: bool = True,
         emergency_stop: bool = False,
         physical_start: bool = False,
+        line_calibration_ready: bool | None = None,
         action_succeeded: bool = False,
         action_failed: bool = False,
         failure_result: MissionResult = MissionResult.MECHANISM_ERROR,
@@ -184,6 +254,12 @@ class MissionMachine:
         if self.state is MissionState.SELF_CHECK and action_succeeded:
             self._enter(MissionState.WAIT_FOR_PHYSICAL_START, now)
         elif self.state is MissionState.WAIT_FOR_PHYSICAL_START and physical_start:
+            # B4 开赛门：只在**真的要开赛**这一拍评估。
+            # 放在这里而不是 SELF_CHECK，是因为标定可能在 SELF_CHECK 之后才被
+            # 面板推送/落盘；放在这里能吃到最后一刻的观测，也不会误拦 mock 演示。
+            blocker = line_calibration_blocker(self.config, line_calibration_ready)
+            if blocker is not None:
+                return self.fail(MissionResult.MECHANISM_ERROR, blocker, now)
             if self.route is not None:
                 self._enter_route(now)
             else:
@@ -235,6 +311,27 @@ class MissionMachine:
         self.detail = f"degraded: {decision.reason} → {target}"
         self._sync_route()
         return self.state
+
+    def segment_timeout_budget(self) -> float:
+        """当前段的超时预算（秒）。
+
+        - 作业段：固定的长预算（多次抓取 + 微移本来就要几十秒）；
+        - 运动段：按「本段长度 / 本段限速」推导（有下限与余量），
+          这样现场把限速调慢只会**变慢**，不会变成「超时失败」。
+        - 不在路线模式 / 没有当前段：退回 `state_timeout_s`。
+        """
+        segment = self.current_segment
+        if segment is None:
+            return self.config.state_timeout_s
+        if segment.role is SegmentRole.WORK:
+            return self.config.work_state_timeout_s
+        required = segment_required_time_s(
+            segment, default_speed=self.config.route_default_speed
+        )
+        return max(
+            self.config.state_timeout_s,
+            required * self.config.timeout_margin_factor + self.config.timeout_extra_s,
+        )
 
     # -- B1: 路线模式 -----------------------------------------------------
     def _enter_route(self, now: float) -> None:
@@ -299,7 +396,8 @@ class MissionMachine:
                 return self.state
 
         # 每段一个超时预算：entered_at 在段切换时刷新（见下面 switched 分支）。
-        if now - self.entered_at > self.config.state_timeout_s:
+        budget = self.segment_timeout_budget()
+        if now - self.entered_at > budget:
             segment_id = self.segment_id or "?"
             return self._retry_or_degrade(
                 MissionResult.TIMEOUT, f"segment {segment_id} timeout", now
@@ -322,6 +420,14 @@ class MissionMachine:
             self._enter(MissionState.VERIFY_BUILD, now)
             self.phase = MissionPhase.VERIFY
             self.detail = "route complete"
+            # 降级过就必须写出来（R15 故障矩阵发现）：降级会让任务**继续走到终点**，
+            # 于是终态是 COMPLETE/SUCCESS——只看这一行会以为「全都做成了」。
+            # 无人干预模式下没人会去翻 degradations，所以把话写在这句里。
+            if self.degradations:
+                self.detail = (
+                    f"route complete（降级 {self.degradations} 次：有段未按计划完成，"
+                    "COMPLETE 不等于全部作业都做成了；明细见 /mission/route 的 degradations）"
+                )
         return self.state
 
     def route_progress(self, now: float | None = None) -> dict[str, object]:
@@ -399,4 +505,13 @@ class MissionMachine:
         elif self.state is MissionState.VERIFY_BUILD:
             self._enter(MissionState.COMPLETE, now)
             self.result = MissionResult.SUCCESS
-            self.detail = "mission complete"
+            # 降级过就必须写出来（R15 故障矩阵发现）：降级让任务继续走到终点，
+            # 终态是 COMPLETE/SUCCESS——只看这一行会以为「全都做成了」。
+            self.detail = (
+                "mission complete"
+                if not self.degradations
+                else (
+                    f"mission complete（降级 {self.degradations} 次：有段未按计划完成，"
+                    "COMPLETE 不等于全部作业都做成了；明细见 /mission/route 的 degradations）"
+                )
+            )

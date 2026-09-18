@@ -117,6 +117,21 @@ class LineFollowNodeStructureTests(unittest.TestCase):
         self.assertIn("successful=False", callback)
         self.assertIn("_calibration_is_usable", callback)
 
+    def test_calibration_usability_rule_is_shared_not_reimplemented(self):
+        """标定可用性规则必须委托给 `LineCalibration`（R13 修的真实缺陷）。
+
+        旧版本在节点里自己比 `abs(black - white)` 的**大小**、不看方向，于是
+        「黑白反接」能通过面板推送这一路，而反接会让归一化整个翻转（车朝反方向
+        纠偏）；启动加载那一路用的却是带方向检查的 `startup_verdict`。
+        两条路径规则不一致 = 「启动拦住、推送放行」，而推送正是现场最常用的一路。
+        """
+        usable = method_source(self.tree, self.source, "_calibration_is_usable")
+        self.assertIn(
+            "LineCalibration", usable,
+            "不要再在节点里重写校验规则：黑 > 白、8 路、分离度、有限性都归 LineCalibration",
+        )
+        self.assertIn("except ValueError", usable, "校验失败必须以「不可用 + 原因」返回，不能抛出去")
+
     def test_normalization_uses_per_channel_references(self):
         """逐路归一化：否则各路差异会让某些通道永远判不出黑线。"""
         normalize = method_source(self.tree, self.source, "_normalize")

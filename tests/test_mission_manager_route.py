@@ -102,53 +102,81 @@ class MissionManagerRouteWiringTests(unittest.TestCase):
                 f"mission_manager 必须发布 {topic}",
             )
 
-    def test_goal_is_published_before_authority(self):
-        """先给目标再授权：反之位姿控制器会在没有目标时被授权（空转或按旧目标动）。"""
-        function = _function(self.tree, "_dispatch_route")
-        goal_line = authority_line = None
-        for node in ast.walk(function):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-                continue
-            owner = getattr(node.func.value, "attr", "")
-            if node.func.attr != "publish":
-                continue
-            if owner == "goal_pub" and goal_line is None:
-                goal_line = node.lineno
-            elif owner == "authority_pub" and authority_line is None:
-                authority_line = node.lineno
-        self.assertIsNotNone(goal_line, "路线分发里必须发 /motion/goal")
-        self.assertIsNotNone(authority_line, "路线分发里必须发授权")
-        self.assertLess(goal_line, authority_line, "目标必须早于授权发布（按源码行号判定）")
+    def test_start_gate_receives_the_same_verdict_in_both_flows(self):
+        """开赛门在路线模式与演示模式里必须用**同一个判据函数**。
 
-    def test_work_command_is_sent_once_per_work_index(self):
-        source = MISSION_NODE.read_text(encoding="utf-8")
-        self.assertIn("published_work_index", source)
-        function = _function(self.tree, "_dispatch_route")
-        guarded = any(
-            isinstance(node, ast.Compare)
-            and any(isinstance(op, ast.NotEq) for op in node.ops)
-            for node in ast.walk(function)
-        )
-        self.assertTrue(guarded, "作业命令必须有「本次序号是否已发过」的判断")
+        演示模式保留在节点里（没有 `MissionRun`），如果那边不喂观测，
+        同一个 `require_line_calibration: true` 在两条流程下就会有两种含义：
+        一条按标定状态判，另一条永远判「未上报」——现场只会看到「演示模式跑不了」。
+        """
+        tick = ast.unparse(_function(self.tree, "_tick"))
+        self.assertIn("calibration_readiness", tick, "演示模式的分支也必须喂标定三态")
 
-    def test_terminal_states_release_authority(self):
-        function = _function(self.tree, "_tick")
-        calls_release = any(
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "_release_authority"
-            for node in ast.walk(function)
+        def demo_branch_source() -> str:
+            """取出 `_tick` 里 `if self.run is not None: ... else: <演示模式>` 的 else 分支。
+
+            为什么按 AST 取分支而不是按注释文字切：`ast.unparse` 会丢掉注释，
+            以前那样切会直接 IndexError（这次就踩到了）。
+            """
+            for node in ast.walk(_function(self.tree, "_tick")):
+                if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+                    continue
+                test = ast.unparse(node.test)
+                if "self.run" in test and "None" in test:
+                    return ast.unparse(ast.Module(body=node.orelse, type_ignores=[]))
+            raise AssertionError("_tick 里找不到 'if self.run is not None: ... else: ...' 分支")
+
+        self.assertIn("line_calibration_ready", demo_branch_source())
+        # 判据函数来自共享模块，不是节点里重写的
+        self.assertIn(
+            "from robogame_core.mission_run import",
+            MISSION_NODE.read_text(encoding="utf-8"),
         )
-        self.assertTrue(calls_release, "终态必须释放底盘授权（谁都不许动）")
-        function = _function(self.tree, "_release_authority")
-        self.assertTrue(
-            any(
-                isinstance(node, ast.Constant) and node.value == "none"
-                for node in ast.walk(function)
-            )
-            or "SOURCE_NONE" in ast.unparse(function),
-            "_release_authority 必须发 none（SOURCE_NONE）",
-        )
+
+    def test_node_tracks_the_last_line_status_for_the_gate(self):
+        """演示模式也要留一份最近状态；否则判据永远拿到 None。"""
+        handler = ast.unparse(_function(self.tree, "_on_line_status"))
+        self.assertIn("self.line_status", handler)
+        self.assertIn("self.line_status_time", handler)
+        init = ast.unparse(_function(self.tree, "__init__"))
+        self.assertIn("self.line_status_time = 0.0", init, "必须是 0.0（=从未收到），不能是 now")
+
+    def test_every_command_kind_has_a_publisher(self):
+        """`CommandKind` 与发布者的映射必须完整——漏一个就等于命令被静默丢弃。
+
+        运行逻辑（顺序、重发、步骤）由 `tests/test_mission_run.py` 的**行为测试**
+        覆盖；节点这一层只负责「按类型选发布者」，所以这里查映射完整性。
+        """
+        mapping = ast.unparse(_function(self.tree, "_publish_command"))
+        for kind, publisher in (
+            ("AUTHORITY", "authority_pub"),
+            ("GOAL", "goal_pub"),
+            ("MANIPULATOR", "manip_pub"),
+            ("LINE", "line_pub"),
+            ("TURN", "turn_pub"),
+            ("STOP", "stop_pub"),
+        ):
+            self.assertIn(f"CommandKind.{kind}", mapping, kind)
+            self.assertIn(publisher, mapping, kind)
+
+    def test_node_delegates_the_run_loop(self):
+        """节点不再自己算逻辑：订阅 → 调 MissionRun → 发布命令。"""
+        tick = ast.unparse(_function(self.tree, "_tick"))
+        self.assertIn("self.run.tick", tick)
+        self.assertIn("_publish_command", tick)
+        self.assertIn("self.run.payload", tick)
+        for handler, call in (
+            ("_on_line_status", "observe_line_status"),
+            ("_on_pose", "observe_pose"),
+            ("_handle_result", "handle_result"),
+        ):
+            body = ast.unparse(_function(self.tree, handler))
+            self.assertIn(f"self.run.{call}", body, handler)
+
+    def test_node_publishes_stop_in_terminal_states(self):
+        tick = ast.unparse(_function(self.tree, "_tick"))
+        self.assertIn("stop_pub.publish", tick)
+        self.assertIn("SAFE_STOP", tick)
 
     def test_route_error_fails_loudly_instead_of_falling_back(self):
         function = _function(self.tree, "_tick")
@@ -161,15 +189,16 @@ class MissionManagerRouteWiringTests(unittest.TestCase):
         returns_early = any(isinstance(node, ast.Return) for node in ast.walk(load))
         self.assertTrue(returns_early, "路线加载失败必须提前返回（不设 route）")
 
-    def test_stale_line_status_blocks_segment_progress(self):
-        function = _function(self.tree, "_tick")
-        text = ast.unparse(function)
-        self.assertIn("mark_stale(True)", text)
-        self.assertIn("line_status_timeout_s", text)
+    def test_stale_line_status_timeout_is_configurable(self):
+        """观察逻辑（断流 → 不推进段）在 MissionRun 里，由行为测试覆盖；
+        节点这一层必须把它作为参数暴露出来，现场才能调。"""
+        text = MISSION_NODE.read_text(encoding="utf-8")
+        self.assertIn('"line_status_timeout_s"', text)
+        self.assertIn("MissionRun(", text)
 
     def test_legacy_mode_never_publishes_authority(self):
         """演示模式（route_enabled=false）不得广播授权：否则会改变既有 mock 流程。"""
-        legacy_dispatch = ast.unparse(_function(self.tree, "_dispatch"))
+        legacy_dispatch = ast.unparse(_function(self.tree, "_dispatch_demo"))
         self.assertNotIn("authority_pub", legacy_dispatch)
 
 
@@ -285,6 +314,49 @@ class CompetitionConfigBindingTests(unittest.TestCase):
                 f"{launch} 没有任务层：巡线节点不能要求授权（实际解析为 {effective!r}）",
             )
 
+    def test_gate_is_an_environment_property_not_a_shared_default(self):
+        """授权门控属于**环境**，只能写在环境层（robot_field.yaml）。
+
+        为什么这是一条硬规矩（2026-09-17 踩过两次，第二次是网页按钮）：
+        共用层 `robot.yaml` 也被**手动联调**加载——网页「启动底盘链路 / 启动巡线」
+        就是用 `tools/field_console.json` 里的命令启动节点，而那条命令**只带
+        robot.yaml**。此时没有任何任务层在广播授权，若门控在共用层打开，
+        节点会**永远不动、并且不打任何日志**（`motion_controller` 原先就是静默返回）。
+        """
+        common = (self.CONFIG_ROOT / "robot.yaml").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "require_authorization: true", common,
+            "共用层不能打开授权门控：手动联调的节点会永远不动",
+        )
+        field = (self.CONFIG_ROOT / "robot_field.yaml").read_text(encoding="utf-8")
+        for node in ("motion_controller", "line_follow_controller"):
+            section = field.split(f"{node}:", 1)
+            self.assertEqual(len(section), 2, f"robot_field.yaml 缺少 {node} 段落")
+            self.assertIn(
+                "require_authorization: true", section[1].split("\n\n")[0] + section[1][:400],
+                f"{node} 必须在环境层打开授权门控（整栈里任务层是唯一授权来源）",
+            )
+
+    def test_web_console_processes_only_load_the_common_layer(self):
+        """网页按钮启动的节点只能拿到共用层——这正是上面那条规矩的理由。
+
+        如果哪天有人给网页按钮加了 field 层，门控就会在手动联调时生效，
+        这个测试必须红，逼人把这个决定想清楚。
+        """
+        import json
+
+        console = json.loads(
+            (PROJECT_ROOT / "tools/field_console.json").read_text(encoding="utf-8")
+        )
+        watched = {"motion": "motion_controller", "line": "line_follow_controller"}
+        for process in console["processes"]:
+            if process["name"] not in watched:
+                continue
+            self.assertNotIn(
+                "robot_field.yaml", process["command"],
+                f"网页「{process['name']}」按钮不应加载比赛层（会让手动联调启动的节点等授权）",
+            )
+
     def test_field_config_enables_the_route(self):
         text = (self.CONFIG_ROOT / "robot_field.yaml").read_text(encoding="utf-8")
         self.assertIn("mission_manager:", text)
@@ -306,6 +378,32 @@ class CompetitionConfigBindingTests(unittest.TestCase):
         for name in ("robot_mock.yaml", "single_cube.yaml"):
             text = (self.CONFIG_ROOT / name).read_text(encoding="utf-8")
             self.assertNotIn("route_enabled: true", text, name)
+
+    def test_field_config_enforces_the_line_calibration_gate(self):
+        """B4：正式场地必须在**最终生效值**上要求巡线标定可用。
+
+        断言生效值而不是文本：比赛图的内联参数能覆盖 yaml，
+        只查字符串会出现「yaml 写了 true 但图里被覆盖成 false」的假通过。
+        """
+        self.assertIs(
+            self._effective(
+                "hardware.launch.py", "mission_manager", "mission_manager",
+                "require_line_calibration",
+            ),
+            True,
+            "正式场地配置必须开着开赛门（上电自主时没人会在赛前检查标定）",
+        )
+
+    def test_demo_configs_do_not_require_line_calibration(self):
+        """mock 演示不接真线：不能因为缺标定就让演示流程起不来。"""
+        for launch in ("mock_demo.launch.py", "single_cube.launch.py"):
+            effective = self._effective(
+                launch, "mission_manager", "mission_manager", "require_line_calibration"
+            )
+            self.assertIn(
+                effective, (False, None),
+                f"{launch} 不该要求标定（实际解析为 {effective!r}）",
+            )
 
 
 class RouteLoadingTests(unittest.TestCase):
@@ -390,19 +488,16 @@ class TurnWiringTests(unittest.TestCase):
         cls.line = _tree(LINE_NODE)
         cls.line_text = LINE_NODE.read_text(encoding="utf-8")
 
-    def test_mission_manager_publishes_and_clears_turn_command(self):
+    def test_mission_manager_publishes_turn_commands(self):
+        """转弯命令的内容与「重发/清除」时机在 MissionRun 里（行为测试覆盖）；
+        节点这一层必须能把 TURN 命令发出去，并且有对应发布者。"""
         calls = _calls(self.mission)
         self.assertTrue(
             any(name == "create_publisher" and "/mission/turn" in literals for name, literals in calls)
         )
-        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
-        self.assertIn("_publish_turn_command", dispatch)
-        # 终态必须清空待执行转弯，否则任务失败后残留指令会在下次授权时突然执行
-        release = ast.unparse(_function(self.mission, "_release_authority"))
-        self.assertIn("turn_pub", release)
-        publisher = ast.unparse(_function(self.mission, "_publish_turn_command"))
-        self.assertIn("turn_command_for", publisher)
-        self.assertIn("if command is None", publisher, "非转弯段必须下发空串（清除）")
+        mapping = ast.unparse(_function(self.mission, "_publish_command"))
+        self.assertIn("CommandKind.TURN", mapping)
+        self.assertIn("turn_pub", mapping)
 
     def test_line_node_subscribes_and_parses_turn_command(self):
         calls = _calls(self.line)
@@ -455,34 +550,15 @@ class LineAndRampWiringTests(unittest.TestCase):
         cls.line_text = LINE_NODE.read_text(encoding="utf-8")
         cls.mission_text = MISSION_NODE.read_text(encoding="utf-8")
 
-    def test_mission_manager_publishes_and_clears_line_command(self):
+    def test_mission_manager_publishes_line_commands(self):
+        """巡线参数的内容/重发时机在 MissionRun 里（行为测试覆盖）；这里查发布者与映射。"""
         calls = _calls(self.mission)
         self.assertTrue(
             any(name == "create_publisher" and "/mission/line" in literals for name, literals in calls)
         )
-        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
-        self.assertIn("_publish_line_command", dispatch)
-        publisher = ast.unparse(_function(self.mission, "_publish_line_command"))
-        self.assertIn("line_command_for", publisher)
-        self.assertIn("if command is None", publisher, "非巡线段必须下发空串（清除）")
-        release = ast.unparse(_function(self.mission, "_release_authority"))
-        self.assertIn("line_pub", release, "终态必须清除巡线参数")
-
-    def test_retry_republishes_the_segment_commands(self):
-        """打滑卡住后节点保持零速：只重置计时叫不醒它，必须重发本段命令。"""
-        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
-        self.assertIn("published_retries", dispatch)
-        self.assertIn("self.machine.retries", dispatch)
-        retry_branch = dispatch.split("elif", 1)[-1]
-        self.assertIn("_publish_line_command", retry_branch)
-        self.assertIn("_publish_turn_command", retry_branch)
-
-    def test_stuck_ramp_triggers_a_segment_retry(self):
-        handler = ast.unparse(_function(self.mission, "_on_line_status"))
-        self.assertIn("SlipDecision.STUCK.value", handler)
-        self.assertIn("ramp_stuck_reports", handler)
-        self.assertIn("action_failed=True", handler)
-        self.assertIn("MECHANISM_ERROR", handler)
+        mapping = ast.unparse(_function(self.mission, "_publish_command"))
+        self.assertIn("CommandKind.LINE", mapping)
+        self.assertIn("line_pub", mapping)
 
     def test_line_node_consumes_line_and_wheel_speed(self):
         calls = _calls(self.line)
@@ -514,10 +590,15 @@ class LineAndRampWiringTests(unittest.TestCase):
         for key in ("line_limit_mps", "ramp_kind", "ramp_decision", "measured_speed_mps"):
             self.assertIn(key, publish, f"状态串必须上报 {key}")
 
-    def test_route_payload_exposes_ramp_state(self):
-        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
+    def test_route_payload_comes_from_the_run_loop(self):
+        """载荷键（含坡道/转弯状态）由 `MissionRun.payload` 产出，行为测试与集成审计覆盖。"""
+        tick = ast.unparse(_function(self.mission, "_tick"))
+        self.assertIn("self.run.payload", tick)
+        run_source = (
+            PROJECT_ROOT / "ros2_ws/src/robogame_core/robogame_core/mission_run.py"
+        ).read_text(encoding="utf-8")
         for key in ("ramp_decision", "line_limit_mps", "turn_phase"):
-            self.assertIn(key, payload, f"/mission/route 必须带 {key}（网页显示坡道/转弯状态）")
+            self.assertIn(f'"{key}"', run_source, key)
 
 
 class WorkSequenceWiringTests(unittest.TestCase):
@@ -528,51 +609,21 @@ class WorkSequenceWiringTests(unittest.TestCase):
         cls.mission = _tree(MISSION_NODE)
         cls.mission_text = MISSION_NODE.read_text(encoding="utf-8")
 
-    def test_segment_entry_and_retry_build_the_work_plan(self):
-        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
-        self.assertEqual(
-            dispatch.count("_prepare_work_plan"), 2,
-            "进入段与重试都必须重建作业序列",
-        )
-        prepare = ast.unparse(_function(self.mission, "_prepare_work_plan"))
-        self.assertIn("work_steps", prepare)
-        self.assertIn("WorkPlan", prepare)
-        self.assertIn("work_reference_pose", prepare)
+    def test_work_sequence_logic_lives_in_the_run_loop(self):
+        """作业序列的展开/逐步下发/来源匹配都在 `MissionRun`（行为测试覆盖）。"""
+        run_source = (
+            PROJECT_ROOT / "ros2_ws/src/robogame_core/robogame_core/mission_run.py"
+        ).read_text(encoding="utf-8")
+        for token in ("work_steps", "WorkPlan", "shifted_pose", "work_reference_pose"):
+            self.assertIn(token, run_source, token)
 
-    def test_each_step_is_dispatched_once_with_the_right_authority(self):
-        dispatch = ast.unparse(_function(self.mission, "_dispatch_route"))
-        self.assertIn("_dispatch_work_step", dispatch)
-        self.assertIn("STEP_ACTIVE_SOURCE", dispatch)
-        step_dispatch = ast.unparse(_function(self.mission, "_dispatch_work_step"))
-        self.assertIn("published_step_index", step_dispatch)
-        # 侧移是位姿目标，抓放是机构命令
-        self.assertIn("goal_pub.publish", step_dispatch)
-        self.assertIn("manip_pub.publish", step_dispatch)
-        self.assertIn("shifted_pose", step_dispatch)
-
-    def test_shift_moves_are_cumulative_from_the_segment_pose(self):
-        step_dispatch = ast.unparse(_function(self.mission, "_dispatch_work_step"))
-        self.assertIn("self.work_reference_pose = target", step_dispatch)
-        self.assertIn("self.work_reference_pose or segment.to_pose", step_dispatch)
-
-    def test_result_sources_are_separated(self):
-        """抓取结果与车体微移结果必须分开：否则侧移成功会被记成抓了一块。"""
+    def test_node_forwards_results_with_their_source(self):
+        """抓取结果与车体微移结果必须分开转发：否则侧移成功会被记成抓了一块。"""
         text = self.mission_text
         self.assertIn("self._on_motion_result", text)
         self.assertIn("self._on_manipulator_result", text)
         handler = ast.unparse(_function(self.mission, "_handle_result"))
-        self.assertIn("result_source", handler)
-        self.assertIn("plan.advance", handler)
-        self.assertIn("WorkStepKind.SHIFT", handler)
-        # 侧移成功只推进步骤、不计入作业次数
-        shift_branch = handler.split("WorkStepKind.SHIFT", 1)[1].split("return", 1)[0]
-        self.assertIn("self.machine.tick()", shift_branch)
-        self.assertNotIn("action_succeeded=True", shift_branch)
-
-    def test_payload_exposes_the_work_step(self):
-        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
-        for key in ("work_step", "work_step_kind", "work_step_label"):
-            self.assertIn(key, payload, key)
+        self.assertIn("self.run.handle_result(source", handler)
 
 
 class MatchClockAndRoundsWiringTests(unittest.TestCase):
@@ -595,12 +646,15 @@ class MatchClockAndRoundsWiringTests(unittest.TestCase):
         self.assertIn("match_time_limit_s", init)
         self.assertIn("MissionConfig", init)
 
-    def test_payload_exposes_rounds_and_remaining_time(self):
-        payload = ast.unparse(_function(self.mission, "_publish_route_status"))
-        self.assertIn("rounds", payload)
-        # 剩余时间随 route_progress 一起被带出来（**progress 展开）
-        self.assertIn("**progress", payload)
-        self.assertIn("route_progress", payload)
+    def test_payload_comes_from_the_run_loop(self):
+        tick = ast.unparse(_function(self.mission, "_tick"))
+        self.assertIn("self.run.payload", tick)
+        core = PROJECT_ROOT / "ros2_ws/src/robogame_core/robogame_core"
+        run_source = (core / "mission_run.py").read_text(encoding="utf-8")
+        self.assertIn('"rounds"', run_source)
+        # 剩余时间随 route_progress 展开进来（住在 mission.py）
+        machine_source = (core / "mission.py").read_text(encoding="utf-8")
+        self.assertIn('"match_remaining_s"', machine_source)
 
 
 class TurnCommandPathTests(unittest.TestCase):

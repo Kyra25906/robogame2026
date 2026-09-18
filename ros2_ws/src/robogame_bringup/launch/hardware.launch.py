@@ -37,7 +37,11 @@ def generate_launch_description():
         camera,
         Node(package="robot_bridge", executable="robot_bridge", parameters=[common, field]),
         Node(package="localization", executable="localization_node", parameters=[common]),
-        Node(package="motion_control", executable="motion_controller", parameters=[common]),
+        # B2：整栈里 motion_controller 也必须带 field 层——授权门控属于**环境属性**，
+        # 只在 robot_field.yaml 打开（共用层不开：网页手动联调只用共用层启动它）。
+        # 漏了 field 层 = 整栈里这个节点不受授权约束（原来它靠共用层的 true 生效，
+        # 那样手动联调又会永远不动，两头必须分开）。
+        Node(package="motion_control", executable="motion_controller", parameters=[common, field]),
         # B2：巡线控制器必须在场——路线里的巡线段由它驱动底盘（robot_bridge 只
         # 负责把 0x14 巡线遥测解码成 /line_sensor，不控制方向）。
         # 必须带 field 层：机器人授权门控（require_authorization）只在 field 层打开。

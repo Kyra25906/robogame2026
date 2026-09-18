@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from launch_graph import node_topics, parse_launch_nodes
+from launch_params import node_parameter_specs
 
 #: 段类型 / 作业步骤 -> 底盘授权来源（与 mission_dispatch 的表保持一致）
 ROLE_ACTIVE_SOURCE = {
@@ -86,37 +87,53 @@ def _node_source(src_root: Path, relative: str) -> Path:
     return src_root / relative
 
 
-def _payload_keys(mission_node: Path) -> set[str]:
-    """从 `_publish_route_status` 里取出 payload 的字面键名。"""
-    tree = ast.parse(mission_node.read_text(encoding="utf-8"))
+def _payload_keys(
+    mission_node: Path, *, core_mission: Path | None = None, mission_run: Path | None = None
+) -> set[str]:
+    """任务层载荷的键集合。
+
+    载荷由 `MissionRun.payload()` 产出（节点只是发布它），键来自两处：
+    `MissionRun.payload` 里的字面键 **+** `MissionMachine.route_progress()` 展开的键。
+    两处都不在节点文件里——漏扫任何一个都会把字段误报成「载荷里没有」。
+    """
     keys: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_publish_route_status":
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.Dict):
-                    for key in inner.keys:
-                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                            keys.add(key.value)
-    # **progress 展开：把 route_progress 的键也算进来
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "route_progress":
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.Dict):
-                    for key in inner.keys:
-                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                            keys.add(key.value)
+    sources = [mission_node]
+    for extra in (core_mission, mission_run):
+        if extra is not None and extra.is_file():
+            sources.append(extra)
+    for path in sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for function_name in ("_publish_route_status", "route_progress", "payload"):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == function_name:
+                    for inner in ast.walk(node):
+                        if isinstance(inner, ast.Dict):
+                            for key in inner.keys:
+                                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                                    keys.add(key.value)
     return keys
 
 
 def _panel_keys(web_root: Path) -> dict[str, set[str]]:
-    """从面板 JS 里取出它从任务层载荷读的键（`data.<key>`）。"""
+    """从面板 JS 里取出它从**任务层载荷**读的键（`data.<key>`）。
+
+    只扫 `route_panel.js`：只有它解析 `/mission/route` 的载荷；其它面板读的是
+    snapshot 的别的段落（`distance_result`、`odom_calibration`、`grasp`…），
+    用同一套键名比对会误报。
+    """
     used: dict[str, set[str]] = {}
     for path in sorted(web_root.glob("*.js")):
+        if path.name not in PANELS_READING_ROUTE_PAYLOAD:
+            continue
         text = path.read_text(encoding="utf-8")
         keys = set(re.findall(r"\bdata\.([A-Za-z_][A-Za-z0-9_]*)", text))
         if keys:
             used[path.name] = keys
     return used
+
+
+#: 解析任务层载荷（`/mission/route`）的面板文件
+PANELS_READING_ROUTE_PAYLOAD = {"route_panel.js"}
 
 
 def audit(src_root: Path, *, web_root: Path | None = None) -> list[Finding]:
@@ -161,9 +178,13 @@ def audit(src_root: Path, *, web_root: Path | None = None) -> list[Finding]:
             ))
 
     # 3) 网页读的字段必须真的在任务层载荷里
-    payload = _payload_keys(mission_node)
+    payload = _payload_keys(
+        mission_node,
+        core_mission=src_root / "robogame_core" / "robogame_core" / "mission.py",
+        mission_run=src_root / "robogame_core" / "robogame_core" / "mission_run.py",
+    )
     for name, keys in sorted(_panel_keys(web_root).items()):
-        missing = sorted(key for key in keys if key not in payload and not _is_local_variable(key))
+        missing = sorted(key for key in keys if key not in payload)
         if missing:
             findings.append(Finding(
                 "panel_key_missing", "risk",
@@ -200,29 +221,39 @@ def audit(src_root: Path, *, web_root: Path | None = None) -> list[Finding]:
         ))
 
     # 6) 现场配置必须写清「上电自主」依赖的参数
+    #    注意：参数可以由**配置层**或**launch 内联**提供（例如 field_layout_path 需要
+    #    安装路径，只能在 launch 里算），两者都算「写清了」——否则这条检查会误报。
     field_config = src_root / "robogame_bringup" / "config" / "robot_field.yaml"
     text = field_config.read_text(encoding="utf-8") if field_config.is_file() else ""
-    for param in ("route_enabled", "field_layout_path", "degrade_on_failure",
-                  "match_time_limit_s", "calibration_file"):
-        if param not in text:
-            findings.append(Finding(
-                "field_param_missing", "risk",
-                f"robot_field.yaml 里没写 {param}；现场只能靠代码默认值，"
-                "上电行为会与预期不一致",
-            ))
+    launch_inline: set[str] = set()
+    if hardware.is_file():
+        for spec in node_parameter_specs(hardware):
+            launch_inline.update(spec.inline)
+    for param in FIELD_REQUIRED_PARAMS:
+        if _yaml_param_present(text, param) or param in launch_inline:
+            continue
+        findings.append(Finding(
+            "field_param_missing", "risk",
+            f"{param} 既不在 robot_field.yaml 里，也没有由现场 launch 内联提供；"
+            "现场只能用代码默认值，上电行为会与预期不一致",
+        ))
 
     return findings
 
 
-#: 面板 JS 里从别处（不是任务层载荷）取的键，白名单（避免误报）
-_PANEL_LOCAL_KEYS = {
-    # odom_panel.js 用的是 snapshot 的其它段落
-    "distance_result", "odom_calibration", "odom_trial_candidate", "task",
-}
+#: 现场配置里必须写清的参数（缺失只算 risk，但会让上电行为与预期不一致）
+FIELD_REQUIRED_PARAMS = (
+    "route_enabled", "degrade_on_failure", "match_time_limit_s", "calibration_file",
+)
 
 
-def _is_local_variable(key: str) -> bool:
-    return key in _PANEL_LOCAL_KEYS
+def _yaml_param_present(text: str, param: str) -> bool:
+    """配置里是否真的写了这个参数（**去掉注释**再找，避免把注释当成配置）。"""
+    for line in text.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if stripped.startswith(param + ":"):
+            return True
+    return False
 
 
 def format_report(findings: list[Finding]) -> str:

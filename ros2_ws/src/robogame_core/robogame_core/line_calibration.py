@@ -30,7 +30,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-#: 单路黑白最小分离度（与 line_follow_node._calibration_is_usable 同源）
+#: 单路黑白最小分离度。**这是唯一一处规则**：启动加载（`startup_verdict`）与
+#: 现场面板推送（`line_follow_node._calibration_is_usable`）都走 `LineCalibration`，
+#: 避免两条路径规则不一致（R13 修过这个真实缺陷：推送路径曾不看黑白方向）。
 MIN_CHANNEL_SPAN = 1.0
 #: 期望通道数
 CHANNELS = 8
